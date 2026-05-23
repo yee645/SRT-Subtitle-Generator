@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 設定檔（含使用者個人資料如 OpenAI API 金鑰，不入版控）
+config.json
+
+# PyInstaller 工件
+build/
+dist/
+
+# 編輯器
+.vscode/
+.idea/
+
+# 系統
+Thumbs.db
+.DS_Store
+
+# 釋出用暫存（D:\SRT 內的工作鏡像）
+release-repo/
