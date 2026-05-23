@@ -18,6 +18,14 @@
 STRONG_PUNCT = "。！？!?…．"
 # 句中停頓標點：用來把長句切成較短的子句（含半形空白，方便英文以單字為單位打包）。
 WEAK_PUNCT = "，、,；;：:—–- "
+# 成對引號 / 括弧：演算法在引號內不切句，避免把對話一刀切成兩半。
+QUOTE_PAIRS = {
+    "「": "」", "『": "』", "“": "”", "‘": "’",
+    "(": ")", "（": "）", "[": "]", "【": "】", "《": "》",
+    "\"": "\"", "'": "'",
+}
+_OPEN_QUOTES = set(QUOTE_PAIRS.keys())
+_CLOSE_TO_OPEN = {close: open_ for open_, close in QUOTE_PAIRS.items()}
 
 # 常見 CJK（中日韓）與全形字元的 Unicode 區段，用來判斷文字屬性。
 CJK_RANGES = (
@@ -79,20 +87,44 @@ def split_into_lines(text, seg_cfg):
 
 
 def _split_sentences(text):
-    """依換行與句末標點把文字切成數個句子，標點保留在句尾。"""
+    """
+    依換行與句末標點把文字切成數個句子，標點保留在句尾。
+
+    為避免把對話、引文一刀切成兩半，引號或括弧內的句末標點不視為斷點。
+    連續句末標點（如「。。。」「！！」「!?」）視為同一個結尾，僅切一次。
+    """
     sentences = []
     buffer = ""
+    quote_stack: list[str] = []
+    previous = ""
     for char in text:
         if char in "\r\n":
-            # 換行視為強制斷句點。
             if buffer.strip():
                 sentences.append(buffer.strip())
             buffer = ""
+            previous = ""
+            quote_stack.clear()
             continue
+        # 維護引號 / 括弧堆疊：配對的關閉符號優先處理，再判斷是否為開啟符號。
+        if (char in _CLOSE_TO_OPEN and quote_stack
+                and quote_stack[-1] == _CLOSE_TO_OPEN[char]):
+            quote_stack.pop()
+        elif char in _OPEN_QUOTES:
+            quote_stack.append(char)
         buffer += char
+        # 在引號 / 括弧內不切句，避免把對話切散。
+        if quote_stack:
+            previous = char
+            continue
         if char in STRONG_PUNCT:
-            sentences.append(buffer.strip())
-            buffer = ""
+            if previous in STRONG_PUNCT and sentences:
+                # 連續強標點：併入上一個剛切出的句尾，避免「。。。」變成多句。
+                sentences[-1] = (sentences[-1].rstrip() + char).strip()
+                buffer = ""
+            else:
+                sentences.append(buffer.strip())
+                buffer = ""
+        previous = char
     if buffer.strip():
         sentences.append(buffer.strip())
     return sentences
