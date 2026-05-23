@@ -38,6 +38,8 @@ _DEFAULT_SEGMENTATION = {
 
 # 預設設定。實際載入時會與使用者設定做深層合併，避免新版本新增欄位後讀不到值。
 DEFAULT_CONFIG = {
+    # 介面外觀主題：'light' 或 'dark'，預設為 light。
+    "theme": "light",
     # 目前作用中的字幕樣式與斷句設定（記憶功能保存的即時狀態）。
     "subtitle_style": dict(_DEFAULT_STYLE),
     "segmentation": dict(_DEFAULT_SEGMENTATION),

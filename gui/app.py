@@ -15,6 +15,14 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+try:
+    import sv_ttk
+    _HAS_SV_TTK = True
+except ImportError:
+    # 未安裝 sv-ttk 時退回系統預設外觀，不影響程式運作。
+    sv_ttk = None
+    _HAS_SV_TTK = False
+
 from config import load_config, make_profile, save_config
 from updater import (APP_VERSION, check_for_update, cleanup_old_version,
                      download_and_apply)
@@ -52,6 +60,8 @@ class SrtApp(tk.Tk):
 
         # 載入設定檔，達成記憶功能。
         self.config_data = load_config()
+        # 套用使用者偏好的外觀主題（light / dark）；未安裝 sv-ttk 時退回系統預設。
+        self._apply_theme(self.config_data.get("theme", "light"))
         # 生成結果（cue 清單）與背景執行緒通訊佇列。
         self.cues = []
         self.result_queue = queue.Queue()
@@ -69,10 +79,40 @@ class SrtApp(tk.Tk):
         self.after(1500, self._start_update_check)
 
     # ==================================================================
+    # 主題（dark / light）
+    # ==================================================================
+    def _apply_theme(self, theme):
+        """套用 sv-ttk 主題；未安裝時不執行（程式仍可正常運作）。"""
+        if not _HAS_SV_TTK:
+            return
+        try:
+            sv_ttk.set_theme("dark" if theme == "dark" else "light")
+        except Exception:
+            # 主題套用失敗不影響核心功能。
+            pass
+
+    def _toggle_theme(self):
+        """切換淺色與深色主題並寫回設定。"""
+        current = self.config_data.get("theme", "light")
+        new_theme = "dark" if current != "dark" else "light"
+        self.config_data["theme"] = new_theme
+        self._apply_theme(new_theme)
+        self._save_config_silently()
+        # 更新按鈕文字以反映下一次切換的目標。
+        if hasattr(self, "theme_btn") and self.theme_btn:
+            label = "切換為淺色" if new_theme == "dark" else "切換為深色"
+            self.theme_btn.configure(text=label)
+        self.status_var.set(
+            f"已切換為{'深色' if new_theme == 'dark' else '淺色'}主題。")
+
+    # ==================================================================
     # 介面建構
     # ==================================================================
     def _build_widgets(self):
         """建立整體版面。"""
+        # 頂部工具列：主題切換等全域控制。
+        self._build_toolbar()
+
         scroll = ScrollableFrame(self)
         scroll.pack(fill="both", expand=True)
         container = scroll.interior
@@ -96,9 +136,28 @@ class SrtApp(tk.Tk):
         self._build_preview_section(right)
         self._build_style_section(right)
 
+    def _build_toolbar(self):
+        """頂部工具列：主題切換按鈕與版本資訊。"""
+        toolbar = ttk.Frame(self, padding=(10, 6))
+        toolbar.pack(fill="x")
+        current_theme = self.config_data.get("theme", "light")
+        label = "切換為淺色" if current_theme == "dark" else "切換為深色"
+        self.theme_btn = ttk.Button(
+            toolbar, text=label, width=14, command=self._toggle_theme,
+        )
+        self.theme_btn.pack(side="right")
+        ttk.Label(
+            toolbar, text=f"v{APP_VERSION}", foreground="#888888",
+        ).pack(side="right", padx=(0, 10))
+        ttk.Label(
+            toolbar, text="SRT 自動字幕生成與編輯工具",
+            font=("Microsoft JhengHei", 11, "bold"),
+        ).pack(side="left")
+        ttk.Separator(self, orient="horizontal").pack(fill="x")
+
     def _build_mode_section(self, parent):
         """模式切換區。"""
-        frame = tk.LabelFrame(parent, text="運作模式", padx=10, pady=6)
+        frame = ttk.LabelFrame(parent, text="運作模式", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.mode_var = tk.StringVar(value=MODE_TRANSCRIBE)
         tk.Radiobutton(
@@ -119,7 +178,7 @@ class SrtApp(tk.Tk):
 
     def _build_file_section(self, parent):
         """檔案選擇區。"""
-        frame = tk.LabelFrame(parent, text="影片 / 音訊檔案", padx=10, pady=6)
+        frame = ttk.LabelFrame(parent, text="影片 / 音訊檔案", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.file_var = tk.StringVar()
         tk.Entry(frame, textvariable=self.file_var).pack(
@@ -128,7 +187,7 @@ class SrtApp(tk.Tk):
 
     def _build_transcription_section(self, parent):
         """轉寫設定區（模式一相關）。"""
-        frame = tk.LabelFrame(parent, text="轉寫設定（模式一）", padx=10, pady=6)
+        frame = ttk.LabelFrame(parent, text="轉寫設定（模式一）", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.transcription_frame = frame
         transcription_cfg = self.config_data["transcription"]
@@ -192,7 +251,7 @@ class SrtApp(tk.Tk):
 
     def _build_segmentation_section(self, parent):
         """斷句設定區。"""
-        frame = tk.LabelFrame(parent, text="斷句設定", padx=10, pady=6)
+        frame = ttk.LabelFrame(parent, text="斷句設定", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.segmentation_frame = frame
         seg = self.config_data["segmentation"]
@@ -247,7 +306,7 @@ class SrtApp(tk.Tk):
 
     def _build_transcript_section(self, parent):
         """文字稿輸入區（模式二相關）。"""
-        frame = tk.LabelFrame(parent, text="文字稿（模式二）", padx=10, pady=6)
+        frame = ttk.LabelFrame(parent, text="文字稿（模式二）", padding=(10, 6))
         frame.pack(fill="both", pady=(0, 8))
         self.transcript_frame = frame
         self.transcript_text = tk.Text(frame, height=6, wrap="word")
@@ -283,7 +342,7 @@ class SrtApp(tk.Tk):
 
     def _build_cue_list(self, parent):
         """字幕清單（生成結果）。"""
-        frame = tk.LabelFrame(parent, text="字幕清單（雙擊可編輯）", padx=6, pady=6)
+        frame = ttk.LabelFrame(parent, text="字幕清單（雙擊可編輯）", padding=(6, 6))
         frame.pack(fill="both", expand=True, pady=(8, 0))
 
         columns = ("index", "time", "text")
@@ -326,7 +385,7 @@ class SrtApp(tk.Tk):
 
     def _build_export_section(self, parent):
         """匯出與燒錄區：多格式匯出與影片字幕燒錄。"""
-        frame = tk.LabelFrame(parent, text="匯出與燒錄", padx=10, pady=6)
+        frame = ttk.LabelFrame(parent, text="匯出與燒錄", padding=(10, 6))
         frame.pack(fill="x", pady=(8, 0))
         self.export_frame = frame
 
@@ -358,7 +417,7 @@ class SrtApp(tk.Tk):
 
     def _build_preview_section(self, parent):
         """即時字幕預覽。"""
-        frame = tk.LabelFrame(parent, text="即時字幕預覽", padx=8, pady=8)
+        frame = ttk.LabelFrame(parent, text="即時字幕預覽", padding=(8, 8))
         frame.pack(fill="x")
         self.preview = PreviewPanel(frame)
         self.preview.pack()
@@ -372,7 +431,7 @@ class SrtApp(tk.Tk):
 
     def _build_preset_section(self, parent):
         """習慣設定區。"""
-        frame = tk.LabelFrame(parent, text="習慣設定（樣式組合）", padx=8, pady=6)
+        frame = ttk.LabelFrame(parent, text="習慣設定（樣式組合）", padding=(8, 6))
         frame.pack(fill="x", pady=(0, 8))
 
         row = tk.Frame(frame)
