@@ -265,8 +265,17 @@ class SrtApp(tk.Tk):
         )
         self.generate_btn.pack(side="left")
 
-        self.progress = ttk.Progressbar(frame, mode="indeterminate", length=160)
+        # 進度條：可在 determinate（有百分比）與 indeterminate（跑馬燈）兩種模式切換。
+        # 預設為 determinate；無法估算時切換為 indeterminate。
+        self.progress_var = tk.DoubleVar(value=0.0)
+        self.progress = ttk.Progressbar(
+            frame, mode="determinate", length=180, maximum=100.0,
+            variable=self.progress_var,
+        )
         self.progress.pack(side="left", padx=6)
+        self.progress_label_var = tk.StringVar(value="")
+        tk.Label(frame, textvariable=self.progress_label_var, width=6,
+                 anchor="w").pack(side="left")
 
         self.status_var = tk.StringVar(value="就緒。")
         tk.Label(parent, textvariable=self.status_var, fg="#1a5fb4",
@@ -736,12 +745,13 @@ class SrtApp(tk.Tk):
     def _generate_worker(self, mode, audio_path, transcript):
         """背景執行緒：實際進行轉寫或對齊。"""
         try:
-            def report(message):
-                self.result_queue.put(("status", message))
+            def report(message, ratio=None):
+                """新版回呼簽名：(訊息, 0.0~1.0 或 None)。"""
+                self.result_queue.put(("status", (message, ratio)))
 
             if mode == MODE_TRANSCRIBE:
                 words = transcribe(audio_path, self.config_data, report)
-                report("正在進行智慧斷句...")
+                report("正在進行智慧斷句...", 0.97)
                 cues = build_cues_from_words(
                     words, self.config_data["segmentation"])
             else:
@@ -761,7 +771,13 @@ class SrtApp(tk.Tk):
             while True:
                 kind, payload = self.result_queue.get_nowait()
                 if kind == "status":
-                    self.status_var.set(payload)
+                    # 新版 payload 為 (message, ratio)；舊版 payload 為單純字串。
+                    if isinstance(payload, tuple):
+                        message, ratio = payload
+                    else:
+                        message, ratio = payload, None
+                    self.status_var.set(message)
+                    self._update_progress(ratio)
                 elif kind == "done":
                     self._on_generation_done(payload)
                 elif kind == "error":
@@ -836,7 +852,8 @@ class SrtApp(tk.Tk):
             download_and_apply(
                 url,
                 progress_cb=lambda ratio: self.result_queue.put(
-                    ("status", f"正在下載新版本... {int(ratio * 100)}%")),
+                    ("status", (f"正在下載新版本... {int(ratio * 100)}%",
+                                ratio))),
             )
             self.result_queue.put(("update_done", None))
         except Exception as exc:
@@ -872,7 +889,10 @@ class SrtApp(tk.Tk):
         self.is_processing = processing
         if processing:
             self.generate_btn.configure(state="disabled", text="處理中...")
+            # 起始時先進入 indeterminate 模式並啟動跑馬燈，待收到 ratio 後改 determinate。
+            self.progress.configure(mode="indeterminate")
             self.progress.start(12)
+            self.progress_label_var.set("")
         else:
             mode = self.mode_var.get()
             if mode == MODE_MANUAL:
@@ -881,6 +901,26 @@ class SrtApp(tk.Tk):
             else:
                 self.generate_btn.configure(state="normal", text="開始生成字幕")
             self.progress.stop()
+            self.progress.configure(mode="determinate")
+            self.progress_var.set(0.0)
+            self.progress_label_var.set("")
+
+    def _update_progress(self, ratio):
+        """根據 ratio 更新進度條顯示模式與百分比。"""
+        if ratio is None:
+            # 未提供 ratio：維持跑馬燈（若還沒處理中則略過）。
+            if self.is_processing and str(self.progress.cget("mode")) == "determinate":
+                self.progress.configure(mode="indeterminate")
+                self.progress.start(12)
+                self.progress_label_var.set("")
+            return
+        # 收到具體 ratio：切回 determinate 模式並顯示百分比。
+        ratio = max(0.0, min(float(ratio), 1.0))
+        if str(self.progress.cget("mode")) == "indeterminate":
+            self.progress.stop()
+            self.progress.configure(mode="determinate")
+        self.progress_var.set(ratio * 100.0)
+        self.progress_label_var.set(f"{int(ratio * 100)}%")
 
     # ==================================================================
     # 匯出與燒錄
@@ -974,7 +1014,7 @@ class SrtApp(tk.Tk):
                 output_path=output_path,
                 style=self.config_data["subtitle_style"],
                 progress_cb=lambda ratio, msg: self.result_queue.put(
-                    ("status", msg)),
+                    ("status", (msg, ratio))),
             )
             self.result_queue.put(("burn_done", output_path))
         except Exception as exc:

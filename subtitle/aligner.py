@@ -25,6 +25,16 @@ from .transcriber import transcribe
 _PROMPT_CHARS = 200
 
 
+def _emit(status_cb, message, ratio=None):
+    """以新版簽名呼叫狀態回呼，並相容舊版只接受訊息的回呼。"""
+    if not callable(status_cb):
+        return
+    try:
+        status_cb(message, ratio)
+    except TypeError:
+        status_cb(message)
+
+
 def align_transcript(audio_path, transcript, config, status_cb=None):
     """
     將文字稿對齊到音訊時間軸，回傳 cue 清單。
@@ -33,7 +43,7 @@ def align_transcript(audio_path, transcript, config, status_cb=None):
         audio_path: 影片或音訊檔路徑。
         transcript: 使用者貼上的純文字稿。
         config: 完整設定 dict。
-        status_cb: 可選的狀態回呼函式。
+        status_cb: 可選的狀態回呼函式，支援 (message) 或 (message, ratio) 兩種簽名。
     """
     transcript = (transcript or "").strip()
     if not transcript:
@@ -43,8 +53,7 @@ def align_transcript(audio_path, transcript, config, status_cb=None):
 
     # 用文字稿尾段當作辨識提示，提升辨識與後續比對的一致性。
     # 若使用者另外填了「轉寫提示」（專有名詞、人名等），優先放在前面以強化導正。
-    if callable(status_cb):
-        status_cb("正在以語音辨識分析音訊...")
+    _emit(status_cb, "正在以語音辨識分析音訊...", 0.02)
     user_prompt = (config.get("transcription", {}).get("prompt") or "").strip()
     tail = transcript[-_PROMPT_CHARS:]
     prompt = f"{user_prompt} {tail}".strip() if user_prompt else tail
@@ -58,8 +67,7 @@ def align_transcript(audio_path, transcript, config, status_cb=None):
         raise RuntimeError(
             "語音辨識未提供有效的時間資訊，請改用模式一，或確認音訊含清晰人聲。")
 
-    if callable(status_cb):
-        status_cb("正在比對文字稿與語音、對齊時間軸...")
+    _emit(status_cb, "正在比對文字稿與語音、對齊時間軸...", 0.97)
     lines = split_into_lines(transcript, seg_cfg)
     if not lines:
         raise ValueError("文字稿無法切出有效字幕內容。")

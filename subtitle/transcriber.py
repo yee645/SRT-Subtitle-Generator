@@ -21,6 +21,16 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+
+from .media import probe_duration
+
+# 各 Whisper 模型在 CPU 上對「實時音訊長度」的處理時間倍數估算值，
+# 用於時間軸式假進度條（無法直接取得 whisper 內部進度）。
+_MODEL_TIME_FACTOR = {
+    "tiny": 0.4, "base": 0.6, "small": 1.5, "medium": 3.0, "large": 6.0,
+}
 
 # 外部 Python 子程序所執行的 whisper 轉寫工作腳本內容。
 # 以子程序方式執行，可讓打包後的 exe 使用使用者自行安裝的 whisper。
@@ -123,9 +133,18 @@ def _to_traditional(words):
     } for word in words]
 
 
-def _notify(status_cb, message):
-    """安全地呼叫狀態回呼。"""
-    if callable(status_cb):
+def _notify(status_cb, message, ratio=None):
+    """
+    安全地呼叫狀態回呼。
+
+    為相容舊版簽名（status_cb(message)），會先嘗試以 (message, ratio) 呼叫，
+    若失敗再退回以 (message) 呼叫，確保新舊兩種簽名皆可運作。
+    """
+    if not callable(status_cb):
+        return
+    try:
+        status_cb(message, ratio)
+    except TypeError:
         status_cb(message)
 
 
@@ -151,25 +170,69 @@ def _transcribe_in_process(audio_path, transcription_cfg, status_cb, initial_pro
     model_name = transcription_cfg.get("model", "base")
     language = transcription_cfg.get("language", "auto")
 
-    _notify(status_cb, f"正在載入 Whisper 模型（{model_name}），首次使用需下載，請稍候...")
+    _notify(status_cb, f"正在載入 Whisper 模型（{model_name}），首次使用需下載，請稍候...",
+            ratio=0.02)
     try:
         model = whisper.load_model(model_name)
     except Exception as exc:
         raise RuntimeError(f"載入 Whisper 模型失敗：{exc}") from exc
 
-    _notify(status_cb, "正在進行語音辨識，較長的影片需要數分鐘...")
+    _notify(status_cb, "正在進行語音辨識，較長的影片需要數分鐘...", ratio=0.08)
     transcribe_kwargs = {"word_timestamps": True, "verbose": False}
     if language and language != "auto":
         transcribe_kwargs["language"] = language
     if initial_prompt:
         transcribe_kwargs["initial_prompt"] = initial_prompt
 
+    # 啟動背景假進度執行緒：依音訊時長與模型速度估算進度推進。
+    # Whisper 沒有公開的進度回呼，僅能以時間軸式估算給使用者一個視覺參考。
+    duration = probe_duration(audio_path)
+    factor = _MODEL_TIME_FACTOR.get(model_name, 1.0)
+    expected = max(duration * factor, 5.0)
+    stop_event = threading.Event()
+    progress_thread = threading.Thread(
+        target=_simulate_progress,
+        args=(status_cb, expected, stop_event, 0.10, 0.92,
+              "正在語音辨識，請耐心等候..."),
+        daemon=True,
+    )
+    progress_thread.start()
     try:
         result = model.transcribe(audio_path, **transcribe_kwargs)
     except Exception as exc:
         raise RuntimeError(f"語音辨識過程發生錯誤：{exc}") from exc
+    finally:
+        stop_event.set()
+        progress_thread.join(timeout=1.0)
 
+    _notify(status_cb, "語音辨識完成，整理結果中...", ratio=0.96)
     return _extract_words_from_whisper_result(result)
+
+
+def _simulate_progress(status_cb, expected_seconds, stop_event,
+                       start_ratio, end_ratio, message):
+    """
+    背景時間軸式假進度。
+
+    在 expected_seconds 內把比例由 start_ratio 推進到 end_ratio；
+    結束前不抵達 100%，等待主流程完成後再補到 1.0。
+    """
+    if not callable(status_cb):
+        return
+    started = time.time()
+    span = max(end_ratio - start_ratio, 0.01)
+    while not stop_event.is_set():
+        elapsed = time.time() - started
+        ratio = start_ratio + span * min(elapsed / expected_seconds, 1.0)
+        # 模擬曲線：愈接近末端時推進愈慢，避免使用者誤以為已完成卻久候。
+        if ratio > end_ratio - 0.02:
+            ratio = end_ratio - 0.02
+        try:
+            status_cb(message, ratio)
+        except TypeError:
+            status_cb(message)
+        if stop_event.wait(timeout=1.5):
+            break
 
 
 def _extract_words_from_whisper_result(result):
