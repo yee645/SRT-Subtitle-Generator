@@ -8,6 +8,9 @@ tmp_ret = collect_all('openai')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('zhconv')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# sv-ttk 為新版深色 / 淺色主題依賴，內含資源檔需以 collect_all 一併收集。
+tmp_ret = collect_all('sv_ttk')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
