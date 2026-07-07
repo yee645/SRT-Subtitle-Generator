@@ -34,6 +34,7 @@ from subtitle.segmenter import build_cues_from_words
 from subtitle.transcriber import transcribe
 from gui.cue_editor import CueEditDialog
 from gui.preview_panel import PreviewPanel
+from gui.review_window import ReviewWindow
 from gui.scrollable import ScrollableFrame
 from gui.style_panel import StylePanel
 
@@ -148,6 +149,10 @@ class SrtApp(tk.Tk):
             toolbar, text=label, width=14, command=self._toggle_theme,
         )
         self.theme_btn.pack(side="right")
+        ttk.Button(
+            toolbar, text="審片助手（找片段）", width=18,
+            command=self._open_review_window,
+        ).pack(side="right", padx=(0, 8))
         ttk.Label(
             toolbar, text=f"v{APP_VERSION}", foreground="#888888",
         ).pack(side="right", padx=(0, 10))
@@ -530,6 +535,23 @@ class SrtApp(tk.Tk):
             # 手動模式：不需轉寫與文字稿，按鈕改為提示直接編輯字幕清單。
             self.generate_btn.configure(text="清空並進入手動編輯")
             self.auto_btn.configure(state="disabled")
+
+    def _open_review_window(self):
+        """開啟審片助手：以第一個選取檔案為素材；未選檔時先跳檔案選擇。"""
+        files = self._selected_files()
+        media_path = files[0] if files else ""
+        if not media_path or not os.path.exists(media_path):
+            initial_dir = self.config_data.get("last_dir") or os.getcwd()
+            media_path = filedialog.askopenfilename(
+                title="選擇要審片的影片或音訊檔", initialdir=initial_dir,
+                filetypes=MEDIA_FILETYPES,
+            )
+            if not media_path:
+                return
+            self.file_var.set(media_path)
+        # 帶入最新的轉寫設定（模型、語言、API 等），與主流程共用。
+        self._collect_transcription_config()
+        ReviewWindow(self, self.config_data, media_path)
 
     def _on_style_change(self, style):
         """樣式面板變動時：更新設定、即時存檔、重繪預覽。"""

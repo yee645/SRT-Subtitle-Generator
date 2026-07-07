@@ -11,6 +11,7 @@
     python main.py --burn *.mp4                   # 匯出並燒錄硬字幕影片
     python main.py --formats srt,ass 影片.mp4     # 本次改匯出 SRT 與 ASS
     python main.py --output-dir D:/out 影片.mp4   # 本次改輸出到指定資料夾
+    python main.py --review 素材1.mp4 素材2.mp4   # 批次審片：輸出片段分析 CSV
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
 """
@@ -18,10 +19,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from config import load_config
-from subtitle.pipeline import EXPORT_FORMATS, run_batch
+from subtitle.media import probe_duration
+from subtitle.pipeline import EXPORT_FORMATS, run_batch, unique_path
+from subtitle.review import analyze, export_csv
+from subtitle.transcriber import transcribe
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,6 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir", metavar="資料夾",
         help="本次輸出資料夾；未指定時沿用 config.json（留空＝來源資料夾）。")
+    parser.add_argument(
+        "--review", action="store_true",
+        help="審片模式：不產字幕，改為分析素材（冷場、重複拍攝、口頭禪）"
+             "並輸出「檔名_審片清單.csv」，供快速挑選可用片段。")
     return parser
 
 
@@ -82,8 +91,11 @@ def main(argv=None) -> int:
         percent = f"{int(ratio * 100):3d}% " if ratio is not None else "     "
         print(f"{percent}{message}", flush=True)
 
-    results = run_batch(
-        args.files, config, mode=args.mode, report=report)
+    if args.review:
+        results = _run_review_batch(args.files, config, report)
+    else:
+        results = run_batch(
+            args.files, config, mode=args.mode, report=report)
 
     # 總結報告。
     lines = []
@@ -112,6 +124,39 @@ def main(argv=None) -> int:
     if getattr(sys, "frozen", False):
         _show_result_window(summary, lines, failed)
     return 1 if failed else 0
+
+
+def _run_review_batch(files: list, config: dict, report) -> list:
+    """審片模式批次：逐檔轉錄、分析並輸出審片清單 CSV，回傳與 run_batch 同構的結果。"""
+    automation = config.get("automation", {})
+    results = []
+    total = len(files)
+    for index, path in enumerate(files):
+        prefix = f"[{index + 1}/{total}] {os.path.basename(path)}：" if total > 1 else ""
+        try:
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"找不到檔案：{path}")
+            report(f"{prefix}轉錄並分析中...", index / total if total > 1 else None)
+            words = transcribe(path, config)
+            items = analyze(words, media_duration=probe_duration(path))
+            out_dir = (automation.get("output_dir") or "").strip() \
+                or os.path.dirname(os.path.abspath(path))
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(path))[0]
+            csv_path = unique_path(os.path.join(out_dir, f"{base}_審片清單.csv"))
+            export_csv(items, csv_path)
+            dropped = sum(1 for item in items if not item["keep"])
+            report(f"{prefix}分析完成，共 {len(items)} 段（建議捨棄 {dropped} 段）",
+                   (index + 1) / total)
+            results.append({
+                "path": path, "ok": True, "error": None,
+                "result": {"exports": [csv_path], "burned": None, "cues": []},
+            })
+        except Exception as exc:  # 單檔失敗不中斷批次。
+            results.append(
+                {"path": path, "ok": False, "result": None, "error": str(exc)})
+            report(f"{prefix}失敗：{exc}", (index + 1) / total)
+    return results
 
 
 def _show_result_window(summary: str, lines: list, failed: int) -> None:
