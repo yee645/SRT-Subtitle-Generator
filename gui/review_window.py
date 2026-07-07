@@ -18,12 +18,17 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from subtitle.burner import ffmpeg_available
+from subtitle.exporter import export as export_subtitle
 from subtitle.media import probe_duration
 from subtitle.pipeline import unique_path
-from subtitle.review import (DEFAULT_SEGMENT_GAP, DEFAULT_SILENCE_GAP,
-                             TAG_REPEATED, TAG_SILENCE, analyze,
-                             cut_rough_video, export_csv, export_edl,
-                             export_youtube_chapters, search_segments)
+from subtitle.review import (CATEGORY_COLORS, CATEGORY_LABELS,
+                             DEFAULT_SEGMENT_GAP, DEFAULT_SILENCE_GAP,
+                             TAG_HIGHLIGHT, TAG_REPEATED, TAG_SILENCE,
+                             analyze, build_review_cues, categorize,
+                             compute_loudness, cut_rough_video, export_csv,
+                             export_edl, export_html_report,
+                             export_youtube_chapters, search_segments,
+                             summarize)
 from subtitle.transcriber import transcribe
 
 logger = logging.getLogger(__name__)
@@ -41,10 +46,13 @@ class ReviewWindow(tk.Toplevel):
         self.config_data = config_data
         self.media_path = media_path
         self.items = []              # analyze() 的段落清單
+        self.media_duration = 0.0    # 素材總長（分析完成後更新）
         self.result_queue = queue.Queue()
         self.is_processing = False
         self._search_hits = []       # 目前關鍵字命中的段落索引
         self._search_pos = -1        # 下一個要跳到的命中位置
+        self._filter = "all"         # 清單篩選：all / highlight / review
+        self._visible = []           # 清單列 → items 索引的對照表
 
         self._build_widgets()
         self._poll_job = self.after(120, self._poll_queue)
@@ -92,6 +100,25 @@ class ReviewWindow(tk.Toplevel):
         tk.Label(self, textvariable=self.status_var, fg="#1a5fb4",
                  anchor="w", padx=10).pack(fill="x")
 
+        # 彩色時間軸：一眼看出精彩（綠）、待審視（琥珀）、冷場（灰）分佈。
+        timeline_frame = ttk.LabelFrame(
+            self, text="素材時間軸（點色塊跳到段落）", padding=(8, 6))
+        timeline_frame.pack(fill="x", padx=10, pady=(4, 0))
+        self.timeline = tk.Canvas(
+            timeline_frame, height=44, bg="#e8e8e8", highlightthickness=0)
+        self.timeline.pack(fill="x")
+        self.timeline.bind("<Configure>", lambda _e: self._draw_timeline())
+        self.timeline.bind("<Button-1>", self._on_timeline_click)
+        legend = ttk.Frame(timeline_frame)
+        legend.pack(fill="x", pady=(4, 0))
+        for key in ("highlight", "normal", "review", "silence"):
+            tk.Label(legend, text="■", fg=CATEGORY_COLORS[key]).pack(side="left")
+            tk.Label(legend, text=CATEGORY_LABELS[key],
+                     fg="#555555").pack(side="left", padx=(0, 10))
+        self.stats_var = tk.StringVar(value="")
+        tk.Label(legend, textvariable=self.stats_var,
+                 fg="#555555").pack(side="right")
+
         # 段落清單。
         frame = ttk.LabelFrame(
             self, text="段落清單（雙擊或空白鍵切換保留／捨棄）", padding=(6, 6))
@@ -113,10 +140,13 @@ class ReviewWindow(tk.Toplevel):
         scrollbar.pack(side="right", fill="y")
         self.tree.bind("<Double-1>", lambda _e: self._toggle_selected())
         self.tree.bind("<space>", lambda _e: self._toggle_selected())
-        # 捨棄的段落以灰字顯示，一眼可分。
+        # 列底色依分類上色、捨棄段以灰字顯示，一眼可分。
         self.tree.tag_configure("dropped", foreground="#999999")
+        self.tree.tag_configure("cat_highlight", background="#dff5e1")
+        self.tree.tag_configure("cat_review", background="#fdf3d7")
+        self.tree.tag_configure("cat_silence", background="#efefef")
 
-        # 段落操作與搜尋。
+        # 段落操作、篩選與搜尋。
         ops = ttk.Frame(self, padding=(10, 4))
         ops.pack(fill="x")
         tk.Button(ops, text="切換保留", width=9,
@@ -125,24 +155,39 @@ class ReviewWindow(tk.Toplevel):
                   command=self._apply_suggestions).pack(side="left", padx=2)
         tk.Button(ops, text="全部保留", width=9,
                   command=self._keep_all).pack(side="left", padx=2)
+        tk.Label(ops, text="顯示:").pack(side="left", padx=(14, 2))
+        self.filter_var = tk.StringVar(value="all")
+        for value, label in (("all", "全部"), ("highlight", "只看精彩"),
+                             ("review", "只看待審視")):
+            tk.Radiobutton(
+                ops, text=label, value=value, variable=self.filter_var,
+                command=self._on_filter_change,
+            ).pack(side="left")
         tk.Label(ops, text="關鍵字:").pack(side="left", padx=(14, 2))
         self.search_var = tk.StringVar()
-        entry = tk.Entry(ops, textvariable=self.search_var, width=18)
+        entry = tk.Entry(ops, textvariable=self.search_var, width=16)
         entry.pack(side="left")
         entry.bind("<Return>", lambda _e: self._on_search())
         tk.Button(ops, text="搜尋下一個", width=10,
                   command=self._on_search).pack(side="left", padx=4)
 
-        # 匯出列。
+        # 匯出列（兩排：影片輸出與清單交付）。
         exports = ttk.LabelFrame(self, text="輸出", padding=(10, 6))
         exports.pack(fill="x", padx=10, pady=(2, 10))
         self.export_buttons = []
-        for label, command in [
-                ("輸出粗剪影片（自動跳剪）", self._on_rough_cut),
-                ("匯出 EDL（進剪輯軟體）", self._on_export_edl),
-                ("匯出 CSV 清單", self._on_export_csv),
-                ("複製 YouTube 章節", self._on_copy_chapters)]:
-            btn = tk.Button(exports, text=label, command=command,
+        row1 = ttk.Frame(exports)
+        row1.pack(fill="x")
+        row2 = ttk.Frame(exports)
+        row2.pack(fill="x", pady=(4, 0))
+        for parent, label, command in [
+                (row1, "輸出粗剪影片（自動跳剪）", self._on_rough_cut),
+                (row1, "輸出精彩合輯（短影音素材）", self._on_highlight_cut),
+                (row1, "匯出 HTML 審片報告", self._on_export_html),
+                (row2, "匯出 EDL（進剪輯軟體）", self._on_export_edl),
+                (row2, "匯出審片標記字幕", self._on_export_review_srt),
+                (row2, "匯出 CSV 清單", self._on_export_csv),
+                (row2, "複製 YouTube 章節", self._on_copy_chapters)]:
+            btn = tk.Button(parent, text=label, command=command,
                             state="disabled")
             btn.pack(side="left", padx=3)
             self.export_buttons.append(btn)
@@ -168,12 +213,15 @@ class ReviewWindow(tk.Toplevel):
                 self.result_queue.put(("status", (message, ratio)))
 
             words = transcribe(self.media_path, self.config_data, report)
-            report("正在分析段落與標記...", None)
+            report("正在分析音量能量（偵測精彩片段）...", 0.96)
+            loudness = compute_loudness(self.media_path)
+            report("正在分析段落與標記...", 0.98)
             duration = probe_duration(self.media_path)
             items = analyze(
                 words, media_duration=duration,
-                segment_gap=segment_gap, silence_gap=silence_gap)
-            self.result_queue.put(("done", items))
+                segment_gap=segment_gap, silence_gap=silence_gap,
+                loudness=loudness)
+            self.result_queue.put(("done", (items, duration)))
         except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
             logger.exception("審片分析失敗")
             self.result_queue.put(("error", str(exc)))
@@ -203,50 +251,116 @@ class ReviewWindow(tk.Toplevel):
             pass
         self._poll_job = self.after(120, self._poll_queue)
 
-    def _on_analyze_done(self, items):
+    def _on_analyze_done(self, payload):
+        items, duration = payload
         self.items = items
+        self.media_duration = duration
         self._set_processing(False)
         self._repopulate()
-        speech = sum(1 for i in items if i["kind"] == "speech")
+        stats = summarize(items, duration)
         dropped = sum(1 for i in items if not i["keep"])
-        kept_seconds = sum(i["end"] - i["start"] for i in items if i["keep"])
         self.status_var.set(
-            f"分析完成：{speech} 個講話段落，建議捨棄 {dropped} 段；"
-            f"保留內容約 {kept_seconds / 60.0:.1f} 分鐘。請掃一遍清單微調。")
+            f"分析完成：{stats['segment_count']} 個講話段落、"
+            f"{stats['highlight_count']} 段精彩，建議捨棄 {dropped} 段。"
+            "時間軸綠色為精彩、琥珀色待審視、灰色冷場。")
+        self.stats_var.set(
+            f"保留 {stats['kept_seconds'] / 60.0:.1f} 分｜"
+            f"精彩 {stats['highlight_seconds'] / 60.0:.1f} 分｜"
+            f"冷場 {stats['silence_seconds'] / 60.0:.1f} 分｜"
+            f"口頭禪 {stats['filler_total']} 次")
 
     # ==================================================================
     # 清單操作
     # ==================================================================
+    def _visible_indexes(self):
+        """依目前篩選條件回傳要顯示的 items 索引。"""
+        if self._filter == "all":
+            return list(range(len(self.items)))
+        return [i for i, item in enumerate(self.items)
+                if categorize(item) == self._filter]
+
     def _repopulate(self, keep_selection=False):
         selected = self.tree.selection()
-        selected_index = None
+        selected_row = None
         if keep_selection and selected:
-            selected_index = self.tree.index(selected[0])
+            selected_row = self.tree.index(selected[0])
         self.tree.delete(*self.tree.get_children())
-        for number, item in enumerate(self.items, start=1):
+        self._visible = self._visible_indexes()
+        for row, index in enumerate(self._visible):
+            item = self.items[index]
             minutes, secs = divmod(int(item["start"]), 60)
             end_m, end_s = divmod(int(item["end"]), 60)
+            row_tags = [f"cat_{categorize(item)}"]
+            if not item["keep"]:
+                row_tags.append("dropped")
             self.tree.insert(
                 "", "end",
                 values=("✔" if item["keep"] else "✘",
-                        number,
+                        index + 1,
                         f"{minutes:02d}:{secs:02d} → {end_m:02d}:{end_s:02d}",
                         f"{item['end'] - item['start']:.1f}",
                         "、".join(item["tags"]),
                         item["text"]),
-                tags=() if item["keep"] else ("dropped",))
+                tags=tuple(row_tags))
         children = self.tree.get_children()
-        if selected_index is not None and selected_index < len(children):
-            self.tree.selection_set(children[selected_index])
-            self.tree.focus(children[selected_index])
+        if selected_row is not None and selected_row < len(children):
+            self.tree.selection_set(children[selected_row])
+            self.tree.focus(children[selected_row])
         self._update_export_state()
+        self._draw_timeline()
+
+    def _on_filter_change(self):
+        self._filter = self.filter_var.get()
+        self._search_hits, self._search_pos = [], -1
+        self._repopulate()
+
+    def _draw_timeline(self):
+        """把段落畫成整條素材的彩色時間軸；捨棄段以斜線網點淡化。"""
+        canvas = self.timeline
+        canvas.delete("all")
+        if not self.items:
+            return
+        width = max(canvas.winfo_width(), 1)
+        height = int(canvas.cget("height") or 44)
+        total = max(self.media_duration,
+                    max(item["end"] for item in self.items), 0.1)
+        for index, item in enumerate(self.items):
+            x0 = item["start"] / total * width
+            x1 = max(item["end"] / total * width, x0 + 1.5)
+            color = CATEGORY_COLORS[categorize(item)]
+            stipple = "" if item["keep"] else "gray50"
+            canvas.create_rectangle(
+                x0, 2, x1, height - 2, fill=color, width=0,
+                stipple=stipple, tags=("blk", f"idx{index}"))
+
+    def _on_timeline_click(self, event):
+        """點時間軸色塊：切回全部顯示並選取、捲動到該段落。"""
+        hits = self.timeline.find_withtag("current")
+        if not hits:
+            return
+        index = None
+        for tag in self.timeline.gettags(hits[0]):
+            if tag.startswith("idx"):
+                index = int(tag[3:])
+                break
+        if index is None:
+            return
+        if index not in self._visible:
+            self.filter_var.set("all")
+            self._filter = "all"
+            self._repopulate()
+        row = self._visible.index(index)
+        children = self.tree.get_children()
+        self.tree.selection_set(children[row])
+        self.tree.focus(children[row])
+        self.tree.see(children[row])
 
     def _toggle_selected(self):
         selection = self.tree.selection()
         if not selection or not self.items:
             return
         for item_id in selection:
-            index = self.tree.index(item_id)
+            index = self._visible[self.tree.index(item_id)]
             self.items[index]["keep"] = not self.items[index]["keep"]
         self._repopulate(keep_selection=True)
 
@@ -266,20 +380,21 @@ class ReviewWindow(tk.Toplevel):
         self.status_var.set("已全部標記為保留。")
 
     def _on_search(self):
-        """搜尋關鍵字並逐一跳到命中的段落。"""
+        """搜尋關鍵字並逐一跳到命中的段落（只在目前顯示範圍內）。"""
         keyword = self.search_var.get()
-        hits = search_segments(self.items, keyword)
+        hits = [i for i in search_segments(self.items, keyword)
+                if i in set(self._visible)]
         if not hits:
-            self.status_var.set(f"找不到「{keyword}」。")
+            self.status_var.set(f"目前顯示範圍找不到「{keyword}」。")
             return
         if hits != self._search_hits:
             self._search_hits, self._search_pos = hits, -1
         self._search_pos = (self._search_pos + 1) % len(hits)
-        target = hits[self._search_pos]
+        row = self._visible.index(hits[self._search_pos])
         children = self.tree.get_children()
-        self.tree.selection_set(children[target])
-        self.tree.focus(children[target])
-        self.tree.see(children[target])
+        self.tree.selection_set(children[row])
+        self.tree.focus(children[row])
+        self.tree.see(children[row])
         self.status_var.set(
             f"「{keyword}」共 {len(hits)} 段，"
             f"目前第 {self._search_pos + 1} 段。")
@@ -304,18 +419,81 @@ class ReviewWindow(tk.Toplevel):
         output = self._default_path("_粗剪", ".mp4")
         self._set_processing(True)
         threading.Thread(
-            target=self._cut_worker, args=(output,), daemon=True).start()
+            target=self._cut_worker, args=(self.items, output),
+            daemon=True).start()
 
-    def _cut_worker(self, output):
+    def _on_highlight_cut(self):
+        """只把精彩片段串成合輯（短影音、預告素材）。"""
+        if self.is_processing or not self.items:
+            return
+        highlights = [dict(item, keep=True) for item in self.items
+                      if TAG_HIGHLIGHT in item["tags"]]
+        if not highlights:
+            messagebox.showinfo(
+                "沒有精彩片段",
+                "本素材未偵測到精彩片段。可於清單手動確認內容，"
+                "或改用「輸出粗剪影片」。", parent=self)
+            return
+        if not ffmpeg_available():
+            messagebox.showerror(
+                "找不到 ffmpeg",
+                "輸出合輯需要 ffmpeg。請依說明安裝並加入系統 PATH。",
+                parent=self)
+            return
+        output = self._default_path("_精彩合輯", ".mp4")
+        self._set_processing(True)
+        threading.Thread(
+            target=self._cut_worker, args=(highlights, output),
+            daemon=True).start()
+
+    def _cut_worker(self, items, output):
         try:
             cut_rough_video(
-                self.media_path, self.items, output,
+                self.media_path, items, output,
                 progress_cb=lambda ratio, msg: self.result_queue.put(
                     ("status", (msg, ratio))))
             self.result_queue.put(("cut_done", output))
         except Exception as exc:
-            logger.exception("粗剪輸出失敗")
+            logger.exception("剪輯輸出失敗")
             self.result_queue.put(("error", str(exc)))
+
+    def _on_export_html(self):
+        """匯出 HTML 審片報告（彩色時間軸 + 統計 + 段落表，單檔可分享）。"""
+        if not self.items:
+            return
+        path = self._default_path("_審片報告", ".html")
+        try:
+            export_html_report(
+                self.items, path,
+                source_name=os.path.basename(self.media_path),
+                media_duration=self.media_duration)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("匯出失敗", str(exc), parent=self)
+            return
+        self.status_var.set(f"已匯出審片報告：{path}")
+        messagebox.showinfo(
+            "匯出完成",
+            f"HTML 審片報告已儲存至：\n{path}\n\n"
+            "用瀏覽器開啟即可檢視彩色時間軸與段落表，可直接傳給剪輯師。",
+            parent=self)
+
+    def _on_export_review_srt(self):
+        """匯出審片標記字幕：與素材一起載入剪輯軟體，拉軸即見標記。"""
+        if not self.items:
+            return
+        path = self._default_path("_審片標記", ".srt")
+        try:
+            export_subtitle(build_review_cues(self.items), path)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("匯出失敗", str(exc), parent=self)
+            return
+        self.status_var.set(f"已匯出審片標記字幕：{path}")
+        messagebox.showinfo(
+            "匯出完成",
+            f"審片標記字幕已儲存至：\n{path}\n\n"
+            "在剪輯軟體或播放器載入此字幕與原始素材，"
+            "拉時間軸時即可看到【精彩】【冷場】等標記。",
+            parent=self)
 
     def _on_export_edl(self):
         if not self.items:

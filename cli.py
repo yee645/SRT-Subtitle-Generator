@@ -25,7 +25,8 @@ import sys
 from config import load_config
 from subtitle.media import probe_duration
 from subtitle.pipeline import EXPORT_FORMATS, run_batch, unique_path
-from subtitle.review import analyze, export_csv
+from subtitle.review import (analyze, compute_loudness, export_csv,
+                             export_html_report)
 from subtitle.transcriber import transcribe
 
 
@@ -138,19 +139,25 @@ def _run_review_batch(files: list, config: dict, report) -> list:
                 raise FileNotFoundError(f"找不到檔案：{path}")
             report(f"{prefix}轉錄並分析中...", index / total if total > 1 else None)
             words = transcribe(path, config)
-            items = analyze(words, media_duration=probe_duration(path))
+            duration = probe_duration(path)
+            items = analyze(words, media_duration=duration,
+                            loudness=compute_loudness(path))
             out_dir = (automation.get("output_dir") or "").strip() \
                 or os.path.dirname(os.path.abspath(path))
             os.makedirs(out_dir, exist_ok=True)
             base = os.path.splitext(os.path.basename(path))[0]
             csv_path = unique_path(os.path.join(out_dir, f"{base}_審片清單.csv"))
             export_csv(items, csv_path)
+            html_path = unique_path(os.path.join(out_dir, f"{base}_審片報告.html"))
+            export_html_report(items, html_path, source_name=os.path.basename(path),
+                               media_duration=duration)
             dropped = sum(1 for item in items if not item["keep"])
             report(f"{prefix}分析完成，共 {len(items)} 段（建議捨棄 {dropped} 段）",
                    (index + 1) / total)
             results.append({
                 "path": path, "ok": True, "error": None,
-                "result": {"exports": [csv_path], "burned": None, "cues": []},
+                "result": {"exports": [csv_path, html_path],
+                           "burned": None, "cues": []},
             })
         except Exception as exc:  # 單檔失敗不中斷批次。
             results.append(
