@@ -61,6 +61,15 @@ DEFAULT_CONFIG = {
     },
     # 目前選用的習慣設定名稱。
     "active_preset": "預設",
+    # 一鍵自動化輸出設定（「一鍵完成」與 CLI 批次模式共用）。
+    "automation": {
+        "export_srt": True,       # 自動匯出 SRT
+        "export_vtt": False,      # 自動匯出 VTT
+        "export_ass": False,      # 自動匯出 ASS
+        "export_txt": False,      # 自動匯出 TXT
+        "burn_video": False,      # 自動燒錄硬字幕影片
+        "output_dir": "",         # 輸出資料夾；留空表示與來源檔相同資料夾
+    },
     # 其他狀態。
     "last_dir": "",               # 上次開啟檔案的目錄
 }

@@ -29,6 +29,7 @@ from updater import (APP_VERSION, check_for_update, cleanup_old_version,
 from subtitle.aligner import align_transcript
 from subtitle.burner import burn_subtitles, ffmpeg_available
 from subtitle.exporter import FORMAT_FILETYPES, export, format_srt_timestamp
+from subtitle.pipeline import run_batch
 from subtitle.segmenter import build_cues_from_words
 from subtitle.transcriber import transcribe
 from gui.cue_editor import CueEditDialog
@@ -127,6 +128,7 @@ class SrtApp(tk.Tk):
         self._build_transcription_section(left)
         self._build_segmentation_section(left)
         self._build_transcript_section(left)
+        self._build_automation_section(left)
         self._build_action_section(left)
         self._build_cue_list(left)
         self._build_cue_edit_controls(left)
@@ -177,8 +179,9 @@ class SrtApp(tk.Tk):
         ).pack(anchor="w")
 
     def _build_file_section(self, parent):
-        """檔案選擇區。"""
-        frame = ttk.LabelFrame(parent, text="影片 / 音訊檔案", padding=(10, 6))
+        """檔案選擇區（可一次選取多個檔案進行批次處理）。"""
+        frame = ttk.LabelFrame(
+            parent, text="影片 / 音訊檔案（可多選，以 ; 分隔）", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.file_var = tk.StringVar()
         tk.Entry(frame, textvariable=self.file_var).pack(
@@ -314,6 +317,46 @@ class SrtApp(tk.Tk):
         hint = "請於此貼上現成逐字稿，系統會依語音長度與停頓自動分配時間軸。"
         tk.Label(frame, text=hint, fg="#666666").pack(anchor="w", pady=(4, 0))
 
+    def _build_automation_section(self, parent):
+        """一鍵自動化輸出設定區：勾選格式與燒錄後，「一鍵完成」全程免對話框。"""
+        frame = ttk.LabelFrame(parent, text="自動化輸出（一鍵完成用）", padding=(10, 6))
+        frame.pack(fill="x", pady=(0, 8))
+        self.automation_frame = frame
+        automation = self.config_data["automation"]
+
+        row1 = tk.Frame(frame)
+        row1.pack(fill="x", pady=2)
+        tk.Label(row1, text="自動匯出:").pack(side="left")
+        self.auto_export_vars = {}
+        for ext in (".srt", ".vtt", ".ass", ".txt"):
+            key = f"export_{ext.lstrip('.')}"
+            var = tk.BooleanVar(value=bool(automation.get(key)))
+            self.auto_export_vars[key] = var
+            tk.Checkbutton(
+                row1, text=ext.lstrip(".").upper(), variable=var,
+                command=self._collect_automation_config,
+            ).pack(side="left", padx=(4, 0))
+        self.auto_burn_var = tk.BooleanVar(value=bool(automation.get("burn_video")))
+        tk.Checkbutton(
+            row1, text="燒錄硬字幕影片", variable=self.auto_burn_var,
+            command=self._collect_automation_config,
+        ).pack(side="left", padx=(14, 0))
+
+        row2 = tk.Frame(frame)
+        row2.pack(fill="x", pady=2)
+        tk.Label(row2, text="輸出資料夾:").pack(side="left")
+        self.auto_output_dir_var = tk.StringVar(
+            value=automation.get("output_dir", ""))
+        tk.Entry(row2, textvariable=self.auto_output_dir_var).pack(
+            side="left", fill="x", expand=True, padx=(0, 4))
+        tk.Button(
+            row2, text="瀏覽...", command=self._choose_output_dir,
+        ).pack(side="left")
+        tk.Label(
+            frame, fg="#666666",
+            text="留空＝輸出到來源檔資料夾。輸出檔自動以來源檔名命名，不會跳出任何對話框。",
+        ).pack(anchor="w", pady=(2, 0))
+
     def _build_action_section(self, parent):
         """生成 / 匯出 / 燒錄按鈕與狀態列。"""
         frame = tk.Frame(parent)
@@ -323,6 +366,11 @@ class SrtApp(tk.Tk):
             frame, text="開始生成字幕", width=16, command=self._on_generate,
         )
         self.generate_btn.pack(side="left")
+        self.auto_btn = tk.Button(
+            frame, text="一鍵完成（生成＋匯出＋燒錄）", width=26,
+            command=self._on_auto_run,
+        )
+        self.auto_btn.pack(side="left", padx=(6, 0))
 
         # 進度條：可在 determinate（有百分比）與 indeterminate（跑馬燈）兩種模式切換。
         # 預設為 determinate；無法估算時切換為 indeterminate。
@@ -472,13 +520,16 @@ class SrtApp(tk.Tk):
             self.transcription_frame.pack(
                 fill="x", pady=(0, 8), before=self.segmentation_frame)
             self.generate_btn.configure(text="開始生成字幕")
+            self.auto_btn.configure(state="normal")
         elif mode == MODE_ALIGN:
             self.transcript_frame.pack(
-                fill="both", pady=(0, 8), before=self.action_frame)
+                fill="both", pady=(0, 8), before=self.automation_frame)
             self.generate_btn.configure(text="開始生成字幕")
+            self.auto_btn.configure(state="normal")
         else:
             # 手動模式：不需轉寫與文字稿，按鈕改為提示直接編輯字幕清單。
             self.generate_btn.configure(text="清空並進入手動編輯")
+            self.auto_btn.configure(state="disabled")
 
     def _on_style_change(self, style):
         """樣式面板變動時：更新設定、即時存檔、重繪預覽。"""
@@ -700,16 +751,28 @@ class SrtApp(tk.Tk):
     # 字幕生成流程
     # ==================================================================
     def _choose_file(self):
-        """開啟檔案選擇器。"""
+        """開啟檔案選擇器；可一次選取多個檔案進行批次處理。"""
         initial_dir = self.config_data.get("last_dir") or os.getcwd()
-        path = filedialog.askopenfilename(
-            title="選擇影片或音訊檔", initialdir=initial_dir,
+        paths = filedialog.askopenfilenames(
+            title="選擇影片或音訊檔（可多選）", initialdir=initial_dir,
             filetypes=MEDIA_FILETYPES,
         )
-        if path:
-            self.file_var.set(path)
-            self.config_data["last_dir"] = os.path.dirname(path)
+        if paths:
+            self.file_var.set("; ".join(paths))
+            self.config_data["last_dir"] = os.path.dirname(paths[0])
             self._save_config_silently()
+
+    def _choose_output_dir(self):
+        """選擇自動化輸出資料夾。"""
+        path = filedialog.askdirectory(title="選擇輸出資料夾")
+        if path:
+            self.auto_output_dir_var.set(path)
+            self._collect_automation_config()
+
+    def _selected_files(self):
+        """解析檔案欄位，回傳以 ; 分隔的檔案路徑清單。"""
+        raw = self.file_var.get()
+        return [part.strip() for part in raw.split(";") if part.strip()]
 
     def _choose_python(self):
         """選擇外部 Python 直譯器（供本地轉錄使用）。"""
@@ -759,6 +822,16 @@ class SrtApp(tk.Tk):
         self.config_data["segmentation"] = seg
         self._save_config_silently()
 
+    def _collect_automation_config(self):
+        """把介面上的自動化輸出設定寫回設定資料並存檔。"""
+        automation = dict(self.config_data["automation"])
+        for key, var in self.auto_export_vars.items():
+            automation[key] = bool(var.get())
+        automation["burn_video"] = bool(self.auto_burn_var.get())
+        automation["output_dir"] = self.auto_output_dir_var.get().strip()
+        self.config_data["automation"] = automation
+        self._save_config_silently()
+
     def _on_generate(self):
         """按下「開始生成字幕」（模式三則為清空進入手動編輯）。"""
         if self.is_processing:
@@ -778,10 +851,15 @@ class SrtApp(tk.Tk):
                 "已進入手動字幕模式，請按「新增字幕」開始建立字幕。")
             return
 
-        audio_path = self.file_var.get().strip()
-        if not audio_path or not os.path.exists(audio_path):
+        files = self._selected_files()
+        if not files or not os.path.exists(files[0]):
             messagebox.showerror("錯誤", "請先選擇有效的影片或音訊檔案。")
             return
+        audio_path = files[0]
+        if len(files) > 1:
+            self.status_var.set(
+                "已選多個檔案：「開始生成字幕」僅處理第一個；"
+                "批次處理請改用「一鍵完成」。")
 
         transcript = ""
         if mode == MODE_ALIGN:
@@ -800,6 +878,100 @@ class SrtApp(tk.Tk):
             daemon=True,
         )
         worker.start()
+
+    def _on_auto_run(self):
+        """按下「一鍵完成」：對所有選取檔案自動跑生成 → 匯出 → 燒錄。"""
+        if self.is_processing:
+            return
+        mode = self.mode_var.get()
+        if mode == MODE_MANUAL:
+            return
+
+        files = self._selected_files()
+        if not files:
+            messagebox.showerror("錯誤", "請先選擇影片或音訊檔案。")
+            return
+        missing = [path for path in files if not os.path.exists(path)]
+        if missing:
+            messagebox.showerror(
+                "錯誤", "找不到以下檔案：\n" + "\n".join(missing))
+            return
+
+        transcript = ""
+        if mode == MODE_ALIGN and len(files) == 1:
+            # 單檔可直接用貼上的文字稿；留空則 pipeline 會找同名 .txt。
+            transcript = self.transcript_text.get("1.0", "end").strip()
+
+        self._collect_transcription_config()
+        self._collect_segmentation_config()
+        self._collect_automation_config()
+        self.config_data["subtitle_style"] = self.style_panel.get_style()
+
+        automation = self.config_data["automation"]
+        wants_export = any(
+            automation.get(f"export_{ext}") for ext in ("srt", "vtt", "ass", "txt"))
+        if not wants_export and not automation.get("burn_video"):
+            messagebox.showerror(
+                "錯誤", "請先在「自動化輸出」勾選至少一種匯出格式或燒錄影片。")
+            return
+        if automation.get("burn_video") and not ffmpeg_available():
+            messagebox.showerror(
+                "找不到 ffmpeg",
+                "燒錄字幕需要 ffmpeg。請依說明安裝 ffmpeg 並加入系統 PATH，"
+                "或取消勾選「燒錄硬字幕影片」。")
+            return
+
+        self._set_processing(True)
+        threading.Thread(
+            target=self._auto_worker,
+            args=(mode, files, transcript),
+            daemon=True,
+        ).start()
+
+    def _auto_worker(self, mode, files, transcript):
+        """背景執行緒：批次執行完整自動流程。"""
+        try:
+            def report(message, ratio=None):
+                self.result_queue.put(("status", (message, ratio)))
+
+            results = run_batch(
+                files, self.config_data, mode=mode,
+                transcript=transcript, report=report)
+            self.result_queue.put(("auto_done", results))
+        except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
+            logger.exception("一鍵完成流程發生錯誤")
+            self.result_queue.put(("error", str(exc)))
+
+    def _on_auto_done(self, results):
+        """一鍵完成結束：載入最後一個成功檔案的字幕供檢視，並顯示總結。"""
+        self._set_processing(False)
+        succeeded = [item for item in results if item["ok"]]
+        failed = [item for item in results if not item["ok"]]
+
+        if succeeded:
+            self.cues = succeeded[-1]["result"]["cues"]
+            self._populate_cue_list(self.cues)
+            self._update_export_state()
+            self._refresh_preview()
+
+        lines = []
+        for item in succeeded:
+            outputs = list(item["result"]["exports"])
+            if item["result"]["burned"]:
+                outputs.append(item["result"]["burned"])
+            lines.append("✔ " + os.path.basename(item["path"]))
+            lines.extend(f"　→ {path}" for path in outputs)
+        for item in failed:
+            lines.append(f"✘ {os.path.basename(item['path'])}：{item['error']}")
+
+        summary = (f"一鍵完成：成功 {len(succeeded)}、失敗 {len(failed)}"
+                   f"（共 {len(results)} 個檔案）。")
+        self.status_var.set(summary)
+        if failed:
+            messagebox.showwarning("一鍵完成（部分失敗）",
+                                   summary + "\n\n" + "\n".join(lines))
+        else:
+            messagebox.showinfo("一鍵完成", summary + "\n\n" + "\n".join(lines))
 
     def _generate_worker(self, mode, audio_path, transcript):
         """背景執行緒：實際進行轉寫或對齊。"""
@@ -839,6 +1011,8 @@ class SrtApp(tk.Tk):
                     self._update_progress(ratio)
                 elif kind == "done":
                     self._on_generation_done(payload)
+                elif kind == "auto_done":
+                    self._on_auto_done(payload)
                 elif kind == "error":
                     self._on_generation_error(payload)
                 elif kind == "burn_done":
@@ -948,6 +1122,7 @@ class SrtApp(tk.Tk):
         self.is_processing = processing
         if processing:
             self.generate_btn.configure(state="disabled", text="處理中...")
+            self.auto_btn.configure(state="disabled")
             # 起始時先進入 indeterminate 模式並啟動跑馬燈，待收到 ratio 後改 determinate。
             self.progress.configure(mode="indeterminate")
             self.progress.start(12)
@@ -957,8 +1132,10 @@ class SrtApp(tk.Tk):
             if mode == MODE_MANUAL:
                 self.generate_btn.configure(
                     state="normal", text="清空並進入手動編輯")
+                self.auto_btn.configure(state="disabled")
             else:
                 self.generate_btn.configure(state="normal", text="開始生成字幕")
+                self.auto_btn.configure(state="normal")
             self.progress.stop()
             self.progress.configure(mode="determinate")
             self.progress_var.set(0.0)
@@ -993,9 +1170,9 @@ class SrtApp(tk.Tk):
 
     def _default_export_name(self, ext):
         """以來源檔名為基礎組出預設輸出檔名。"""
-        source = self.file_var.get().strip()
-        if source:
-            return os.path.splitext(os.path.basename(source))[0] + ext
+        files = self._selected_files()
+        if files:
+            return os.path.splitext(os.path.basename(files[0]))[0] + ext
         return f"字幕{ext}"
 
     def _on_export(self, ext):
@@ -1033,8 +1210,9 @@ class SrtApp(tk.Tk):
                 "找不到 ffmpeg",
                 "燒錄字幕需要 ffmpeg。請依說明安裝 ffmpeg 並加入系統 PATH。")
             return
-        # 先選擇來源影片（若主檔案欄已有路徑則預設使用）。
-        video_path = self.file_var.get().strip()
+        # 先選擇來源影片（若主檔案欄已有路徑則預設使用第一個）。
+        files = self._selected_files()
+        video_path = files[0] if files else ""
         if not video_path or not os.path.exists(video_path):
             video_path = filedialog.askopenfilename(
                 title="選擇要燒錄字幕的影片", filetypes=MEDIA_FILETYPES,
@@ -1107,6 +1285,7 @@ class SrtApp(tk.Tk):
         self.config_data["subtitle_style"] = self.style_panel.get_style()
         self._collect_transcription_config()
         self._collect_segmentation_config()
+        self._collect_automation_config()
         self.destroy()
 
 
