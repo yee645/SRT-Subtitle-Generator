@@ -14,6 +14,12 @@ on:
   push:
     tags:
       - "v*"
+    # 版本升級合併進 main 時自動發版（updater.py 的 APP_VERSION 為準）。
+    branches:
+      - main
+    paths:
+      - "updater.py"
+      - "CHANGELOG.md"
   # 手動觸發：不需先推標籤，Release 建立時會一併建立標籤。
   workflow_dispatch:
     inputs:
@@ -52,16 +58,32 @@ jobs:
               source = pathlib.Path("updater.py").read_text(encoding="utf-8")
               match = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', source)
               tag = f"v{match.group(1)}"
+          # 該版本的 Release 已存在時跳過建置（防止重複發版）。
+          import urllib.request
+          import urllib.error
+          exists = "false"
+          url = (f"https://api.github.com/repos/"
+                 f"{os.environ['GITHUB_REPOSITORY']}/releases/tags/{tag}")
+          try:
+              with urllib.request.urlopen(url, timeout=15):
+                  exists = "true"
+          except urllib.error.HTTPError as err:
+              if err.code != 404:
+                  raise
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fp:
               fp.write(f"RELEASE_TAG={tag}\n")
+              fp.write(f"RELEASE_EXISTS={exists}\n")
 
       - name: Install build dependencies
+        if: env.RELEASE_EXISTS != 'true'
         run: pip install pyinstaller openai zhconv sv-ttk
 
       - name: Build exe with PyInstaller
+        if: env.RELEASE_EXISTS != 'true'
         run: pyinstaller SRT-Subtitle-Generator.spec --noconfirm
 
       - name: Extract release notes from CHANGELOG
+        if: env.RELEASE_EXISTS != 'true'
         shell: python
         run: |
           import os
@@ -84,6 +106,7 @@ jobs:
           pathlib.Path("RELEASE_NOTES.md").write_text(notes, encoding="utf-8")
 
       - name: Create GitHub pre-release with exe
+        if: env.RELEASE_EXISTS != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
