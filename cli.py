@@ -26,7 +26,7 @@ from config import load_config
 from subtitle.media import probe_duration
 from subtitle.pipeline import EXPORT_FORMATS, run_batch, unique_path
 from subtitle.review import (analyze, compute_loudness, export_csv,
-                             export_html_report)
+                             export_html_report, resolve_settings)
 from subtitle.transcriber import transcribe
 
 
@@ -130,6 +130,7 @@ def main(argv=None) -> int:
 def _run_review_batch(files: list, config: dict, report) -> list:
     """審片模式批次：逐檔轉錄、分析並輸出審片清單 CSV，回傳與 run_batch 同構的結果。"""
     automation = config.get("automation", {})
+    settings = resolve_settings(config)
     results = []
     total = len(files)
     for index, path in enumerate(files):
@@ -141,7 +142,8 @@ def _run_review_batch(files: list, config: dict, report) -> list:
             words = transcribe(path, config)
             duration = probe_duration(path)
             items = analyze(words, media_duration=duration,
-                            loudness=compute_loudness(path))
+                            loudness=compute_loudness(path),
+                            settings=settings)
             out_dir = (automation.get("output_dir") or "").strip() \
                 or os.path.dirname(os.path.abspath(path))
             os.makedirs(out_dir, exist_ok=True)

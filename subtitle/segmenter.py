@@ -317,6 +317,9 @@ def _post_process(cues, seg_cfg):
     # 合併過短的孤字，避免單一字（如英文單字尾巴）被擠到下一段顯示。
     expanded = _merge_orphan_cues(expanded)
 
+    # 合併相鄰且內容相同的字幕（Whisper 幻覺重複的最後一道防線，Issue #4）。
+    expanded = _merge_duplicate_cues(expanded, max_duration)
+
     # 套用整體時間軸偏移，供使用者修正字幕時間偏差。
     time_offset = float(seg_cfg.get("time_offset", 0.0))
     if time_offset:
@@ -331,6 +334,28 @@ def _post_process(cues, seg_cfg):
 
 # 視為「孤字碎片」的最大字數，達此長度以下會被併回前一句。
 _MAX_ORPHAN_CHARS = 2
+
+
+def _merge_duplicate_cues(cues, max_duration):
+    """
+    合併相鄰且文字完全相同、時間重疊或緊貼的字幕（修復 Issue #4）。
+
+    Whisper 幻覺會在同一時間點重複輸出同一句話；即使字詞層已去重，
+    仍以此作為 cue 層的最後防線。合併後長度以 max_duration 為上限。
+    """
+    if len(cues) < 2:
+        return cues
+    merged = [cues[0]]
+    for cue in cues[1:]:
+        previous = merged[-1]
+        if (cue["text"] == previous["text"]
+                and cue["start"] <= previous["end"] + 0.2):
+            previous["end"] = min(
+                max(previous["end"], cue["end"]),
+                previous["start"] + max_duration)
+        else:
+            merged.append(cue)
+    return merged
 
 
 def _merge_orphan_cues(cues):

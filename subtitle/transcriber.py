@@ -108,6 +108,18 @@ def transcribe(audio_path, config, status_cb=None, initial_prompt=""):
             # 已有自訂提示詞時，附加繁體偏導詞以兼顧字體與用詞導正。
             initial_prompt = f"{_TRADITIONAL_PROMPT}{initial_prompt}"
 
+    # 轉錄快取：同一檔案（大小/修改時間相同）且設定相同時直接重用結果，
+    # 免去最耗時的重複語音辨識（審片後再上字幕、重生成字幕時皆受惠）。
+    from .transcache import load_cached_words, save_cached_words
+    cache_enabled = config.get("transcription", {}).get("use_cache", True)
+    cache_key = None
+    if cache_enabled:
+        cache_key = _make_cache_key(audio_path, config, initial_prompt)
+        cached = load_cached_words(cache_key) if cache_key else None
+        if cached:
+            _notify(status_cb, "使用先前的轉錄結果（快取），略過語音辨識。", 0.9)
+            return cached
+
     if transcription_cfg.get("use_api"):
         words = _transcribe_with_api(
             audio_path, transcription_cfg, status_cb, initial_prompt)
@@ -115,9 +127,81 @@ def transcribe(audio_path, config, status_cb=None, initial_prompt=""):
         words = _transcribe_with_local(
             audio_path, transcription_cfg, status_cb, initial_prompt)
 
+    # 去除 Whisper 幻覺造成的重複輸出（Issue #4）。
+    words = _dedupe_words(words)
+
     if want_traditional:
         words = _to_traditional(words)
+
+    if cache_enabled and cache_key:
+        save_cached_words(cache_key, words)
     return words
+
+
+def _make_cache_key(audio_path, config, initial_prompt):
+    """組出轉錄快取的識別內容；檔案讀取失敗時回傳 None（不使用快取）。"""
+    from .transcache import make_key
+    try:
+        return make_key(audio_path, config.get("transcription", {}),
+                        initial_prompt)
+    except OSError:
+        return None
+
+
+def _dedupe_words(words):
+    """
+    去除 Whisper 幻覺造成的重複輸出（修復 Issue #4：同一時間點多句相同字幕）。
+
+    Whisper 遇到靜音、背景音樂或雜訊時，常把最近的片語重複輸出多次
+    （looping hallucination）。兩層防護：
+    1. 相同文字且時間戳幾乎重疊的字 → 只保留一個（延長其結束時間）。
+    2. 片語迴圈：同一組字連續重複多次（單字 ≥4 次、片語 ≥3 次）→ 收斂為一組。
+    """
+    if not words:
+        return words
+
+    # 第一層：同字且時間重疊。
+    result = [dict(words[0])]
+    for word in words[1:]:
+        prev = result[-1]
+        if word["word"] == prev["word"]:
+            overlap = (min(word["end"], prev["end"])
+                       - max(word["start"], prev["start"]))
+            shorter = max(min(word["end"] - word["start"],
+                              prev["end"] - prev["start"]), 1e-6)
+            if overlap / shorter > 0.5 or abs(word["start"] - prev["start"]) < 0.05:
+                prev["end"] = max(prev["end"], word["end"])
+                continue
+        result.append(dict(word))
+
+    # 第二層：片語迴圈收斂（保留第一組，丟棄其後的重複組）。
+    texts = [w["word"] for w in result]
+    output = []
+    i = 0
+    total = len(result)
+    while i < total:
+        collapsed = False
+        # 由小週期往大比對，讓「對對對對」這類單字迴圈以最小單位收斂。
+        for k in range(1, 7):
+            if i + 2 * k > total:
+                break
+            phrase = texts[i:i + k]
+            repeats = 1
+            j = i + k
+            while j + k <= total and texts[j:j + k] == phrase:
+                repeats += 1
+                j += k
+            # 單字連續 4 次以上（如「對對對對對」）、多字片語 3 次以上才視為迴圈，
+            # 避免誤刪正常口語中的少量重複。
+            if repeats >= (4 if k == 1 else 3):
+                output.extend(result[i:i + k])
+                i = j
+                collapsed = True
+                break
+        if not collapsed:
+            output.append(result[i])
+            i += 1
+    return output
 
 
 def _to_traditional(words):
