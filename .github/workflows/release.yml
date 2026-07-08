@@ -1,0 +1,67 @@
+# 發佈自動化：推送 v* 標籤時，於 Windows 環境打包 exe 並建立 GitHub Release。
+#
+# 流程：
+#   1. 以 PyInstaller 依既有 spec 打包 SRT-Subtitle-Generator.exe
+#   2. 從 CHANGELOG.md 抽出該版本的更新內容作為 Release notes
+#   3. 建立 pre-release 並附上 exe
+#
+# 發佈為 pre-release 的原因：程式內建的自動更新走 /releases/latest
+# （不含 pre-release）。維護者在 Windows 上驗證 exe 無誤後，把 Release
+# 轉為正式版，既有使用者即會收到自動更新。
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: pip install pyinstaller openai zhconv sv-ttk
+
+      - name: Build exe with PyInstaller
+        run: pyinstaller SRT-Subtitle-Generator.spec --noconfirm
+
+      - name: Extract release notes from CHANGELOG
+        shell: python
+        run: |
+          import os
+          import pathlib
+          import re
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          version = tag.lstrip("vV")
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          # 抓出對應版本的段落（從 "## vX.Y.Z" 到下一個 "## " 標題）。
+          pattern = rf"^## v{re.escape(version)}.*?$(.*?)(?=^## |\Z)"
+          match = re.search(pattern, text, re.M | re.S)
+          notes = match.group(1).strip() if match else f"v{version}"
+          notes += (
+              "\n\n---\n"
+              "本 Release 由自動化流程建置（exe 於 GitHub Actions "
+              "windows-latest 打包）。維護者驗證 exe 無誤後，將本 Release "
+              "由 pre-release 轉為正式版，既有使用者即會收到自動更新。"
+          )
+          pathlib.Path("RELEASE_NOTES.md").write_text(notes, encoding="utf-8")
+
+      - name: Create GitHub pre-release with exe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$env:GITHUB_REF_NAME"
+          "dist/SRT-Subtitle-Generator.exe"
+          --prerelease
+          --title "$env:GITHUB_REF_NAME"
+          --notes-file RELEASE_NOTES.md
