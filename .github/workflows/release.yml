@@ -14,6 +14,13 @@ on:
   push:
     tags:
       - "v*"
+  # 手動觸發：不需先推標籤，Release 建立時會一併建立標籤。
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要發佈的版本標籤（如 v1.4.0）；留空則取 updater.py 的 APP_VERSION"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -28,6 +35,26 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Resolve release tag
+        shell: python
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          import os
+          import pathlib
+          import re
+
+          tag = (os.environ.get("INPUT_TAG") or "").strip()
+          if not tag and os.environ.get("GITHUB_REF_TYPE") == "tag":
+              tag = os.environ["GITHUB_REF_NAME"]
+          if not tag:
+              # 手動觸發未指定標籤時，取 updater.py 內的 APP_VERSION。
+              source = pathlib.Path("updater.py").read_text(encoding="utf-8")
+              match = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', source)
+              tag = f"v{match.group(1)}"
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fp:
+              fp.write(f"RELEASE_TAG={tag}\n")
+
       - name: Install build dependencies
         run: pip install pyinstaller openai zhconv sv-ttk
 
@@ -41,7 +68,7 @@ jobs:
           import pathlib
           import re
 
-          tag = os.environ["GITHUB_REF_NAME"]
+          tag = os.environ["RELEASE_TAG"]
           version = tag.lstrip("vV")
           text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
           # 抓出對應版本的段落（從 "## vX.Y.Z" 到下一個 "## " 標題）。
@@ -60,8 +87,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
-          gh release create "$env:GITHUB_REF_NAME"
+          gh release create "$env:RELEASE_TAG"
           "dist/SRT-Subtitle-Generator.exe"
           --prerelease
-          --title "$env:GITHUB_REF_NAME"
+          --title "$env:RELEASE_TAG"
           --notes-file RELEASE_NOTES.md
+          --target "$env:GITHUB_SHA"
