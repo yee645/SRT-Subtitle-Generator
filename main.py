@@ -10,8 +10,9 @@ SRT 自動字幕生成與編輯桌面應用程式 - 程式進入點。
 Tkinter 為 Python 標準函式庫，無須額外安裝。
 
 執行方式：
-    python main.py                       # 開啟 GUI
-    python main.py 影片1.mp4 影片2.mp4   # 命令列批次模式（免開 GUI，詳見 cli.py）
+    python main.py                         # 開啟 GUI
+    python main.py 影片1.mp4 影片2.mp4     # 命令列批次：生成 → 匯出 → 燒錄（詳見 cli.py）
+    python main.py --review 素材.mp4       # 命令列批次審片：輸出片段分析 CSV 與 HTML 報告
 """
 
 import os
