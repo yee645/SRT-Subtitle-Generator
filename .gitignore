@@ -21,3 +21,6 @@ Thumbs.db
 
 # 釋出用暫存（D:\SRT 內的工作鏡像）
 release-repo/
+
+# 轉錄結果快取（本地產生，不入版控）
+transcribe_cache/

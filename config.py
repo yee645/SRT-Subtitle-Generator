@@ -26,6 +26,17 @@ _DEFAULT_STYLE = {
     "stroke_width": 2,        # 邊框寬度（像素）
 }
 
+# 預設審片偵測參數（審片助手用，皆可於介面調整並記憶）。
+_DEFAULT_REVIEW = {
+    "highlight_sensitivity": 1.0,  # 精彩判定敏感度倍率：<1 更嚴格、>1 更容易標記
+    "extra_excite_words": "",      # 自訂情緒詞（逗號或空白分隔），附加於內建詞庫
+    "filler_words": "呃嗯欸蛤齁",   # 口頭禪單字表（連寫，逐字比對）
+    "silence_gap": 2.0,            # 視為「冷場」的最短無人聲秒數
+    "segment_gap": 1.0,            # 講話段落切分的停頓秒數
+    "take_similarity": 0.72,       # 重複拍攝判定的文字相似度（0~1）
+    "filler_density": 0.08,        # 每字的填充詞密度達此值標記「口頭禪多」
+}
+
 # 預設斷句參數。
 _DEFAULT_SEGMENTATION = {
     "max_chars_cjk": 18,      # 中文等全形文字單行最大字數
@@ -51,7 +62,10 @@ DEFAULT_CONFIG = {
         "api_key": "",            # OpenAI API 金鑰（使用 API 模式時填入）
         "python_path": "",        # 外部 Python 直譯器路徑（供 exe 使用自備的 whisper）
         "prompt": "",             # 轉寫提示詞：可填入專有名詞、人名、常見錯字導正
+        "use_cache": True,        # 重用轉錄快取：同檔同設定免重跑語音辨識
     },
+    # 審片助手的偵測參數（敏感度、詞表、門檻，介面可調）。
+    "review": dict(_DEFAULT_REVIEW),
     # 已儲存的習慣設定，每組包含一份字幕樣式與斷句參數。
     "presets": {
         "預設": {

@@ -69,8 +69,61 @@ _EXCITE_WORDS = (
 )
 _EXCLAIM_CHARS = "！!？?"
 
-# 精彩分數門檻：達標即標記為精彩片段。
+# 精彩分數門檻：達標即標記為精彩片段（會除以使用者敏感度倍率）。
 _HIGHLIGHT_THRESHOLD = 1.8
+
+# 審片偵測參數的預設值（與 config._DEFAULT_REVIEW 對應；設定缺漏時的保底）。
+DEFAULT_SETTINGS = {
+    "highlight_sensitivity": 1.0,
+    "extra_excite_words": "",
+    "filler_words": _FILLER_CJK,
+    "silence_gap": DEFAULT_SILENCE_GAP,
+    "segment_gap": DEFAULT_SEGMENT_GAP,
+    "take_similarity": DEFAULT_TAKE_SIMILARITY,
+    "filler_density": _FILLER_DENSITY,
+}
+
+
+def resolve_settings(config: Optional[dict] = None) -> dict:
+    """
+    從完整設定 dict 取出審片偵測參數，缺漏欄位以預設值補齊並做範圍夾限。
+
+    回傳的 dict 另含解析好的 ``excite_words``（內建＋使用者自訂）與
+    ``filler_chars``（口頭禪單字表），供 analyze 直接使用。
+    """
+    raw = dict(DEFAULT_SETTINGS)
+    if config:
+        raw.update({k: v for k, v in config.get("review", {}).items()
+                    if v is not None})
+
+    def clamp(value, low, high, fallback):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return fallback
+        return max(low, min(value, high))
+
+    extra = [w.strip().lower()
+             for w in re.split(r"[,，、\s]+", str(raw.get("extra_excite_words") or ""))
+             if w.strip()]
+    filler = str(raw.get("filler_words") or "").strip() or _FILLER_CJK
+
+    return {
+        "highlight_sensitivity": clamp(
+            raw.get("highlight_sensitivity"), 0.2, 3.0, 1.0),
+        "extra_excite_words": str(raw.get("extra_excite_words") or ""),
+        "filler_words": filler,
+        "silence_gap": clamp(raw.get("silence_gap"), 0.5, 10.0,
+                             DEFAULT_SILENCE_GAP),
+        "segment_gap": clamp(raw.get("segment_gap"), 0.4, 5.0,
+                             DEFAULT_SEGMENT_GAP),
+        "take_similarity": clamp(raw.get("take_similarity"), 0.5, 0.95,
+                                 DEFAULT_TAKE_SIMILARITY),
+        "filler_density": clamp(raw.get("filler_density"), 0.02, 0.5,
+                                _FILLER_DENSITY),
+        "excite_words": tuple(_EXCITE_WORDS) + tuple(extra),
+        "filler_chars": filler,
+    }
 
 # 分類顏色（GUI 時間軸、清單列與 HTML 報告共用，確保視覺一致）。
 CATEGORY_COLORS = {
@@ -113,9 +166,9 @@ def _join_words(words) -> str:
     return "".join(parts).strip()
 
 
-def count_fillers(text: str) -> int:
-    """計算文字中的填充詞數量（中文單字 + 英文整字）。"""
-    count = sum(text.count(ch) for ch in _FILLER_CJK)
+def count_fillers(text: str, filler_chars: str = _FILLER_CJK) -> int:
+    """計算文字中的填充詞數量（中文單字表可自訂 + 英文整字）。"""
+    count = sum(text.count(ch) for ch in filler_chars)
     count += len(_FILLER_LATIN.findall(text))
     return count
 
@@ -181,10 +234,10 @@ def _mean_energy(start: float, end: float, loudness: list) -> Optional[float]:
     return statistics.fmean(values)
 
 
-def _excitement_hits(text: str) -> int:
-    """計算情緒高張詞出現次數（中文子字串 + 英文不分大小寫）。"""
+def _excitement_hits(text: str, excite_words=_EXCITE_WORDS) -> int:
+    """計算情緒高張詞出現次數（中文子字串 + 英文不分大小寫，詞庫可擴充）。"""
     lowered = text.lower()
-    return sum(lowered.count(word) for word in _EXCITE_WORDS)
+    return sum(lowered.count(word) for word in excite_words)
 
 
 def _zscores(values: list) -> list:
@@ -199,14 +252,21 @@ def _zscores(values: list) -> list:
     return [((v - mean) / stdev) if v is not None else 0.0 for v in values]
 
 
-def _score_highlights(items: list, loudness: list) -> None:
+def _score_highlights(items: list, loudness: list,
+                      settings: Optional[dict] = None) -> None:
     """
     為講話段落計算「精彩分數」並就地標記 TAG_HIGHLIGHT。
 
     綜合四種訊號：音量能量（講得大聲、有笑聲的段落通常較精彩）、
-    語速（興奮時語速快）、情緒詞（哇、太扯、wow…）、驚嘆/疑問句。
-    分數達門檻即標記為精彩。無音量資料時退化為其餘三種訊號。
+    語速（興奮時語速快）、情緒詞（內建＋使用者自訂）、驚嘆/疑問句。
+    分數達門檻即標記為精彩；門檻除以使用者的敏感度倍率——
+    敏感度 >1 更容易標記、<1 更嚴格。無音量資料時退化為其餘三種訊號。
     """
+    settings = settings or resolve_settings()
+    excite_words = settings.get("excite_words", _EXCITE_WORDS)
+    sensitivity = max(float(settings.get("highlight_sensitivity", 1.0)), 0.2)
+    threshold = _HIGHLIGHT_THRESHOLD / sensitivity
+
     speech = [item for item in items if item["kind"] == "speech"]
     if not speech:
         return
@@ -220,14 +280,14 @@ def _score_highlights(items: list, loudness: list) -> None:
     energy_z = _zscores(energies)
     rate_z = _zscores(rates)
     for index, item in enumerate(speech):
-        excites = _excitement_hits(item["text"])
+        excites = _excitement_hits(item["text"], excite_words)
         exclaims = sum(item["text"].count(ch) for ch in _EXCLAIM_CHARS)
         score = (1.2 * energy_z[index]
                  + 0.8 * rate_z[index]
                  + 1.0 * min(excites, 3)
                  + 0.5 * min(exclaims, 2))
         item["score"] = round(score, 2)
-        if score >= _HIGHLIGHT_THRESHOLD and TAG_REPEATED not in item["tags"]:
+        if score >= threshold and TAG_REPEATED not in item["tags"]:
             item["tags"].insert(0, TAG_HIGHLIGHT)
 
 
@@ -252,10 +312,11 @@ def build_speech_segments(words, segment_gap: float = DEFAULT_SEGMENT_GAP):
 def analyze(
     words,
     media_duration: float = 0.0,
-    segment_gap: float = DEFAULT_SEGMENT_GAP,
-    silence_gap: float = DEFAULT_SILENCE_GAP,
-    take_similarity: float = DEFAULT_TAKE_SIMILARITY,
+    segment_gap: Optional[float] = None,
+    silence_gap: Optional[float] = None,
+    take_similarity: Optional[float] = None,
     loudness: Optional[list] = None,
+    settings: Optional[dict] = None,
 ) -> list:
     """
     分析逐字時間軸，回傳審片段落清單（依時間排序）。
@@ -269,9 +330,18 @@ def analyze(
         score: 精彩分數（講話段落才有）
         keep: 建議是否保留（冷場與重複拍攝預設捨棄）
 
+    settings 為 resolve_settings() 的審片偵測參數（敏感度、詞表、門檻）；
+    segment_gap／silence_gap／take_similarity 明確傳入時優先於 settings。
     loudness 為 compute_loudness() 的音量資料，供精彩片段偵測使用；
     省略時偵測退化為語速與文字訊號。
     """
+    settings = settings or resolve_settings()
+    segment_gap = settings["segment_gap"] if segment_gap is None else segment_gap
+    silence_gap = settings["silence_gap"] if silence_gap is None else silence_gap
+    if take_similarity is None:
+        take_similarity = settings["take_similarity"]
+    filler_chars = settings.get("filler_chars", _FILLER_CJK)
+    filler_density = float(settings.get("filler_density", _FILLER_DENSITY))
     speech = build_speech_segments(words, segment_gap)
 
     # 重複拍攝：與後面鄰近段落內容高度相似者，保留最後一次、前面的建議捨棄。
@@ -302,9 +372,9 @@ def analyze(
         if index in repeated:
             tags.append(TAG_REPEATED)
             keep = False
-        fillers = count_fillers(seg["text"])
+        fillers = count_fillers(seg["text"], filler_chars)
         length = max(len(_normalize_for_compare(seg["text"])), 1)
-        if fillers and fillers / length >= _FILLER_DENSITY:
+        if fillers and fillers / length >= filler_density:
             tags.append(TAG_FILLER)
         items.append({
             "kind": "speech",
@@ -323,7 +393,7 @@ def analyze(
         items.append(_silence_item(previous_end, media_duration))
 
     # 精彩片段偵測（音量能量 + 語速 + 情緒詞 + 驚嘆句）。
-    _score_highlights(items, loudness or [])
+    _score_highlights(items, loudness or [], settings)
     return items
 
 

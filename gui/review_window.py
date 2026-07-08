@@ -17,18 +17,18 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from config import save_config
 from subtitle.burner import ffmpeg_available
 from subtitle.exporter import export as export_subtitle
 from subtitle.media import probe_duration
 from subtitle.pipeline import unique_path
 from subtitle.review import (CATEGORY_COLORS, CATEGORY_LABELS,
-                             DEFAULT_SEGMENT_GAP, DEFAULT_SILENCE_GAP,
                              TAG_HIGHLIGHT, TAG_REPEATED, TAG_SILENCE,
                              analyze, build_review_cues, categorize,
                              compute_loudness, cut_rough_video, export_csv,
                              export_edl, export_html_report,
-                             export_youtube_chapters, search_segments,
-                             summarize)
+                             export_youtube_chapters, resolve_settings,
+                             search_segments, summarize)
 from subtitle.transcriber import transcribe
 
 logger = logging.getLogger(__name__)
@@ -69,31 +69,71 @@ class ReviewWindow(tk.Toplevel):
             font=("Microsoft JhengHei", 10, "bold"),
         ).pack(side="left")
 
-        # 分析參數與開始按鈕。
-        options = ttk.Frame(self, padding=(10, 0))
-        options.pack(fill="x")
-        tk.Label(options, text="冷場門檻:").pack(side="left")
-        self.silence_var = tk.DoubleVar(value=DEFAULT_SILENCE_GAP)
+        # 偵測設定：所有參數可調並記憶於 config.json，下次分析生效。
+        settings = resolve_settings(self.config_data)
+        options = ttk.LabelFrame(
+            self, text="偵測設定（自動記憶，按「開始分析」套用）", padding=(10, 6))
+        options.pack(fill="x", padx=10, pady=(4, 0))
+
+        row1 = ttk.Frame(options)
+        row1.pack(fill="x", pady=2)
+        tk.Label(row1, text="冷場門檻:").pack(side="left")
+        self.silence_var = tk.DoubleVar(value=settings["silence_gap"])
         tk.Spinbox(
-            options, from_=0.5, to=10.0, increment=0.5, width=5,
+            row1, from_=0.5, to=10.0, increment=0.5, width=5,
             textvariable=self.silence_var, format="%.1f",
-        ).pack(side="left", padx=(2, 10))
-        tk.Label(options, text="秒　段落切分停頓:").pack(side="left")
-        self.gap_var = tk.DoubleVar(value=DEFAULT_SEGMENT_GAP)
+        ).pack(side="left", padx=(2, 2))
+        tk.Label(row1, text="秒").pack(side="left", padx=(0, 12))
+        tk.Label(row1, text="段落切分停頓:").pack(side="left")
+        self.gap_var = tk.DoubleVar(value=settings["segment_gap"])
         tk.Spinbox(
-            options, from_=0.4, to=5.0, increment=0.2, width=5,
+            row1, from_=0.4, to=5.0, increment=0.2, width=5,
             textvariable=self.gap_var, format="%.1f",
-        ).pack(side="left", padx=(2, 10))
-        tk.Label(options, text="秒").pack(side="left")
+        ).pack(side="left", padx=(2, 2))
+        tk.Label(row1, text="秒").pack(side="left", padx=(0, 12))
+        tk.Label(row1, text="精彩敏感度:").pack(side="left")
+        self.sensitivity_var = tk.DoubleVar(
+            value=settings["highlight_sensitivity"])
+        tk.Spinbox(
+            row1, from_=0.2, to=3.0, increment=0.1, width=5,
+            textvariable=self.sensitivity_var, format="%.1f",
+        ).pack(side="left", padx=(2, 2))
+        tk.Label(row1, text="倍", fg="#666666").pack(side="left", padx=(0, 12))
+        tk.Label(row1, text="重複判定相似度:").pack(side="left")
+        self.similarity_var = tk.DoubleVar(value=settings["take_similarity"])
+        tk.Spinbox(
+            row1, from_=0.5, to=0.95, increment=0.05, width=5,
+            textvariable=self.similarity_var, format="%.2f",
+        ).pack(side="left", padx=(2, 0))
+
+        row2 = ttk.Frame(options)
+        row2.pack(fill="x", pady=2)
+        tk.Label(row2, text="自訂情緒詞:").pack(side="left")
+        self.excite_var = tk.StringVar(
+            value=settings["extra_excite_words"])
+        tk.Entry(row2, textvariable=self.excite_var).pack(
+            side="left", fill="x", expand=True, padx=(2, 12))
+        tk.Label(row2, text="口頭禪字:").pack(side="left")
+        self.filler_var = tk.StringVar(value=settings["filler_words"])
+        tk.Entry(row2, textvariable=self.filler_var, width=14).pack(
+            side="left", padx=(2, 0))
+        tk.Label(
+            options, fg="#666666",
+            text=("敏感度 >1 更容易標記精彩、<1 更嚴格；情緒詞以逗號或空白分隔，"
+                  "附加於內建詞庫；口頭禪字連寫（逐字比對）。"),
+        ).pack(anchor="w", pady=(2, 0))
+
+        row3 = ttk.Frame(options)
+        row3.pack(fill="x", pady=(4, 0))
         self.analyze_btn = tk.Button(
-            options, text="開始分析", width=12, command=self._on_analyze)
-        self.analyze_btn.pack(side="left", padx=(16, 0))
+            row3, text="開始分析", width=12, command=self._on_analyze)
+        self.analyze_btn.pack(side="left")
 
         self.progress_var = tk.DoubleVar(value=0.0)
         self.progress = ttk.Progressbar(
-            options, mode="determinate", length=160, maximum=100.0,
+            row3, mode="determinate", length=200, maximum=100.0,
             variable=self.progress_var)
-        self.progress.pack(side="left", padx=8)
+        self.progress.pack(side="left", padx=8, fill="x", expand=True)
 
         self.status_var = tk.StringVar(
             value="按「開始分析」轉錄素材並自動標記可剪片段。")
@@ -195,17 +235,40 @@ class ReviewWindow(tk.Toplevel):
     # ==================================================================
     # 分析
     # ==================================================================
+    def _collect_review_settings(self):
+        """把介面上的偵測參數寫回設定並存檔，回傳解析後的 settings。"""
+        def safe(var, fallback):
+            try:
+                return var.get()
+            except (tk.TclError, ValueError):
+                return fallback
+
+        current = dict(self.config_data.get("review", {}))
+        current.update({
+            "silence_gap": float(safe(self.silence_var, 2.0)),
+            "segment_gap": float(safe(self.gap_var, 1.0)),
+            "highlight_sensitivity": float(safe(self.sensitivity_var, 1.0)),
+            "take_similarity": float(safe(self.similarity_var, 0.72)),
+            "extra_excite_words": self.excite_var.get().strip(),
+            "filler_words": self.filler_var.get().strip(),
+        })
+        self.config_data["review"] = current
+        try:
+            save_config(self.config_data)
+        except OSError:
+            pass  # 存檔失敗不影響本次分析。
+        return resolve_settings(self.config_data)
+
     def _on_analyze(self):
         if self.is_processing:
             return
+        settings = self._collect_review_settings()
         self._set_processing(True)
-        silence_gap = max(0.5, float(self.silence_var.get()))
-        segment_gap = max(0.4, float(self.gap_var.get()))
         threading.Thread(
-            target=self._analyze_worker, args=(segment_gap, silence_gap),
+            target=self._analyze_worker, args=(settings,),
             daemon=True).start()
 
-    def _analyze_worker(self, segment_gap, silence_gap):
+    def _analyze_worker(self, settings):
         try:
             def report(message, ratio=None):
                 if ratio is not None:
@@ -219,8 +282,7 @@ class ReviewWindow(tk.Toplevel):
             duration = probe_duration(self.media_path)
             items = analyze(
                 words, media_duration=duration,
-                segment_gap=segment_gap, silence_gap=silence_gap,
-                loudness=loudness)
+                loudness=loudness, settings=settings)
             self.result_queue.put(("done", (items, duration)))
         except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
             logger.exception("審片分析失敗")

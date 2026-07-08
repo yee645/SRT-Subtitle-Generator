@@ -226,6 +226,11 @@ class SrtApp(tk.Tk):
         tk.Checkbutton(
             row2, text="改用 OpenAI API", variable=self.use_api_var,
         ).pack(side="left")
+        self.use_cache_var = tk.BooleanVar(
+            value=transcription_cfg.get("use_cache", True))
+        tk.Checkbutton(
+            row2, text="重用轉錄快取", variable=self.use_cache_var,
+        ).pack(side="left", padx=(8, 0))
         tk.Label(row2, text="API 金鑰:").pack(side="left", padx=(8, 0))
         self.api_key_var = tk.StringVar(value=transcription_cfg["api_key"])
         tk.Entry(
@@ -819,6 +824,7 @@ class SrtApp(tk.Tk):
             "api_key": self.api_key_var.get().strip(),
             "python_path": self.python_path_var.get().strip(),
             "prompt": self.prompt_var.get().strip(),
+            "use_cache": bool(self.use_cache_var.get()),
         }
         self._save_config_silently()
 
