@@ -357,6 +357,27 @@ class SrtApp(tk.Tk):
             command=self._collect_automation_config,
         ).pack(side="left", padx=(14, 0))
 
+        row_ln = tk.Frame(frame)
+        row_ln.pack(fill="x", pady=2)
+        self.auto_loudnorm_var = tk.BooleanVar(
+            value=bool(automation.get("loudnorm")))
+        tk.Checkbutton(
+            row_ln, text="燒錄時響度正規化", variable=self.auto_loudnorm_var,
+            command=self._collect_automation_config,
+        ).pack(side="left")
+        tk.Label(row_ln, text="目標:").pack(side="left", padx=(8, 2))
+        self.auto_loudnorm_target_var = tk.DoubleVar(
+            value=float(automation.get("loudnorm_target", -14.0)))
+        tk.Spinbox(
+            row_ln, from_=-30.0, to=-8.0, increment=0.5, width=6,
+            textvariable=self.auto_loudnorm_target_var, format="%.1f",
+            command=self._collect_automation_config,
+        ).pack(side="left")
+        tk.Label(
+            row_ln, text="LUFS（YouTube 標準 -14；音量偏小的素材建議勾選）",
+            fg="#666666",
+        ).pack(side="left", padx=(4, 0))
+
         row2 = tk.Frame(frame)
         row2.pack(fill="x", pady=2)
         tk.Label(row2, text="輸出資料夾:").pack(side="left")
@@ -861,6 +882,12 @@ class SrtApp(tk.Tk):
         for key, var in self.auto_export_vars.items():
             automation[key] = bool(var.get())
         automation["burn_video"] = bool(self.auto_burn_var.get())
+        automation["loudnorm"] = bool(self.auto_loudnorm_var.get())
+        try:
+            automation["loudnorm_target"] = float(
+                self.auto_loudnorm_target_var.get())
+        except (tk.TclError, ValueError):
+            pass  # 欄位輸入中可能暫時非數字，保留原值。
         automation["output_dir"] = self.auto_output_dir_var.get().strip()
         self.config_data["automation"] = automation
         self._save_config_silently()
@@ -1276,8 +1303,14 @@ class SrtApp(tk.Tk):
         ).start()
 
     def _burn_worker(self, video_path, output_path, cues):
-        """背景執行緒：呼叫 ffmpeg 燒錄字幕。"""
+        """背景執行緒：呼叫 ffmpeg 燒錄字幕（依設定同步響度正規化）。"""
         try:
+            automation = self.config_data.get("automation", {})
+            loudnorm_target = None
+            if automation.get("loudnorm"):
+                from subtitle.audio import clamp_target
+                loudnorm_target = clamp_target(
+                    automation.get("loudnorm_target"))
             burn_subtitles(
                 video_path=video_path,
                 cues=cues,
@@ -1285,6 +1318,7 @@ class SrtApp(tk.Tk):
                 style=self.config_data["subtitle_style"],
                 progress_cb=lambda ratio, msg: self.result_queue.put(
                     ("status", (msg, ratio))),
+                loudnorm_target=loudnorm_target,
             )
             self.result_queue.put(("burn_done", output_path))
         except Exception as exc:

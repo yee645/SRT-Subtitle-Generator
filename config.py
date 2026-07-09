@@ -82,7 +82,16 @@ DEFAULT_CONFIG = {
         "export_ass": False,      # 自動匯出 ASS
         "export_txt": False,      # 自動匯出 TXT
         "burn_video": False,      # 自動燒錄硬字幕影片
+        "loudnorm": False,        # 燒錄時同步做響度正規化
+        "loudnorm_target": -14.0, # 目標響度（LUFS）；-14 為 YouTube 標準
         "output_dir": "",         # 輸出資料夾；留空表示與來源檔相同資料夾
+    },
+    # Shorts 直式短片輸出設定（審片助手用）。
+    "shorts": {
+        "mode": "crop",           # crop＝裁切；blur＝模糊背景填滿
+        "focus_x": 0.5,           # 裁切版式水平焦點：0 最左、0.5 置中、1 最右
+        "burn_subtitles": True,   # 短片是否燒錄字幕
+        "loudnorm": False,        # 短片輸出時做響度正規化
     },
     # 其他狀態。
     "last_dir": "",               # 上次開啟檔案的目錄

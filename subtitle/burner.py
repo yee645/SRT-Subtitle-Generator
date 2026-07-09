@@ -81,6 +81,7 @@ def burn_subtitles(
     style: Optional[dict] = None,
     progress_cb: Optional[ProgressCallback] = None,
     use_ass: bool = True,
+    loudnorm_target: Optional[float] = None,
 ) -> str:
     """
     將字幕燒錄進影片。
@@ -92,6 +93,8 @@ def burn_subtitles(
         style: 字幕視覺樣式（含字型/顏色/位置）；use_ass 為真時生效。
         progress_cb: (ratio, message) 進度回呼，ratio 為 0.0~1.0。
         use_ass: True 用 ASS 帶樣式燒錄；False 用 SRT 由 ffmpeg 預設樣式繪製。
+        loudnorm_target: 設定時同步做響度正規化到該 LUFS 值
+            （先量測再線性校正；量測失敗自動退回動態模式）。
     回傳：輸出檔路徑。
     """
     if not ffmpeg_available():
@@ -120,6 +123,17 @@ def burn_subtitles(
         else:
             video_filter = f"subtitles='{subtitle_arg}'"
 
+        # 音訊：預設原樣複製；要求響度正規化時改為量測後校正並重編碼。
+        audio_args = ["-c:a", "copy"]
+        if loudnorm_target is not None:
+            # 延遲匯入避免與 audio 模組互相依賴。
+            from .audio import build_loudnorm_filter, measure_loudness
+            if progress_cb:
+                progress_cb(0.0, "正在量測音訊響度...")
+            measured = measure_loudness(video_path)
+            audio_args = ["-af", build_loudnorm_filter(measured, loudnorm_target),
+                          "-c:a", "aac", "-b:a", "192k"]
+
         if progress_cb:
             progress_cb(0.0, "啟動 ffmpeg 燒錄程序...")
 
@@ -128,7 +142,7 @@ def burn_subtitles(
             "-i", video_path,
             "-vf", video_filter,
             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
-            "-c:a", "copy",
+            *audio_args,
             "-progress", "pipe:1",
             output_path,
         ]

@@ -53,6 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-burn", action="store_true",
         help="本次強制不燒錄（覆寫 config.json 設定）。")
     parser.add_argument(
+        "--loudnorm", action="store_true",
+        help="本次燒錄時強制做響度正規化（目標值沿用 config.json，預設 -14 LUFS）。")
+    parser.add_argument(
+        "--no-loudnorm", action="store_true",
+        help="本次強制不做響度正規化（覆寫 config.json 設定）。")
+    parser.add_argument(
         "--output-dir", metavar="資料夾",
         help="本次輸出資料夾；未指定時沿用 config.json（留空＝來源資料夾）。")
     parser.add_argument(
@@ -79,6 +85,10 @@ def _apply_overrides(config: dict, args: argparse.Namespace) -> None:
         automation["burn_video"] = True
     if args.no_burn:
         automation["burn_video"] = False
+    if args.loudnorm:
+        automation["loudnorm"] = True
+    if args.no_loudnorm:
+        automation["loudnorm"] = False
     if args.output_dir is not None:
         automation["output_dir"] = args.output_dir
 

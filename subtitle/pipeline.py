@@ -156,9 +156,13 @@ def run_pipeline(
         if report:
             report(f"已匯出 {os.path.basename(target)}", generate_high + 0.02)
 
-    # 燒錄硬字幕影片。
+    # 燒錄硬字幕影片（可依設定同步做響度正規化）。
     burned = None
     if burn:
+        loudnorm_target = None
+        if automation.get("loudnorm"):
+            from .audio import clamp_target
+            loudnorm_target = clamp_target(automation.get("loudnorm_target"))
         burned = unique_path(os.path.join(out_dir, f"{base}_subtitled.mp4"))
         burn_subtitles(
             video_path=media_path,
@@ -166,6 +170,7 @@ def run_pipeline(
             output_path=burned,
             style=style,
             progress_cb=_burn_report(_sub_report(report, 0.55, 1.0)),
+            loudnorm_target=loudnorm_target,
         )
 
     if report:
