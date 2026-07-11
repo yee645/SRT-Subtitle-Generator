@@ -73,10 +73,11 @@ with tempfile.TemporaryDirectory() as tmp:
     check("EDL 標頭正確", edl.startswith("TITLE:") and "FCM: NON-DROP FRAME" in edl)
     check("EDL 含剪輯事件", "001  AX       V     C" in edl and "FROM CLIP NAME: 素材.mp4" in edl)
 
-    # YouTube 章節
-    chapters = review.export_youtube_chapters(items)
+    # YouTube 章節（v1.6 起依最短章節長度合併；此處縮小門檻驗證多章）
+    chapters = review.export_youtube_chapters(
+        items, min_chapter_seconds=10, break_gap=2)
     check("章節第一行為 0:00", chapters.startswith("0:00 "))
-    check("章節含後段時間戳", "0:25" in chapters or "0:12" in chapters)
+    check("章節含後段時間戳", "0:12" in chapters, chapters)
 
     # 粗剪：以替身攔截 ffmpeg 命令
     captured = {}

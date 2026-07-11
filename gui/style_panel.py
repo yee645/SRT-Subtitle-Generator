@@ -144,6 +144,34 @@ class StylePanel(tk.LabelFrame):
         ).grid(row=7, column=1, sticky="w")
         self.stroke_width_var.trace_add("write", lambda *_a: self._emit_change())
 
+        # 重點字上色（燒錄與 ASS 匯出時，把指定詞彙換色強調）。
+        self.emphasis_var = tk.BooleanVar(
+            value=bool(style.get("emphasis_enabled", False)))
+        tk.Checkbutton(
+            self, text="重點字上色", variable=self.emphasis_var,
+            command=self._emit_change,
+        ).grid(row=8, column=0, sticky="w", pady=3)
+        self.emphasis_swatch = tk.Label(
+            self, width=4, relief="solid", borderwidth=1,
+            bg=style.get("emphasis_color", "#FFD700"),
+        )
+        self.emphasis_swatch.grid(row=8, column=1, sticky="w")
+        tk.Button(
+            self, text="選擇顏色", command=self._choose_emphasis_color,
+        ).grid(row=8, column=2, sticky="w")
+
+        tk.Label(self, text="重點字詞").grid(row=9, column=0, sticky="w", pady=3)
+        self.emphasis_words_var = tk.StringVar(
+            value=style.get("emphasis_words", ""))
+        emphasis_entry = tk.Entry(self, textvariable=self.emphasis_words_var)
+        emphasis_entry.grid(row=9, column=1, columnspan=2, sticky="we")
+        emphasis_entry.bind("<FocusOut>", lambda _e: self._emit_change())
+        emphasis_entry.bind("<Return>", lambda _e: self._emit_change())
+        tk.Label(
+            self, text="逗號或空白分隔；於燒錄影片與 ASS 匯出時生效",
+            fg="#666666",
+        ).grid(row=10, column=0, columnspan=3, sticky="w")
+
     # ------------------------------------------------------------------
     # 事件處理
     # ------------------------------------------------------------------
@@ -187,6 +215,16 @@ class StylePanel(tk.LabelFrame):
             self.stroke_color_swatch.configure(bg=color[1])
             self._emit_change()
 
+    def _choose_emphasis_color(self):
+        """開啟調色盤選擇重點字顏色。"""
+        color = colorchooser.askcolor(
+            color=self._style.get("emphasis_color", "#FFD700"),
+            title="選擇重點字顏色",
+        )
+        if color and color[1]:
+            self.emphasis_swatch.configure(bg=color[1])
+            self._emit_change()
+
     def _emit_change(self):
         """收集目前所有控制項的值，組成樣式 dict 並通知主視窗。"""
         if self._suspend_events:
@@ -208,6 +246,9 @@ class StylePanel(tk.LabelFrame):
             "text_color": self.text_color_swatch.cget("bg"),
             "stroke_color": self.stroke_color_swatch.cget("bg"),
             "stroke_width": max(0, min(stroke_width, 6)),
+            "emphasis_enabled": bool(self.emphasis_var.get()),
+            "emphasis_color": self.emphasis_swatch.cget("bg"),
+            "emphasis_words": self.emphasis_words_var.get().strip(),
         }
         if callable(self._on_change):
             self._on_change(dict(self._style))
@@ -228,5 +269,9 @@ class StylePanel(tk.LabelFrame):
             self.stroke_width_var.set(style["stroke_width"])
             self.text_color_swatch.configure(bg=style["text_color"])
             self.stroke_color_swatch.configure(bg=style["stroke_color"])
+            self.emphasis_var.set(bool(style.get("emphasis_enabled", False)))
+            self.emphasis_swatch.configure(
+                bg=style.get("emphasis_color", "#FFD700"))
+            self.emphasis_words_var.set(style.get("emphasis_words", ""))
         finally:
             self._suspend_events = False

@@ -12,7 +12,8 @@ import os
 import subprocess
 import sys
 
-TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py"]
+TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
+         "test_v160.py"]
 
 
 def main() -> int:

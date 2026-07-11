@@ -120,7 +120,15 @@ class ReviewWindow(tk.Toplevel):
         tk.Label(row2, text="口頭禪字:").pack(side="left")
         self.filler_var = tk.StringVar(value=settings["filler_words"])
         tk.Entry(row2, textvariable=self.filler_var, width=14).pack(
-            side="left", padx=(2, 0))
+            side="left", padx=(2, 12))
+        tk.Label(row2, text="章節最短:").pack(side="left")
+        self.chapter_min_var = tk.DoubleVar(
+            value=settings["chapter_min_seconds"])
+        tk.Spinbox(
+            row2, from_=10, to=600, increment=10, width=5,
+            textvariable=self.chapter_min_var, format="%.0f",
+        ).pack(side="left", padx=(2, 0))
+        tk.Label(row2, text="秒").pack(side="left")
         tk.Label(
             options, fg="#666666",
             text=("敏感度 >1 更容易標記精彩、<1 更嚴格；情緒詞以逗號或空白分隔，"
@@ -289,6 +297,7 @@ class ReviewWindow(tk.Toplevel):
             "take_similarity": float(safe(self.similarity_var, 0.72)),
             "extra_excite_words": self.excite_var.get().strip(),
             "filler_words": self.filler_var.get().strip(),
+            "chapter_min_seconds": float(safe(self.chapter_min_var, 60.0)),
         })
         self.config_data["review"] = current
         try:
@@ -731,7 +740,11 @@ class ReviewWindow(tk.Toplevel):
     def _on_copy_chapters(self):
         if not self.items:
             return
-        text = export_youtube_chapters(self.items)
+        settings = self._collect_review_settings()
+        text = export_youtube_chapters(
+            self.items,
+            min_chapter_seconds=settings["chapter_min_seconds"],
+            break_gap=settings["silence_gap"])
         if not text:
             messagebox.showinfo(
                 "沒有內容", "目前沒有保留中的講話段落。", parent=self)

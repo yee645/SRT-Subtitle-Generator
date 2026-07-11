@@ -24,6 +24,9 @@ _DEFAULT_STYLE = {
     "text_color": "#FFFFFF",  # 文字顏色
     "stroke_color": "#000000",# 邊框（描邊）顏色
     "stroke_width": 2,        # 邊框寬度（像素）
+    "emphasis_enabled": False,      # 重點字上色（燒錄與 ASS 匯出時生效）
+    "emphasis_color": "#FFD700",    # 重點字顏色（預設金黃）
+    "emphasis_words": "",           # 重點字詞清單（逗號或空白分隔）
 }
 
 # 預設審片偵測參數（審片助手用，皆可於介面調整並記憶）。
@@ -35,6 +38,7 @@ _DEFAULT_REVIEW = {
     "segment_gap": 1.0,            # 講話段落切分的停頓秒數
     "take_similarity": 0.72,       # 重複拍攝判定的文字相似度（0~1）
     "filler_density": 0.08,        # 每字的填充詞密度達此值標記「口頭禪多」
+    "chapter_min_seconds": 60.0,   # YouTube 章節的最短長度（秒），避免章節過細
 }
 
 # 預設斷句參數。

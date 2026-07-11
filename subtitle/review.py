@@ -81,6 +81,7 @@ DEFAULT_SETTINGS = {
     "segment_gap": DEFAULT_SEGMENT_GAP,
     "take_similarity": DEFAULT_TAKE_SIMILARITY,
     "filler_density": _FILLER_DENSITY,
+    "chapter_min_seconds": 60.0,
 }
 
 
@@ -121,6 +122,8 @@ def resolve_settings(config: Optional[dict] = None) -> dict:
                                  DEFAULT_TAKE_SIMILARITY),
         "filler_density": clamp(raw.get("filler_density"), 0.02, 0.5,
                                 _FILLER_DENSITY),
+        "chapter_min_seconds": clamp(raw.get("chapter_min_seconds"),
+                                     10.0, 600.0, 60.0),
         "excite_words": tuple(_EXCITE_WORDS) + tuple(extra),
         "filler_chars": filler,
     }
@@ -590,25 +593,56 @@ def export_csv(items, path: str) -> str:
     return path
 
 
-def export_youtube_chapters(items, max_title_chars: int = 20) -> str:
+def build_chapters(items, min_chapter_seconds: float = 60.0,
+                   break_gap: float = 2.0, max_title_chars: int = 20) -> list:
+    """
+    把保留的講話段落合併成合理粒度的 YouTube 章節。
+
+    直接把每個段落當一章會太細碎（創作者常見抱怨）。合併規則：
+    - 段落之間有明顯間隔（≥ break_gap 秒，即被剪掉的冷場處）
+      且目前章節已達最短長度（min_chapter_seconds）時，才切新章節
+    - 章節標題取該章第一個段落的開頭文字
+    - 第一章強制從 0:00 開始（YouTube 規定）
+
+    回傳 [{"start": 秒, "title": 文字}, ...]。
+    """
+    kept = [item for item in items
+            if item["kind"] == "speech" and item["keep"]]
+    if not kept:
+        return []
+    chapters = []
+    current_start = kept[0]["start"]
+    current_title = kept[0]["text"][:max_title_chars]
+    last_end = kept[0]["end"]
+    for seg in kept[1:]:
+        gap = seg["start"] - last_end
+        if (gap >= break_gap
+                and seg["start"] - current_start >= min_chapter_seconds):
+            chapters.append({"start": current_start, "title": current_title})
+            current_start = seg["start"]
+            current_title = seg["text"][:max_title_chars]
+        last_end = seg["end"]
+    chapters.append({"start": current_start, "title": current_title})
+    chapters[0]["start"] = 0.0
+    return chapters
+
+
+def export_youtube_chapters(items, max_title_chars: int = 20,
+                            min_chapter_seconds: float = 60.0,
+                            break_gap: float = 2.0) -> str:
     """
     由保留的講話段落產生 YouTube 章節草稿文字（貼到影片說明欄用）。
 
-    YouTube 規定第一個章節必須是 0:00；標題取段落開頭文字。
+    章節經 build_chapters 合併，避免過細；第一章固定 0:00。
     """
     lines = []
-    for item in items:
-        if item["kind"] != "speech" or not item["keep"]:
-            continue
-        title = item["text"][:max_title_chars]
-        minutes, secs = divmod(int(item["start"]), 60)
+    for chapter in build_chapters(items, min_chapter_seconds, break_gap,
+                                  max_title_chars):
+        minutes, secs = divmod(int(chapter["start"]), 60)
         hours, minutes = divmod(minutes, 60)
         stamp = (f"{hours}:{minutes:02d}:{secs:02d}" if hours
                  else f"{minutes}:{secs:02d}")
-        lines.append(f"{stamp} {title}")
-    if lines and not lines[0].startswith(("0:00 ", "0:00\t")):
-        first_title = lines[0].split(" ", 1)[1] if " " in lines[0] else "開場"
-        lines[0] = f"0:00 {first_title}"
+        lines.append(f"{stamp} {chapter['title']}")
     return "\n".join(lines)
 
 

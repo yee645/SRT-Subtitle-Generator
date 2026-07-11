@@ -15,6 +15,7 @@ Script Info 與 Styles 區段，匯入 Aegisub、PotPlayer 等播放器可直接
 from __future__ import annotations
 
 import os
+import re
 from typing import Iterable, Mapping
 
 
@@ -99,6 +100,35 @@ def _hex_to_ass_color(color: str) -> str:
     return f"&H00{blue}{green}{red}".upper() + "&"
 
 
+def _hex_to_ass_inline(color: str) -> str:
+    """把 #RRGGBB 轉成 ASS 行內色彩覆寫標籤用的 &HBBGGRR& 格式。"""
+    text = (color or "#FFD700").lstrip("#")
+    if len(text) != 6:
+        text = "FFD700"
+    red, green, blue = text[0:2], text[2:4], text[4:6]
+    return f"&H{blue}{green}{red}&".upper()
+
+
+def parse_emphasis_words(raw: str) -> list:
+    """解析重點字詞清單（逗號、頓號或空白分隔），長詞優先以避免部分遮蔽。"""
+    words = [w.strip() for w in re.split(r"[,，、\s]+", raw or "") if w.strip()]
+    return sorted(set(words), key=len, reverse=True)
+
+
+def apply_emphasis(text: str, words: list, color: str) -> str:
+    """
+    把文字中的重點字詞包上 ASS 行內色彩標籤（CapCut 風格的重點字上色）。
+
+    以 {\\1c&H..&} 切換顏色、{\\r} 還原為樣式預設；拉丁字詞不分大小寫。
+    """
+    if not words or not text:
+        return text
+    tag = f"{{\\1c{_hex_to_ass_inline(color)}}}"
+    # 單次合併比對（長詞在前），避免短詞誤中已插入的標籤內容。
+    pattern = re.compile("|".join(re.escape(w) for w in words), re.IGNORECASE)
+    return pattern.sub(lambda m: f"{tag}{m.group(0)}{{\\r}}", text)
+
+
 def _ass_alignment(position_y: float) -> int:
     """依垂直位置選擇 ASS 對齊代號（2=底部、5=中部、8=頂部，皆置中）。"""
     if position_y <= 0.33:
@@ -145,9 +175,18 @@ def cues_to_ass(cues: Iterable[Mapping], style: Mapping | None = None,
         align=align, mv=margin_v,
     )
 
+    # 重點字上色：樣式啟用且有詞清單時，於 ASS 文字內嵌色彩標籤。
+    emphasis_words = []
+    if style.get("emphasis_enabled"):
+        emphasis_words = parse_emphasis_words(
+            str(style.get("emphasis_words") or ""))
+    emphasis_color = style.get("emphasis_color", "#FFD700")
+
     lines = [header]
     for cue in cues:
         text = (cue.get("text") or "").replace("\n", "\\N").replace("\r", "")
+        if emphasis_words:
+            text = apply_emphasis(text, emphasis_words, emphasis_color)
         lines.append(
             "Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n".format(
                 start=format_ass_timestamp(cue["start"]),
