@@ -91,5 +91,40 @@ check("SRT 不含標籤", "\\1c" not in srt)
 check("空詞清單原样返回",
       exporter.apply_emphasis("文字", [], "#FFD700") == "文字")
 
+
+# ===== 3. v1.6.1 精修：切段函式與報告章節 =====
+
+# 3a. split_emphasis_segments 切段正確
+segs = exporter.split_emphasis_segments("今天全部免費送給大家", ["免費"])
+check("切段結構正確", segs == [("今天全部", False), ("免費", True),
+                               ("送給大家", False)], str(segs))
+check("切段重組還原原文", "".join(s for s, _e in segs) == "今天全部免費送給大家")
+segs2 = exporter.split_emphasis_segments("免費就是免費", ["免費"])
+check("首尾命中切段", segs2[0] == ("免費", True) and segs2[-1] == ("免費", True))
+check("無詞清單單段返回",
+      exporter.split_emphasis_segments("文字", []) == [("文字", False)])
+check("空文字回空清單", exporter.split_emphasis_segments("", ["x"]) == [])
+
+# 3b. apply_emphasis 與切段一致（同一來源）
+joined = exporter.apply_emphasis("今天全部免費送給大家", ["免費"], "#FF0000")
+plain = joined.replace("{\\1c&H0000FF&}", "").replace("{\\r}", "")
+check("標籤移除後還原原文", plain == "今天全部免費送給大家", plain)
+
+# 3c. HTML 報告含建議章節
+import tempfile as _tf
+with _tf.TemporaryDirectory() as _tmp:
+    _p = os.path.join(_tmp, "r.html")
+    review.export_html_report(
+        items, _p, source_name="s.mp4", media_duration=310.0,
+        chapters=review.build_chapters(items, min_chapter_seconds=60,
+                                       break_gap=3))
+    _doc = open(_p, encoding="utf-8").read()
+    check("報告含建議章節區塊", "建議章節" in _doc and "0:00 " in _doc)
+    check("報告章節含次章", "1:00 " in _doc, _doc[-500:])
+    review.export_html_report(items, _p, source_name="s.mp4",
+                              media_duration=310.0)
+    _doc2 = open(_p, encoding="utf-8").read()
+    check("未傳章節時報告無該區塊", "建議章節" not in _doc2)
+
 print("\n" + ("ALL PASS" if not failures else f"FAILURES: {failures}"))
 sys.exit(1 if failures else 0)

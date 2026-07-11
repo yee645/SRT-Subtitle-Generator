@@ -115,6 +115,31 @@ def parse_emphasis_words(raw: str) -> list:
     return sorted(set(words), key=len, reverse=True)
 
 
+def split_emphasis_segments(text: str, words: list) -> list:
+    """
+    把文字依重點字詞切成 [(片段文字, 是否重點), ...] 清單。
+
+    ASS 標籤包裹與 GUI 預覽分色渲染共用此切段結果，
+    確保輸出與預覽看到的重點範圍一致。拉丁字詞不分大小寫。
+    """
+    if not text:
+        return []
+    if not words:
+        return [(text, False)]
+    # 單次合併比對（長詞在前），避免短詞遮蔽長詞。
+    pattern = re.compile("|".join(re.escape(w) for w in words), re.IGNORECASE)
+    segments = []
+    cursor = 0
+    for match in pattern.finditer(text):
+        if match.start() > cursor:
+            segments.append((text[cursor:match.start()], False))
+        segments.append((match.group(0), True))
+        cursor = match.end()
+    if cursor < len(text):
+        segments.append((text[cursor:], False))
+    return segments
+
+
 def apply_emphasis(text: str, words: list, color: str) -> str:
     """
     把文字中的重點字詞包上 ASS 行內色彩標籤（CapCut 風格的重點字上色）。
@@ -124,9 +149,9 @@ def apply_emphasis(text: str, words: list, color: str) -> str:
     if not words or not text:
         return text
     tag = f"{{\\1c{_hex_to_ass_inline(color)}}}"
-    # 單次合併比對（長詞在前），避免短詞誤中已插入的標籤內容。
-    pattern = re.compile("|".join(re.escape(w) for w in words), re.IGNORECASE)
-    return pattern.sub(lambda m: f"{tag}{m.group(0)}{{\\r}}", text)
+    return "".join(
+        f"{tag}{segment}{{\\r}}" if emphasized else segment
+        for segment, emphasized in split_emphasis_segments(text, words))
 
 
 def _ass_alignment(position_y: float) -> int:
