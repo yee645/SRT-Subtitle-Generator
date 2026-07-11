@@ -35,3 +35,33 @@ def probe_duration(media_path: str) -> float:
         return float(text) if text else FALLBACK_DURATION
     except (OSError, ValueError, subprocess.SubprocessError):
         return FALLBACK_DURATION
+
+
+def probe_dimensions(media_path: str) -> tuple:
+    """
+    以 ffprobe 取得影片畫面尺寸 (寬, 高)；失敗時回傳 (1920, 1080) 保底值。
+    """
+    fallback = (1920, 1080)
+    if not ffprobe_available():
+        return fallback
+    try:
+        completed = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "csv=s=x:p=0",
+                media_path,
+            ],
+            capture_output=True, timeout=30,
+        )
+        if completed.returncode != 0:
+            return fallback
+        text = (completed.stdout or b"").decode("utf-8", errors="ignore").strip()
+        width, height = text.split("x")[:2]
+        width, height = int(width), int(height)
+        if width > 0 and height > 0:
+            return (width, height)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return fallback

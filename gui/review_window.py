@@ -18,10 +18,13 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from config import save_config
+from subtitle.audio import DEFAULT_TARGET_LUFS
 from subtitle.burner import ffmpeg_available
 from subtitle.exporter import export as export_subtitle
 from subtitle.media import probe_duration
 from subtitle.pipeline import unique_path
+from subtitle.segmenter import build_cues_from_words
+from subtitle.shorts import cut_vertical_clip, resolve_shorts_settings
 from subtitle.review import (CATEGORY_COLORS, CATEGORY_LABELS,
                              TAG_HIGHLIGHT, TAG_REPEATED, TAG_SILENCE,
                              analyze, build_review_cues, categorize,
@@ -46,6 +49,7 @@ class ReviewWindow(tk.Toplevel):
         self.config_data = config_data
         self.media_path = media_path
         self.items = []              # analyze() 的段落清單
+        self.words = []              # 轉錄的逐字時間軸（供短片字幕重建）
         self.media_duration = 0.0    # 素材總長（分析完成後更新）
         self.result_queue = queue.Queue()
         self.is_processing = False
@@ -116,7 +120,15 @@ class ReviewWindow(tk.Toplevel):
         tk.Label(row2, text="口頭禪字:").pack(side="left")
         self.filler_var = tk.StringVar(value=settings["filler_words"])
         tk.Entry(row2, textvariable=self.filler_var, width=14).pack(
-            side="left", padx=(2, 0))
+            side="left", padx=(2, 12))
+        tk.Label(row2, text="章節最短:").pack(side="left")
+        self.chapter_min_var = tk.DoubleVar(
+            value=settings["chapter_min_seconds"])
+        tk.Spinbox(
+            row2, from_=10, to=600, increment=10, width=5,
+            textvariable=self.chapter_min_var, format="%.0f",
+        ).pack(side="left", padx=(2, 0))
+        tk.Label(row2, text="秒").pack(side="left")
         tk.Label(
             options, fg="#666666",
             text=("敏感度 >1 更容易標記精彩、<1 更嚴格；情緒詞以逗號或空白分隔，"
@@ -232,6 +244,40 @@ class ReviewWindow(tk.Toplevel):
             btn.pack(side="left", padx=3)
             self.export_buttons.append(btn)
 
+        # 第三排：Shorts 直式短片（9:16）輸出與其版式設定。
+        shorts_cfg = resolve_shorts_settings(self.config_data)
+        row3 = ttk.Frame(exports)
+        row3.pack(fill="x", pady=(4, 0))
+        tk.Label(row3, text="直式短片:").pack(side="left")
+        tk.Label(row3, text="版式").pack(side="left", padx=(6, 2))
+        self.shorts_mode_var = tk.StringVar(
+            value="模糊背景" if shorts_cfg["mode"] == "blur" else "裁切")
+        ttk.Combobox(
+            row3, textvariable=self.shorts_mode_var, state="readonly",
+            width=8, values=["裁切", "模糊背景"],
+        ).pack(side="left")
+        tk.Label(row3, text="焦點").pack(side="left", padx=(8, 2))
+        self.shorts_focus_var = tk.DoubleVar(value=shorts_cfg["focus_x"])
+        tk.Spinbox(
+            row3, from_=0.0, to=1.0, increment=0.05, width=5,
+            textvariable=self.shorts_focus_var, format="%.2f",
+        ).pack(side="left")
+        tk.Label(row3, text="（0 左、0.5 中、1 右）",
+                 fg="#666666").pack(side="left")
+        self.shorts_subs_var = tk.BooleanVar(
+            value=shorts_cfg["burn_subtitles"])
+        tk.Checkbutton(row3, text="燒錄字幕",
+                       variable=self.shorts_subs_var).pack(side="left",
+                                                           padx=(8, 0))
+        self.shorts_loudnorm_var = tk.BooleanVar(value=shorts_cfg["loudnorm"])
+        tk.Checkbutton(row3, text="響度正規化",
+                       variable=self.shorts_loudnorm_var).pack(side="left")
+        shorts_btn = tk.Button(
+            row3, text="輸出直式短片（選取段落）",
+            command=self._on_export_shorts, state="disabled")
+        shorts_btn.pack(side="left", padx=(8, 3))
+        self.export_buttons.append(shorts_btn)
+
     # ==================================================================
     # 分析
     # ==================================================================
@@ -251,6 +297,7 @@ class ReviewWindow(tk.Toplevel):
             "take_similarity": float(safe(self.similarity_var, 0.72)),
             "extra_excite_words": self.excite_var.get().strip(),
             "filler_words": self.filler_var.get().strip(),
+            "chapter_min_seconds": float(safe(self.chapter_min_var, 60.0)),
         })
         self.config_data["review"] = current
         try:
@@ -283,7 +330,7 @@ class ReviewWindow(tk.Toplevel):
             items = analyze(
                 words, media_duration=duration,
                 loudness=loudness, settings=settings)
-            self.result_queue.put(("done", (items, duration)))
+            self.result_queue.put(("done", (items, duration, words)))
         except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
             logger.exception("審片分析失敗")
             self.result_queue.put(("error", str(exc)))
@@ -305,6 +352,14 @@ class ReviewWindow(tk.Toplevel):
                     self.status_var.set(f"粗剪完成：{payload}")
                     messagebox.showinfo(
                         "粗剪完成", f"已輸出影片：\n{payload}", parent=self)
+                elif kind == "shorts_done":
+                    self._set_processing(False)
+                    self.status_var.set(
+                        f"直式短片輸出完成，共 {len(payload)} 支。")
+                    messagebox.showinfo(
+                        "短片輸出完成",
+                        "已輸出直式短片：\n" + "\n".join(payload),
+                        parent=self)
                 elif kind == "error":
                     self._set_processing(False)
                     self.status_var.set("處理失敗。")
@@ -314,8 +369,9 @@ class ReviewWindow(tk.Toplevel):
         self._poll_job = self.after(120, self._poll_queue)
 
     def _on_analyze_done(self, payload):
-        items, duration = payload
+        items, duration, words = payload
         self.items = items
+        self.words = words
         self.media_duration = duration
         self._set_processing(False)
         self._repopulate()
@@ -519,6 +575,100 @@ class ReviewWindow(tk.Toplevel):
             logger.exception("剪輯輸出失敗")
             self.result_queue.put(("error", str(exc)))
 
+    def _collect_shorts_settings(self):
+        """把介面上的短片設定寫回設定並存檔，回傳解析後的 settings。"""
+        current = dict(self.config_data.get("shorts", {}))
+        try:
+            focus = float(self.shorts_focus_var.get())
+        except (tk.TclError, ValueError):
+            focus = 0.5
+        current.update({
+            "mode": "blur" if self.shorts_mode_var.get() == "模糊背景"
+                    else "crop",
+            "focus_x": focus,
+            "burn_subtitles": bool(self.shorts_subs_var.get()),
+            "loudnorm": bool(self.shorts_loudnorm_var.get()),
+        })
+        self.config_data["shorts"] = current
+        try:
+            save_config(self.config_data)
+        except OSError:
+            pass
+        return resolve_shorts_settings(self.config_data)
+
+    def _on_export_shorts(self):
+        """輸出直式短片：選取的段落各輸出一支 9:16 影片；未選取時用精彩段落。"""
+        if self.is_processing or not self.items:
+            return
+        if not ffmpeg_available():
+            messagebox.showerror(
+                "找不到 ffmpeg",
+                "輸出短片需要 ffmpeg。請依說明安裝並加入系統 PATH。",
+                parent=self)
+            return
+        selection = self.tree.selection()
+        if selection:
+            picked = [self.items[self._visible[self.tree.index(item_id)]]
+                      for item_id in selection]
+        else:
+            picked = [item for item in self.items
+                      if TAG_HIGHLIGHT in item["tags"]]
+        picked = [item for item in picked if item["kind"] == "speech"]
+        if not picked:
+            messagebox.showinfo(
+                "沒有可輸出的段落",
+                "請先在清單選取要輸出的段落（可多選），"
+                "或先讓系統偵測到精彩片段。", parent=self)
+            return
+
+        settings = self._collect_shorts_settings()
+        # 為每個片段從逐字時間軸重建字幕（時間軸由輸出流程平移）。
+        seg_cfg = self.config_data.get("segmentation", {})
+        jobs = []
+        for item in picked:
+            cues = []
+            if settings["burn_subtitles"] and self.words:
+                clip_words = [w for w in self.words
+                              if w["end"] > item["start"] - 0.05
+                              and w["start"] < item["end"] + 0.05]
+                if clip_words:
+                    cues = build_cues_from_words(clip_words, seg_cfg)
+            jobs.append({"start": item["start"], "end": item["end"],
+                         "cues": cues})
+
+        self._set_processing(True)
+        threading.Thread(
+            target=self._shorts_worker, args=(jobs, settings),
+            daemon=True).start()
+
+    def _shorts_worker(self, jobs, settings):
+        """背景執行緒：逐一輸出直式短片。"""
+        try:
+            style = self.config_data.get("subtitle_style", {})
+            loudnorm_target = (DEFAULT_TARGET_LUFS
+                               if settings["loudnorm"] else None)
+            outputs = []
+            total = len(jobs)
+            for index, job in enumerate(jobs, start=1):
+                output = self._default_path(f"_短片{index:02d}", ".mp4")
+
+                def report(ratio, message, _i=index):
+                    overall = ((_i - 1) + max(0.0, min(ratio, 1.0))) / total
+                    self.result_queue.put(
+                        ("status", (f"[{_i}/{total}] {message}", overall)))
+
+                cut_vertical_clip(
+                    self.media_path, job["start"], job["end"], output,
+                    mode=settings["mode"], focus_x=settings["focus_x"],
+                    style=style, cues=job["cues"],
+                    loudnorm_target=loudnorm_target,
+                    progress_cb=report)
+                outputs.append(output)
+            self.result_queue.put(("shorts_done", outputs))
+        except Exception as exc:
+            logger.exception("直式短片輸出失敗")
+            self.result_queue.put(("error", str(exc)))
+
     def _on_export_html(self):
         """匯出 HTML 審片報告（彩色時間軸 + 統計 + 段落表，單檔可分享）。"""
         if not self.items:
@@ -590,7 +740,11 @@ class ReviewWindow(tk.Toplevel):
     def _on_copy_chapters(self):
         if not self.items:
             return
-        text = export_youtube_chapters(self.items)
+        settings = self._collect_review_settings()
+        text = export_youtube_chapters(
+            self.items,
+            min_chapter_seconds=settings["chapter_min_seconds"],
+            break_gap=settings["silence_gap"])
         if not text:
             messagebox.showinfo(
                 "沒有內容", "目前沒有保留中的講話段落。", parent=self)
