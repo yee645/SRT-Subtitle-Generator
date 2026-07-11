@@ -25,8 +25,9 @@ import sys
 from config import load_config
 from subtitle.media import probe_duration
 from subtitle.pipeline import EXPORT_FORMATS, run_batch, unique_path
-from subtitle.review import (analyze, compute_loudness, export_csv,
-                             export_html_report, resolve_settings)
+from subtitle.review import (analyze, build_chapters, compute_loudness,
+                             export_csv, export_html_report,
+                             resolve_settings)
 from subtitle.transcriber import transcribe
 
 
@@ -162,7 +163,11 @@ def _run_review_batch(files: list, config: dict, report) -> list:
             export_csv(items, csv_path)
             html_path = unique_path(os.path.join(out_dir, f"{base}_審片報告.html"))
             export_html_report(items, html_path, source_name=os.path.basename(path),
-                               media_duration=duration)
+                               media_duration=duration,
+                               chapters=build_chapters(
+                                   items,
+                                   min_chapter_seconds=settings["chapter_min_seconds"],
+                                   break_gap=settings["silence_gap"]))
             dropped = sum(1 for item in items if not item["keep"])
             report(f"{prefix}分析完成，共 {len(items)} 段（建議捨棄 {dropped} 段）",
                    (index + 1) / total)

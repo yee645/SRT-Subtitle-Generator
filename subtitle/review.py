@@ -667,12 +667,14 @@ def build_review_cues(items) -> list:
 
 
 def export_html_report(items, path: str, source_name: str = "",
-                       media_duration: float = 0.0) -> str:
+                       media_duration: float = 0.0,
+                       chapters: Optional[list] = None) -> str:
     """
     匯出單一檔案的 HTML 審片報告：彩色時間軸 + 統計摘要 + 段落表。
 
     報告不依賴任何外部資源，可直接傳給剪輯師；時間軸色塊點擊即可
     跳到對應段落，一眼看出精彩（綠）、待審視（琥珀）、冷場（灰）分佈。
+    chapters 提供時（build_chapters 的結果）另附「建議章節」區塊。
     """
     stats = summarize(items, media_duration)
     total = max(stats["media_duration"], 0.1)
@@ -702,6 +704,20 @@ def export_html_report(items, path: str, source_name: str = "",
         f'<span class="lg"><i style="background:{CATEGORY_COLORS[key]}"></i>'
         f'{CATEGORY_LABELS[key]}</span>'
         for key in ("highlight", "normal", "review", "silence"))
+
+    # 建議章節區塊（可直接複製貼到 YouTube 說明欄）。
+    chapters_html = ""
+    if chapters:
+        rows_ch = []
+        for chapter in chapters:
+            minutes, secs = divmod(int(chapter["start"]), 60)
+            hours, minutes = divmod(minutes, 60)
+            stamp = (f"{hours}:{minutes:02d}:{secs:02d}" if hours
+                     else f"{minutes}:{secs:02d}")
+            rows_ch.append(f"{stamp} {html.escape(chapter['title'])}")
+        chapters_html = (
+            '<h2>建議章節（複製貼到 YouTube 說明欄）</h2>'
+            '<pre class="chapters">' + "\n".join(rows_ch) + "</pre>")
 
     rows = []
     for index, item in enumerate(items):
@@ -748,6 +764,10 @@ th{{background:#f3f3f3;position:sticky;top:0}}
 tr.drop td{{color:#aaa}} tr.drop .txt{{text-decoration:line-through}}
 tr:target{{background:#fff6d9}}
 .k{{white-space:nowrap}}
+h2{{font-size:15px;margin:18px 0 6px}}
+.chapters{{background:#fff;border:1px solid #e3e3e3;border-radius:8px;
+          padding:10px 14px;font-size:13px;font-family:inherit;
+          white-space:pre-wrap}}
 </style></head><body>
 <h1>審片報告：{title}</h1>
 <div class="sub">總長 {fmt_min(total)}｜點時間軸色塊可跳到對應段落</div>
@@ -761,6 +781,7 @@ tr:target{{background:#fff6d9}}
 </div>
 <div class="timeline">{''.join(blocks)}</div>
 <div>{legend}</div>
+{chapters_html}
 <table><thead><tr><th></th><th>開始</th><th>長度</th><th>標記</th>
 <th>取捨</th><th>內容</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table>

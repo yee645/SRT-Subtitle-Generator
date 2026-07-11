@@ -22,14 +22,14 @@ from subtitle.audio import DEFAULT_TARGET_LUFS
 from subtitle.burner import ffmpeg_available
 from subtitle.exporter import export as export_subtitle
 from subtitle.media import probe_duration
-from subtitle.pipeline import unique_path
+from subtitle.pipeline import resolve_output_dir, unique_path
 from subtitle.segmenter import build_cues_from_words
 from subtitle.shorts import cut_vertical_clip, resolve_shorts_settings
 from subtitle.review import (CATEGORY_COLORS, CATEGORY_LABELS,
                              TAG_HIGHLIGHT, TAG_REPEATED, TAG_SILENCE,
-                             analyze, build_review_cues, categorize,
-                             compute_loudness, cut_rough_video, export_csv,
-                             export_edl, export_html_report,
+                             analyze, build_chapters, build_review_cues,
+                             categorize, compute_loudness, cut_rough_video,
+                             export_csv, export_edl, export_html_report,
                              export_youtube_chapters, resolve_settings,
                              search_segments, summarize)
 from subtitle.transcriber import transcribe
@@ -43,8 +43,9 @@ class ReviewWindow(tk.Toplevel):
     def __init__(self, master, config_data, media_path):
         super().__init__(master)
         self.title("審片助手：快速找可用片段")
-        self.geometry("960x640")
-        self.minsize(720, 480)
+        # 預設尺寸需容納偵測設定（3 列）、時間軸與 3 排輸出按鈕。
+        self.geometry("1020x760")
+        self.minsize(840, 560)
 
         self.config_data = config_data
         self.media_path = media_path
@@ -521,8 +522,11 @@ class ReviewWindow(tk.Toplevel):
     # 匯出
     # ==================================================================
     def _default_path(self, suffix, ext):
+        """組出輸出路徑：尊重「自動化輸出」的輸出資料夾設定（留空＝來源資料夾）。"""
         base = os.path.splitext(os.path.basename(self.media_path))[0]
-        out_dir = os.path.dirname(os.path.abspath(self.media_path))
+        out_dir = resolve_output_dir(
+            self.media_path, self.config_data.get("automation", {}))
+        os.makedirs(out_dir, exist_ok=True)
         return unique_path(os.path.join(out_dir, f"{base}{suffix}{ext}"))
 
     def _on_rough_cut(self):
@@ -674,11 +678,16 @@ class ReviewWindow(tk.Toplevel):
         if not self.items:
             return
         path = self._default_path("_審片報告", ".html")
+        settings = self._collect_review_settings()
         try:
             export_html_report(
                 self.items, path,
                 source_name=os.path.basename(self.media_path),
-                media_duration=self.media_duration)
+                media_duration=self.media_duration,
+                chapters=build_chapters(
+                    self.items,
+                    min_chapter_seconds=settings["chapter_min_seconds"],
+                    break_gap=settings["silence_gap"]))
         except (OSError, ValueError) as exc:
             messagebox.showerror("匯出失敗", str(exc), parent=self)
             return
