@@ -1,0 +1,4 @@
+# 要轉為正式版的 Release tag，每行一個（# 開頭為註解）。
+# 編輯本檔並合併進 main 後，promote.yml 會自動把列出的 pre-release
+# 轉為正式版並標記為 latest；已是正式版或不存在的 tag 會自動略過。
+v1.6.1

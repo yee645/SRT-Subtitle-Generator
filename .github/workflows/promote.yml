@@ -1,0 +1,42 @@
+name: Promote Release
+
+# 把 pre-release 轉為正式版：
+# 編輯 .github/promote_releases.txt（每行一個 tag）並合併進 main 即自動執行。
+# 轉正式版後，既有使用者的自動更新（/releases/latest）就會抓到該版本。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/promote_releases.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Promote listed releases to full release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          promoted=0
+          while IFS= read -r tag || [ -n "$tag" ]; do
+            tag=$(echo "$tag" | tr -d '[:space:]')
+            case "$tag" in ""|\#*) continue ;; esac
+            state=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+              --json isPrerelease -q .isPrerelease 2>/dev/null || echo "missing")
+            if [ "$state" = "true" ]; then
+              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" \
+                --prerelease=false --latest
+              echo "Promoted $tag to full release (marked latest)."
+              promoted=$((promoted + 1))
+            else
+              echo "Skip $tag (isPrerelease=$state)."
+            fi
+          done < .github/promote_releases.txt
+          echo "Done. Promoted $promoted release(s)."
