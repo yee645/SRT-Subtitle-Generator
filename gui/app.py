@@ -39,6 +39,7 @@ from subtitle.segmenter import build_cues_from_words
 from subtitle.textedit import apply_corrections
 from subtitle.transcriber import transcribe
 from gui.cue_editor import CueEditDialog
+from gui.music_dialog import MusicDuckingDialog
 from gui.preview_panel import PreviewPanel
 from gui.replace_dialog import ReplaceDialog
 from gui.review_window import ReviewWindow
@@ -159,6 +160,10 @@ class SrtApp(tk.Tk):
         ttk.Button(
             toolbar, text="審片助手（找片段）", width=18,
             command=self._open_review_window,
+        ).pack(side="right", padx=(0, 8))
+        ttk.Button(
+            toolbar, text="配樂助手（自動閃避）", width=18,
+            command=self._open_music_dialog,
         ).pack(side="right", padx=(0, 8))
         ttk.Label(
             toolbar, text=f"v{APP_VERSION}", foreground="#888888",
@@ -587,6 +592,12 @@ class SrtApp(tk.Tk):
         # 帶入最新的轉寫設定（模型、語言、API 等），與主流程共用。
         self._collect_transcription_config()
         ReviewWindow(self, self.config_data, media_path)
+
+    def _open_music_dialog(self):
+        """開啟配樂助手：以第一個選取檔案為預設影片（可留空自行選擇）。"""
+        files = self._selected_files()
+        video_path = files[0] if files and os.path.exists(files[0]) else ""
+        MusicDuckingDialog(self, self.config_data, video_path)
 
     def _on_style_change(self, style):
         """樣式面板變動時：更新設定、即時存檔、重繪預覽。"""

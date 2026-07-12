@@ -104,6 +104,12 @@ DEFAULT_CONFIG = {
         "loudnorm_target": -14.0, # 目標響度（LUFS）；-14 為 YouTube 標準
         "output_dir": "",         # 輸出資料夾；留空表示與來源檔相同資料夾
     },
+    # 背景音樂自動閃避設定（配樂助手用）：講話時自動壓低音樂音量。
+    "ducking": {
+        "music_volume": 0.35,       # 背景音樂基礎音量（混音前）
+        "duck_strength": 8.0,       # 閃避強度：講話時音樂被壓低的程度
+        "duck_sensitivity": 0.06,   # 閃避靈敏度：越低越容易被輕聲觸發
+    },
     # Shorts 直式短片輸出設定（審片助手用）。
     "shorts": {
         "mode": "crop",           # crop＝裁切；blur＝模糊背景填滿
