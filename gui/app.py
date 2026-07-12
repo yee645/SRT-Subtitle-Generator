@@ -36,6 +36,7 @@ from subtitle.burner import burn_subtitles, ffmpeg_available
 from subtitle.exporter import FORMAT_FILETYPES, export, format_srt_timestamp
 from subtitle.pipeline import run_batch
 from subtitle.segmenter import build_cues_from_words
+from subtitle.textedit import apply_corrections
 from subtitle.transcriber import transcribe
 from gui.cue_editor import CueEditDialog
 from gui.preview_panel import PreviewPanel
@@ -1071,6 +1072,11 @@ class SrtApp(tk.Tk):
 
             if not cues:
                 raise RuntimeError("未能產生任何字幕內容。")
+            # 套用自動修正詞庫（存過的錯字規則，每次生成自動修）。
+            cues, corrected = apply_corrections(
+                cues, self.config_data.get("corrections"))
+            if corrected:
+                report(f"已自動修正 {corrected} 處慣性錯字", 0.99)
             self.result_queue.put(("done", cues))
         except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
             logger.exception("生成字幕時發生錯誤")

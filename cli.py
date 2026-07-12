@@ -155,9 +155,11 @@ def _run_review_batch(files: list, config: dict, report) -> list:
             report(f"{prefix}轉錄並分析中...", index / total if total > 1 else None)
             words = transcribe(path, config)
             duration = probe_duration(path)
-            items = analyze(words, media_duration=duration,
-                            loudness=compute_loudness(path),
-                            settings=settings)
+            items = analyze(
+                words, media_duration=duration,
+                loudness=compute_loudness(
+                    path, voice_band=settings["voice_band"]),
+                settings=settings)
             out_dir = (automation.get("output_dir") or "").strip() \
                 or os.path.dirname(os.path.abspath(path))
             os.makedirs(out_dir, exist_ok=True)

@@ -16,7 +16,9 @@
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from subtitle.textedit import count_occurrences, find_in_cues, replace_in_cues
+from config import save_config
+from subtitle.textedit import (count_occurrences, find_in_cues,
+                               normalize_correction_rules, replace_in_cues)
 
 
 class ReplaceDialog(tk.Toplevel):
@@ -69,6 +71,23 @@ class ReplaceDialog(tk.Toplevel):
                    command=self._on_replace_all).pack(side="left", padx=2)
         ttk.Button(buttons, text="關閉", width=8,
                    command=self.destroy).pack(side="right", padx=2)
+
+        # 自動修正詞庫：把目前的取代存成規則，之後每次生成字幕自動套用。
+        rules_frame = ttk.LabelFrame(
+            body, text="自動修正詞庫（每次生成字幕後自動套用）", padding=(8, 6))
+        rules_frame.grid(row=5, column=0, columnspan=2, sticky="we",
+                         pady=(10, 0))
+        self.rules_list = tk.Listbox(rules_frame, height=5)
+        self.rules_list.pack(fill="both", expand=True)
+        rule_buttons = ttk.Frame(rules_frame)
+        rule_buttons.pack(fill="x", pady=(4, 0))
+        ttk.Button(
+            rule_buttons, text="把目前取代存為規則", width=18,
+            command=self._on_save_rule).pack(side="left", padx=2)
+        ttk.Button(
+            rule_buttons, text="刪除選取規則", width=12,
+            command=self._on_delete_rule).pack(side="left", padx=2)
+        self._refresh_rules()
 
         self.bind("<Escape>", lambda _e: self.destroy())
 
@@ -149,3 +168,50 @@ class ReplaceDialog(tk.Toplevel):
         self.app.apply_text_edits()
         self._invalidate()
         self.status_var.set(f"已取代 {count} 處。")
+
+    # ------------------------------------------------------------------
+    # 自動修正詞庫（規則記憶）
+    # ------------------------------------------------------------------
+    def _current_rules(self):
+        return normalize_correction_rules(
+            self.app.config_data.get("corrections"))
+
+    def _save_rules(self, rules):
+        self.app.config_data["corrections"] = rules
+        try:
+            save_config(self.app.config_data)
+        except OSError:
+            pass  # 存檔失敗不影響本次使用，下次關閉程式仍會再存。
+        self._refresh_rules()
+
+    def _refresh_rules(self):
+        self.rules_list.delete(0, "end")
+        for rule in self._current_rules():
+            case = "（區分大小寫）" if rule["case"] else ""
+            target = rule["replace"] if rule["replace"] else "（刪除）"
+            self.rules_list.insert("end",
+                                   f"{rule['find']} → {target}{case}")
+
+    def _on_save_rule(self):
+        find = self.find_var.get().strip()
+        if not find:
+            messagebox.showinfo("提示", "請先填入「尋找」欄位。", parent=self)
+            return
+        rules = [r for r in self._current_rules() if r["find"] != find]
+        rules.append({"find": find,
+                      "replace": self.replace_var.get(),
+                      "case": bool(self.case_var.get())})
+        self._save_rules(rules)
+        self.status_var.set(
+            f"已存為自動修正規則（共 {len(rules)} 條），之後每次生成字幕自動套用。")
+
+    def _on_delete_rule(self):
+        selection = self.rules_list.curselection()
+        if not selection:
+            messagebox.showinfo("提示", "請先在清單中選取要刪除的規則。",
+                                parent=self)
+            return
+        rules = self._current_rules()
+        del rules[selection[0]]
+        self._save_rules(rules)
+        self.status_var.set("已刪除選取的規則。")

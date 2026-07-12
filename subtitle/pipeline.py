@@ -143,6 +143,12 @@ def run_pipeline(
     if not cues:
         raise RuntimeError("未能產生任何字幕內容。")
 
+    # 套用自動修正詞庫（使用者存過的錯字規則，每次生成自動修）。
+    from .textedit import apply_corrections
+    cues, corrected = apply_corrections(cues, config.get("corrections"))
+    if corrected and report:
+        report(f"已自動修正 {corrected} 處慣性錯字", generate_high)
+
     # 匯出勾選的字幕格式。
     out_dir = resolve_output_dir(media_path, automation)
     os.makedirs(out_dir, exist_ok=True)

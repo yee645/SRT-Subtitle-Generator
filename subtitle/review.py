@@ -89,6 +89,8 @@ DEFAULT_SETTINGS = {
     "weight_exclaim": 1.0,   # 驚嘆／疑問句
     # 多檔審片彙總：跨檔案精彩片段取前 N 段。
     "batch_top_n": 10,
+    # 音量分析聚焦人聲頻帶（150~4000 Hz），降低背景音樂干擾。
+    "voice_band": True,
 }
 
 
@@ -137,6 +139,7 @@ def resolve_settings(config: Optional[dict] = None) -> dict:
         "weight_excite": clamp(raw.get("weight_excite"), 0.0, 3.0, 1.0),
         "weight_exclaim": clamp(raw.get("weight_exclaim"), 0.0, 3.0, 1.0),
         "batch_top_n": int(clamp(raw.get("batch_top_n"), 3, 50, 10)),
+        "voice_band": bool(raw.get("voice_band", True)),
         "excite_words": tuple(_EXCITE_WORDS) + tuple(extra),
         "filler_chars": filler,
     }
@@ -194,9 +197,51 @@ def _normalize_for_compare(text: str) -> str:
     return re.sub(r"[\W_]+", "", text, flags=re.UNICODE).lower()
 
 
-def compute_loudness(media_path: str, hop: float = 0.5) -> list:
+# 人聲頻帶（Hz）：過濾低頻配樂鼓點與高頻效果音，讓音量訊號更貼近說話聲。
+_VOICE_BAND_LOW = 150
+_VOICE_BAND_HIGH = 4000
+
+
+def _loudness_command(media_path: str, sample_rate: int,
+                      voice_band: bool) -> list:
+    """組出解 PCM 的 ffmpeg 命令；voice_band 時先以帶通聚焦人聲頻帶。"""
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-i", media_path, "-vn",
+    ]
+    if voice_band:
+        command += ["-af", (f"highpass=f={_VOICE_BAND_LOW},"
+                            f"lowpass=f={_VOICE_BAND_HIGH}")]
+    command += ["-ac", "1", "-ar", str(sample_rate), "-f", "s16le", "pipe:1"]
+    return command
+
+
+def _chunk_rms(chunk: bytes) -> float:
+    """計算 16-bit PCM 區塊的 RMS（0.0~1.0）；優先用 C 實作的 audioop。"""
+    chunk = chunk[: len(chunk) - (len(chunk) % 2)]
+    if not chunk:
+        return 0.0
+    try:
+        import audioop  # Python 3.13 起移除，屆時走純 Python 後備。
+        return audioop.rms(chunk, 2) / 32768.0
+    except ImportError:
+        pass
+    import array
+    samples = array.array("h", chunk)
+    # 大檔用間隔取樣減少計算量；RMS 對此不敏感。
+    step = 4 if len(samples) > 2000 else 1
+    picked = samples[::step]
+    mean_square = sum(int(v) * int(v) for v in picked) / len(picked)
+    return math.sqrt(mean_square) / 32768.0
+
+
+def compute_loudness(media_path: str, hop: float = 0.5,
+                     voice_band: bool = True) -> list:
     """
     以 ffmpeg 解出單聲道 PCM 並計算每個時間窗的 RMS 音量（0.0~1.0）。
+
+    voice_band（預設開）先以帶通濾波聚焦人聲頻帶（150~4000 Hz），
+    降低背景音樂與環境音對精彩偵測的干擾；素材以音樂為主體時可關閉。
 
     回傳 [(時間秒, rms), ...]；ffmpeg 不可用或解碼失敗時回傳空清單，
     呼叫端應能在沒有音量資料的情況下正常運作（精彩偵測退化為純文字訊號）。
@@ -205,18 +250,13 @@ def compute_loudness(media_path: str, hop: float = 0.5) -> list:
         return []
     sample_rate = 16000
     chunk_samples = max(int(sample_rate * hop), 1)
-    command = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error",
-        "-i", media_path, "-vn",
-        "-ac", "1", "-ar", str(sample_rate), "-f", "s16le", "pipe:1",
-    ]
     try:
         process = subprocess.Popen(
-            command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            _loudness_command(media_path, sample_rate, voice_band),
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     except OSError:
         return []
 
-    import array
     result = []
     time_cursor = 0.0
     try:
@@ -224,14 +264,7 @@ def compute_loudness(media_path: str, hop: float = 0.5) -> list:
             chunk = process.stdout.read(chunk_samples * 2)
             if not chunk:
                 break
-            samples = array.array("h", chunk[: len(chunk) - (len(chunk) % 2)])
-            if not samples:
-                break
-            # 大檔用間隔取樣減少計算量；RMS 對此不敏感。
-            step = 4 if len(samples) > 2000 else 1
-            picked = samples[::step]
-            mean_square = sum(int(v) * int(v) for v in picked) / len(picked)
-            result.append((time_cursor, math.sqrt(mean_square) / 32768.0))
+            result.append((time_cursor, _chunk_rms(chunk)))
             time_cursor += hop
     finally:
         try:
