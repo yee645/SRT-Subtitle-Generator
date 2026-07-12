@@ -149,6 +149,10 @@ class ReviewWindow(tk.Toplevel):
             self.weight_vars[key] = var
         tk.Label(row_w, text="（0＝停用該訊號、1＝預設）",
                  fg="#666666").pack(side="left", padx=(10, 0))
+        self.voice_band_var = tk.BooleanVar(value=settings["voice_band"])
+        tk.Checkbutton(
+            row_w, text="音量聚焦人聲頻帶",
+            variable=self.voice_band_var).pack(side="left", padx=(12, 0))
 
         tk.Label(
             options, fg="#666666",
@@ -324,6 +328,7 @@ class ReviewWindow(tk.Toplevel):
             key: float(safe(var, 1.0))
             for key, var in self.weight_vars.items()
         })
+        current["voice_band"] = bool(safe(self.voice_band_var, True))
         self.config_data["review"] = current
         try:
             save_config(self.config_data)
@@ -349,7 +354,8 @@ class ReviewWindow(tk.Toplevel):
 
             words = transcribe(self.media_path, self.config_data, report)
             report("正在分析音量能量（偵測精彩片段）...", 0.96)
-            loudness = compute_loudness(self.media_path)
+            loudness = compute_loudness(
+                self.media_path, voice_band=settings["voice_band"])
             report("正在分析段落與標記...", 0.98)
             duration = probe_duration(self.media_path)
             items = analyze(

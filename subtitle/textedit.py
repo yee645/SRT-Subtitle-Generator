@@ -15,6 +15,9 @@ from __future__ import annotations
 import re
 from typing import Iterable, Mapping
 
+# 自動修正規則清單的上限（防呆，避免設定檔異常膨脹拖慢生成）。
+MAX_CORRECTION_RULES = 200
+
 
 def _build_pattern(term: str, case_sensitive: bool) -> re.Pattern:
     """把字面搜尋字串編成正則（跳脫特殊字元；預設不分大小寫）。"""
@@ -98,3 +101,45 @@ def replace_in_cues(cues: list, term: str, replacement: str,
         else:
             result.append(cue)
     return result, total
+
+
+# ---------------------------------------------------------------------------
+# 自動修正詞庫：把取代規則記下來，之後每次轉錄完自動套用
+# ---------------------------------------------------------------------------
+
+def normalize_correction_rules(raw) -> list:
+    """
+    整理設定檔中的自動修正規則清單，回傳乾淨的
+    [{"find": str, "replace": str, "case": bool}, ...]。
+
+    去除空 find、重複 find（保留最後一筆＝最新設定），數量設上限。
+    """
+    rules = {}
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        find = str(item.get("find") or "").strip()
+        if not find:
+            continue
+        rules[find] = {
+            "find": find,
+            "replace": str(item.get("replace") or ""),
+            "case": bool(item.get("case")),
+        }
+    return list(rules.values())[:MAX_CORRECTION_RULES]
+
+
+def apply_corrections(cues: list, rules) -> tuple:
+    """
+    依序套用自動修正規則（語音辨識的慣性錯字：人名、產品名、同音字），
+    回傳 (新的 cue 清單, 總取代次數)。
+
+    規則由 normalize_correction_rules 整理；轉錄完成後自動呼叫，
+    使用者修過一次的錯字之後每一集都自動修正。
+    """
+    total = 0
+    for rule in normalize_correction_rules(rules):
+        cues, count = replace_in_cues(
+            cues, rule["find"], rule["replace"], rule["case"])
+        total += count
+    return cues, total

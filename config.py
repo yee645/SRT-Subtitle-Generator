@@ -48,6 +48,7 @@ _DEFAULT_REVIEW = {
     "weight_excite": 1.0,          # 情緒詞
     "weight_exclaim": 1.0,         # 驚嘆／疑問句
     "batch_top_n": 10,             # 多檔審片彙總取跨檔精彩片段前 N 段
+    "voice_band": True,            # 音量分析聚焦人聲頻帶，降低背景音樂干擾
 }
 
 # 預設斷句參數。
@@ -79,6 +80,10 @@ DEFAULT_CONFIG = {
     },
     # 審片助手的偵測參數（敏感度、詞表、門檻，介面可調）。
     "review": dict(_DEFAULT_REVIEW),
+    # 自動修正詞庫：轉錄完成後自動套用的取代規則
+    # （[{"find": 錯字, "replace": 正確字, "case": 是否區分大小寫}, ...]）。
+    # 於「尋找取代」對話框按「存為自動修正」新增，修一次、每集自動修。
+    "corrections": [],
     # 已儲存的習慣設定，每組包含一份字幕樣式與斷句參數。
     "presets": {
         "預設": {
