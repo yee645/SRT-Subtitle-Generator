@@ -39,6 +39,7 @@ from subtitle.segmenter import build_cues_from_words
 from subtitle.transcriber import transcribe
 from gui.cue_editor import CueEditDialog
 from gui.preview_panel import PreviewPanel
+from gui.replace_dialog import ReplaceDialog
 from gui.review_window import ReviewWindow
 from gui.scrollable import ScrollableFrame
 from gui.style_panel import StylePanel
@@ -466,6 +467,8 @@ class SrtApp(tk.Tk):
                   command=lambda: self._on_move_cue(1)).pack(side="left", padx=2)
         tk.Button(frame, text="清空清單", width=10,
                   command=self._on_clear_cues).pack(side="left", padx=2)
+        tk.Button(frame, text="尋找取代", width=10,
+                  command=self._on_find_replace).pack(side="left", padx=2)
 
     def _build_export_section(self, parent):
         """匯出與燒錄區：多格式匯出與影片字幕燒錄。"""
@@ -683,6 +686,23 @@ class SrtApp(tk.Tk):
         self._populate_cue_list([])
         self._update_export_state()
         self.status_var.set("已清空字幕清單。")
+
+    def _on_find_replace(self):
+        """開啟尋找與取代對話框（單一實例，重複點擊時帶到最前）。"""
+        if not self.cues:
+            messagebox.showinfo("提示", "目前沒有字幕可搜尋，請先生成或載入字幕。")
+            return
+        existing = getattr(self, "_replace_dialog", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_set()
+            return
+        self._replace_dialog = ReplaceDialog(self)
+
+    def apply_text_edits(self):
+        """字幕文字被批次修改後刷新清單與預覽（時間軸不變，不需重排序）。"""
+        self._populate_cue_list(self.cues)
+        self._refresh_preview()
 
     def _selected_cue_index(self):
         """取得選取項目對應到 self.cues 的索引；無選取則回傳 None。"""

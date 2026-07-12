@@ -35,6 +35,15 @@ FONT_CHOICES = [
 # 垂直位置快捷鍵對應的相對座標。
 VERTICAL_PRESETS = {"頂部": 0.12, "中部": 0.50, "底部": 0.88}
 
+# 逐字動態字幕模式：顯示名稱 ↔ 設定值。
+DYNAMIC_MODE_LABELS = {
+    "off": "無（整句）",
+    "karaoke": "逐字上色（卡拉OK）",
+    "word": "單字彈出",
+}
+_DYNAMIC_LABEL_TO_MODE = {label: mode
+                          for mode, label in DYNAMIC_MODE_LABELS.items()}
+
 
 class StylePanel(tk.LabelFrame):
     """字幕樣式調整面板元件。"""
@@ -172,6 +181,22 @@ class StylePanel(tk.LabelFrame):
             fg="#666666",
         ).grid(row=10, column=0, columnspan=3, sticky="w")
 
+        # 逐字動態字幕（卡拉OK／單字彈出，需逐字時間軸）。
+        tk.Label(self, text="動態字幕").grid(row=11, column=0, sticky="w", pady=3)
+        self.dynamic_var = tk.StringVar(
+            value=DYNAMIC_MODE_LABELS.get(
+                str(style.get("dynamic_mode", "off")),
+                DYNAMIC_MODE_LABELS["off"]))
+        dynamic_box = ttk.Combobox(
+            self, textvariable=self.dynamic_var, state="readonly", width=18,
+            values=list(DYNAMIC_MODE_LABELS.values()))
+        dynamic_box.grid(row=11, column=1, columnspan=2, sticky="w")
+        dynamic_box.bind("<<ComboboxSelected>>", lambda _e: self._emit_change())
+        tk.Label(
+            self, text="逐字換色或單字彈出；模式一（音訊轉錄）燒錄與 ASS 匯出時生效",
+            fg="#666666",
+        ).grid(row=12, column=0, columnspan=3, sticky="w")
+
     # ------------------------------------------------------------------
     # 事件處理
     # ------------------------------------------------------------------
@@ -249,6 +274,8 @@ class StylePanel(tk.LabelFrame):
             "emphasis_enabled": bool(self.emphasis_var.get()),
             "emphasis_color": self.emphasis_swatch.cget("bg"),
             "emphasis_words": self.emphasis_words_var.get().strip(),
+            "dynamic_mode": _DYNAMIC_LABEL_TO_MODE.get(
+                self.dynamic_var.get(), "off"),
         }
         if callable(self._on_change):
             self._on_change(dict(self._style))
@@ -273,5 +300,8 @@ class StylePanel(tk.LabelFrame):
             self.emphasis_swatch.configure(
                 bg=style.get("emphasis_color", "#FFD700"))
             self.emphasis_words_var.set(style.get("emphasis_words", ""))
+            self.dynamic_var.set(DYNAMIC_MODE_LABELS.get(
+                str(style.get("dynamic_mode", "off")),
+                DYNAMIC_MODE_LABELS["off"]))
         finally:
             self._suspend_events = False

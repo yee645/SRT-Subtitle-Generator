@@ -25,9 +25,10 @@ import sys
 from config import load_config
 from subtitle.media import probe_duration
 from subtitle.pipeline import EXPORT_FORMATS, run_batch, unique_path
-from subtitle.review import (analyze, build_chapters, compute_loudness,
-                             export_csv, export_html_report,
-                             resolve_settings)
+from subtitle.review import (analyze, build_chapters, collect_highlights,
+                             compute_loudness, export_batch_csv,
+                             export_batch_html, export_csv,
+                             export_html_report, resolve_settings)
 from subtitle.transcriber import transcribe
 
 
@@ -143,6 +144,8 @@ def _run_review_batch(files: list, config: dict, report) -> list:
     automation = config.get("automation", {})
     settings = resolve_settings(config)
     results = []
+    analyzed = []   # (素材名稱, items)——多檔時輸出跨檔彙總用
+    last_out_dir = None
     total = len(files)
     for index, path in enumerate(files):
         prefix = f"[{index + 1}/{total}] {os.path.basename(path)}：" if total > 1 else ""
@@ -171,6 +174,8 @@ def _run_review_batch(files: list, config: dict, report) -> list:
             dropped = sum(1 for item in items if not item["keep"])
             report(f"{prefix}分析完成，共 {len(items)} 段（建議捨棄 {dropped} 段）",
                    (index + 1) / total)
+            analyzed.append((os.path.basename(path), items))
+            last_out_dir = out_dir
             results.append({
                 "path": path, "ok": True, "error": None,
                 "result": {"exports": [csv_path, html_path],
@@ -180,6 +185,26 @@ def _run_review_batch(files: list, config: dict, report) -> list:
             results.append(
                 {"path": path, "ok": False, "result": None, "error": str(exc)})
             report(f"{prefix}失敗：{exc}", (index + 1) / total)
+
+    # 多檔審片時另輸出跨檔彙總：整批素材的精彩片段 Top N 一目瞭然。
+    if len(analyzed) >= 2 and last_out_dir:
+        try:
+            top_n = settings["batch_top_n"]
+            summary_csv = unique_path(
+                os.path.join(last_out_dir, "審片彙總_精彩TopN.csv"))
+            export_batch_csv(collect_highlights(analyzed, top_n), summary_csv)
+            summary_html = unique_path(
+                os.path.join(last_out_dir, "審片彙總.html"))
+            export_batch_html(analyzed, summary_html, top_n)
+            report(f"已輸出跨檔彙總（{len(analyzed)} 支素材、"
+                   f"精彩片段前 {top_n} 段）：{summary_html}")
+            for item in results:
+                if item["ok"]:
+                    item["result"]["exports"].extend(
+                        [summary_csv, summary_html])
+                    break
+        except OSError as exc:
+            report(f"跨檔彙總輸出失敗（不影響個別報告）：{exc}")
     return results
 
 

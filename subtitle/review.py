@@ -82,6 +82,13 @@ DEFAULT_SETTINGS = {
     "take_similarity": DEFAULT_TAKE_SIMILARITY,
     "filler_density": _FILLER_DENSITY,
     "chapter_min_seconds": 60.0,
+    # 精彩訊號個別權重（0＝停用該訊號、1＝預設強度、最大 3）。
+    "weight_energy": 1.0,    # 音量能量
+    "weight_pace": 1.0,      # 語速
+    "weight_excite": 1.0,    # 情緒詞
+    "weight_exclaim": 1.0,   # 驚嘆／疑問句
+    # 多檔審片彙總：跨檔案精彩片段取前 N 段。
+    "batch_top_n": 10,
 }
 
 
@@ -124,6 +131,12 @@ def resolve_settings(config: Optional[dict] = None) -> dict:
                                 _FILLER_DENSITY),
         "chapter_min_seconds": clamp(raw.get("chapter_min_seconds"),
                                      10.0, 600.0, 60.0),
+        # 各精彩訊號的權重可獨立調整（0 即完全停用該訊號）。
+        "weight_energy": clamp(raw.get("weight_energy"), 0.0, 3.0, 1.0),
+        "weight_pace": clamp(raw.get("weight_pace"), 0.0, 3.0, 1.0),
+        "weight_excite": clamp(raw.get("weight_excite"), 0.0, 3.0, 1.0),
+        "weight_exclaim": clamp(raw.get("weight_exclaim"), 0.0, 3.0, 1.0),
+        "batch_top_n": int(clamp(raw.get("batch_top_n"), 3, 50, 10)),
         "excite_words": tuple(_EXCITE_WORDS) + tuple(extra),
         "filler_chars": filler,
     }
@@ -262,13 +275,19 @@ def _score_highlights(items: list, loudness: list,
 
     綜合四種訊號：音量能量（講得大聲、有笑聲的段落通常較精彩）、
     語速（興奮時語速快）、情緒詞（內建＋使用者自訂）、驚嘆/疑問句。
-    分數達門檻即標記為精彩；門檻除以使用者的敏感度倍率——
-    敏感度 >1 更容易標記、<1 更嚴格。無音量資料時退化為其餘三種訊號。
+    各訊號權重可獨立調整（weight_*，0 即停用該訊號）——例如教學型
+    頻道可把情緒詞權重調低、音量權重調高。分數達門檻即標記為精彩；
+    門檻除以使用者的敏感度倍率——敏感度 >1 更容易標記、<1 更嚴格。
+    無音量資料時退化為其餘三種訊號。
     """
     settings = settings or resolve_settings()
     excite_words = settings.get("excite_words", _EXCITE_WORDS)
     sensitivity = max(float(settings.get("highlight_sensitivity", 1.0)), 0.2)
     threshold = _HIGHLIGHT_THRESHOLD / sensitivity
+    w_energy = float(settings.get("weight_energy", 1.0))
+    w_pace = float(settings.get("weight_pace", 1.0))
+    w_excite = float(settings.get("weight_excite", 1.0))
+    w_exclaim = float(settings.get("weight_exclaim", 1.0))
 
     speech = [item for item in items if item["kind"] == "speech"]
     if not speech:
@@ -285,10 +304,10 @@ def _score_highlights(items: list, loudness: list,
     for index, item in enumerate(speech):
         excites = _excitement_hits(item["text"], excite_words)
         exclaims = sum(item["text"].count(ch) for ch in _EXCLAIM_CHARS)
-        score = (1.2 * energy_z[index]
-                 + 0.8 * rate_z[index]
-                 + 1.0 * min(excites, 3)
-                 + 0.5 * min(exclaims, 2))
+        score = (w_energy * 1.2 * energy_z[index]
+                 + w_pace * 0.8 * rate_z[index]
+                 + w_excite * 1.0 * min(excites, 3)
+                 + w_exclaim * 0.5 * min(exclaims, 2))
         item["score"] = round(score, 2)
         if score >= threshold and TAG_REPEATED not in item["tags"]:
             item["tags"].insert(0, TAG_HIGHLIGHT)
@@ -785,6 +804,127 @@ h2{{font-size:15px;margin:18px 0 6px}}
 <table><thead><tr><th></th><th>開始</th><th>長度</th><th>標記</th>
 <th>取捨</th><th>內容</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table>
+</body></html>"""
+    with open(path, "w", encoding="utf-8") as fp:
+        fp.write(document)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# 多檔審片彙總：整批素材的跨檔精彩片段排序
+# ---------------------------------------------------------------------------
+
+def collect_highlights(sources: list, top_n: int = 10) -> list:
+    """
+    彙整多個素材的精彩片段並依分數跨檔排序，取前 top_n 段。
+
+    一次拍很多支素材時，逐檔看報告仍要自己比較哪支的哪段最好；
+    彙總排序直接給出「這批素材裡最值得用的片段」。
+
+    參數：
+        sources: [(素材名稱, analyze() 的段落清單), ...]。
+        top_n: 取分數最高的前幾段（≥1）。
+    回傳：
+        [{"source", "start", "end", "duration", "score", "text"}, ...]
+        依分數由高到低排序。
+    """
+    highlights = []
+    for name, items in sources:
+        for item in items:
+            if item["kind"] != "speech" or TAG_HIGHLIGHT not in item["tags"]:
+                continue
+            highlights.append({
+                "source": name,
+                "start": item["start"],
+                "end": item["end"],
+                "duration": item["end"] - item["start"],
+                "score": item["score"],
+                "text": item["text"],
+            })
+    highlights.sort(key=lambda h: h["score"], reverse=True)
+    return highlights[: max(int(top_n), 1)]
+
+
+def export_batch_csv(highlights: list, path: str) -> str:
+    """匯出跨檔精彩片段彙總 CSV（UTF-8 BOM，Excel 可直接開啟）。"""
+    import csv
+    with open(path, "w", encoding="utf-8-sig", newline="") as fp:
+        writer = csv.writer(fp)
+        writer.writerow(
+            ["排名", "素材", "開始", "結束", "長度(秒)", "精彩分數", "內容"])
+        for rank, item in enumerate(highlights, start=1):
+            writer.writerow([
+                rank,
+                item["source"],
+                _hms(item["start"]),
+                _hms(item["end"]),
+                f"{item['duration']:.1f}",
+                f"{item['score']:.2f}",
+                item["text"],
+            ])
+    return path
+
+
+def export_batch_html(sources: list, path: str, top_n: int = 10) -> str:
+    """
+    匯出整批素材的審片彙總 HTML：每檔統計一覽＋跨檔精彩片段 Top N。
+
+    sources 與 collect_highlights 相同（[(素材名稱, items), ...]）。
+    """
+    highlights = collect_highlights(sources, top_n)
+
+    stat_rows = []
+    for name, items in sources:
+        stats = summarize(items)
+        stat_rows.append(
+            f"<tr><td>{html.escape(name)}</td>"
+            f"<td class='mono'>{stats['media_duration'] / 60.0:.1f} 分</td>"
+            f"<td class='mono'>{stats['kept_seconds'] / 60.0:.1f} 分</td>"
+            f"<td class='mono'>{stats['highlight_count']}</td>"
+            f"<td class='mono'>{stats['silence_seconds'] / 60.0:.1f} 分</td>"
+            f"<td class='mono'>{stats['filler_total']}</td></tr>")
+
+    top_rows = []
+    for rank, item in enumerate(highlights, start=1):
+        top_rows.append(
+            f"<tr><td class='mono'>{rank}</td>"
+            f"<td>{html.escape(item['source'])}</td>"
+            f"<td class='mono'>{_hms(item['start'])}</td>"
+            f"<td class='mono'>{item['duration']:.1f}s</td>"
+            f"<td class='mono'>{item['score']:.2f}</td>"
+            f"<td class='txt'>{html.escape(item['text'])}</td></tr>")
+    if not top_rows:
+        top_rows.append("<tr><td colspan='6'>本批素材沒有達標的精彩片段；"
+                        "可到偵測設定調高精彩敏感度後重新分析。</td></tr>")
+
+    document = f"""<!DOCTYPE html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>審片彙總（{len(sources)} 支素材）</title>
+<style>
+body{{font-family:"Microsoft JhengHei",system-ui,sans-serif;margin:24px;
+     background:#fafafa;color:#222}}
+h1{{font-size:20px}} h2{{font-size:15px;margin:18px 0 6px}}
+.sub{{color:#777;font-size:13px;margin-bottom:16px}}
+table{{border-collapse:collapse;width:100%;margin-top:8px;background:#fff;
+      font-size:13px}}
+th,td{{border-bottom:1px solid #ececec;padding:6px 8px;text-align:left;
+      vertical-align:top}}
+th{{background:#f3f3f3}}
+.mono{{font-family:Consolas,monospace;white-space:nowrap}}
+.txt{{word-break:break-all}}
+</style></head><body>
+<h1>審片彙總</h1>
+<div class="sub">共 {len(sources)} 支素材｜跨檔精彩片段取前 {top_n} 段
+（各素材的完整段落表見同資料夾的個別審片報告）</div>
+<h2>各素材統計</h2>
+<table><thead><tr><th>素材</th><th>總長</th><th>保留內容</th>
+<th>精彩段數</th><th>冷場</th><th>口頭禪</th></tr></thead>
+<tbody>{''.join(stat_rows)}</tbody></table>
+<h2>整批素材精彩片段 Top {top_n}（依分數排序）</h2>
+<table><thead><tr><th>#</th><th>素材</th><th>開始</th><th>長度</th>
+<th>分數</th><th>內容</th></tr></thead>
+<tbody>{''.join(top_rows)}</tbody></table>
 </body></html>"""
     with open(path, "w", encoding="utf-8") as fp:
         fp.write(document)

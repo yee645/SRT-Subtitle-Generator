@@ -75,7 +75,18 @@ def shift_cues(cues, clip_start: float, clip_end: float) -> list:
         end = min(cue["end"] - clip_start, duration)
         if end - start < 0.05:
             continue
-        shifted.append({"start": start, "end": end, "text": cue["text"]})
+        moved = {"start": start, "end": end, "text": cue["text"]}
+        # 逐字時間軸一併平移（逐字動態字幕用），超出片段的字捨棄。
+        if cue.get("words"):
+            words = [
+                {"word": w["word"],
+                 "start": max(w["start"] - clip_start, 0.0),
+                 "end": min(w["end"] - clip_start, duration)}
+                for w in cue["words"]
+                if w["end"] > clip_start and w["start"] < clip_end]
+            if words:
+                moved["words"] = words
+        shifted.append(moved)
     return shifted
 
 
