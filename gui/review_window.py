@@ -43,9 +43,9 @@ class ReviewWindow(tk.Toplevel):
     def __init__(self, master, config_data, media_path):
         super().__init__(master)
         self.title("審片助手：快速找可用片段")
-        # 預設尺寸需容納偵測設定（3 列）、時間軸與 3 排輸出按鈕。
-        self.geometry("1020x760")
-        self.minsize(840, 560)
+        # 預設尺寸需容納偵測設定（4 列，含訊號權重）、時間軸與 3 排輸出按鈕。
+        self.geometry("1020x790")
+        self.minsize(840, 580)
 
         self.config_data = config_data
         self.media_path = media_path
@@ -130,6 +130,26 @@ class ReviewWindow(tk.Toplevel):
             textvariable=self.chapter_min_var, format="%.0f",
         ).pack(side="left", padx=(2, 0))
         tk.Label(row2, text="秒").pack(side="left")
+        # 精彩訊號個別權重：讓不同內容類型自訂判定依據
+        # （例如教學型調低情緒詞、遊戲實況調高音量）。
+        row_w = ttk.Frame(options)
+        row_w.pack(fill="x", pady=2)
+        tk.Label(row_w, text="精彩訊號權重:").pack(side="left")
+        self.weight_vars = {}
+        for key, label in (("weight_energy", "音量"),
+                           ("weight_pace", "語速"),
+                           ("weight_excite", "情緒詞"),
+                           ("weight_exclaim", "驚嘆句")):
+            tk.Label(row_w, text=label).pack(side="left", padx=(10, 2))
+            var = tk.DoubleVar(value=settings[key])
+            tk.Spinbox(
+                row_w, from_=0.0, to=3.0, increment=0.1, width=4,
+                textvariable=var, format="%.1f",
+            ).pack(side="left")
+            self.weight_vars[key] = var
+        tk.Label(row_w, text="（0＝停用該訊號、1＝預設）",
+                 fg="#666666").pack(side="left", padx=(10, 0))
+
         tk.Label(
             options, fg="#666666",
             text=("敏感度 >1 更容易標記精彩、<1 更嚴格；情緒詞以逗號或空白分隔，"
@@ -299,6 +319,10 @@ class ReviewWindow(tk.Toplevel):
             "extra_excite_words": self.excite_var.get().strip(),
             "filler_words": self.filler_var.get().strip(),
             "chapter_min_seconds": float(safe(self.chapter_min_var, 60.0)),
+        })
+        current.update({
+            key: float(safe(var, 1.0))
+            for key, var in self.weight_vars.items()
         })
         self.config_data["review"] = current
         try:

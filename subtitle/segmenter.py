@@ -266,20 +266,20 @@ def build_cues_from_words(words, seg_cfg):
             })
             bucket = []
 
-    return _post_process(cues, seg_cfg)
+    return _post_process(cues, seg_cfg, words)
 
 
 # ---------------------------------------------------------------------------
 # 共用後處理：再切過長文字、套用秒數限制、避免重疊、重新編號
 # ---------------------------------------------------------------------------
 
-def _post_process(cues, seg_cfg):
+def _post_process(cues, seg_cfg, words=None):
     """
     對初步產生的 cue 做收尾處理：
     1. 文字若仍過長則再切，並依字數比例分配時間。
     2. 套用單句最短/最長秒數。
     3. 修正相鄰字幕的時間重疊。
-    4. 重新編號 index。
+    4. 重新編號 index，並把逐字時間軸掛回各 cue（供逐字動態字幕）。
     """
     min_duration = float(seg_cfg.get("min_duration", 1.0))
     max_duration = float(seg_cfg.get("max_duration", 7.0))
@@ -329,7 +329,44 @@ def _post_process(cues, seg_cfg):
 
     for number, cue in enumerate(expanded, start=1):
         cue["index"] = number
+    # 把逐字時間軸依時間掛回各 cue，供逐字動態字幕（卡拉OK／單字彈出）
+    # 於燒錄與 ASS 匯出時使用；不影響其他輸出格式。
+    if words:
+        _attach_words(expanded, words, time_offset)
     return expanded
+
+
+def _attach_words(cues, words, time_offset=0.0):
+    """
+    把逐字時間軸依時間中點分配到各 cue（cue["words"]）。
+
+    cue 時間經過比例重分配與偏移，與原始字時間只是近似對應；
+    以「字的時間中點落在哪個 cue 區間」分派，落在間隙的字歸給
+    下一個 cue、結尾剩餘的字歸給最後一個 cue，確保沒有字被丟失。
+    存入的是複製品（已套用時間偏移），不改動呼叫端的 words。
+    """
+    if not cues:
+        return
+    word_index = 0
+    total = len(words)
+    for position, cue in enumerate(cues):
+        bucket = []
+        is_last = position == len(cues) - 1
+        while word_index < total:
+            word = words[word_index]
+            midpoint = (word["start"] + word["end"]) / 2 + time_offset
+            if midpoint > cue["end"] and not is_last:
+                break  # 屬於後面的 cue。
+            text = (word.get("word") or "").strip()
+            if text:
+                bucket.append({
+                    "word": text,
+                    "start": word["start"] + time_offset,
+                    "end": word["end"] + time_offset,
+                })
+            word_index += 1
+        if bucket:
+            cue["words"] = bucket
 
 
 # 視為「孤字碎片」的最大字數，達此長度以下會被併回前一句。

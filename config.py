@@ -27,6 +27,9 @@ _DEFAULT_STYLE = {
     "emphasis_enabled": False,      # 重點字上色（燒錄與 ASS 匯出時生效）
     "emphasis_color": "#FFD700",    # 重點字顏色（預設金黃）
     "emphasis_words": "",           # 重點字詞清單（逗號或空白分隔）
+    # 逐字動態字幕（燒錄與 ASS 匯出時生效；需要逐字時間軸）：
+    # off＝一般整句、karaoke＝整句顯示+講到的字換色、word＝只彈出當前字詞
+    "dynamic_mode": "off",
 }
 
 # 預設審片偵測參數（審片助手用，皆可於介面調整並記憶）。
@@ -39,6 +42,12 @@ _DEFAULT_REVIEW = {
     "take_similarity": 0.72,       # 重複拍攝判定的文字相似度（0~1）
     "filler_density": 0.08,        # 每字的填充詞密度達此值標記「口頭禪多」
     "chapter_min_seconds": 60.0,   # YouTube 章節的最短長度（秒），避免章節過細
+    # 精彩訊號個別權重（0~3；0＝停用該訊號、1＝預設強度）。
+    "weight_energy": 1.0,          # 音量能量
+    "weight_pace": 1.0,            # 語速
+    "weight_excite": 1.0,          # 情緒詞
+    "weight_exclaim": 1.0,         # 驚嘆／疑問句
+    "batch_top_n": 10,             # 多檔審片彙總取跨檔精彩片段前 N 段
 }
 
 # 預設斷句參數。

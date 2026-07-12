@@ -18,6 +18,18 @@ import os
 import re
 from typing import Iterable, Mapping
 
+from .segmenter import _is_cjk_char
+
+# 逐字動態字幕模式（樣式 dynamic_mode 的合法值）：
+#   off     ＝一般整句字幕
+#   karaoke ＝整句顯示、講到哪個字換色（卡拉OK式）
+#   word    ＝只顯示當前字詞並帶彈出動畫（TikTok/Shorts 常見版式）
+DYNAMIC_MODES = ("off", "karaoke", "word")
+# word 模式的彈出動畫：從 80% 縮放於 120 毫秒內長到 100%。
+_POP_TAG = "{\\fscx80\\fscy80\\t(0,120,\\fscx100\\fscy100)}"
+# 逐字事件的最短長度（秒），避免零長度 Dialogue。
+_MIN_EVENT = 0.04
+
 
 # ---------------------------------------------------------------------------
 # 通用時間格式輔助函式
@@ -154,6 +166,62 @@ def apply_emphasis(text: str, words: list, color: str) -> str:
         for segment, emphasized in split_emphasis_segments(text, words))
 
 
+def _dynamic_event_times(words: list, cue_start: float,
+                         cue_end: float) -> list:
+    """
+    算出 cue 內每個字的顯示事件 (start, end)。
+
+    事件時間夾在 cue 區間內且單調遞增：第一個事件從 cue 開始、
+    最後一個事件到 cue 結束，中間以各字的開始時間為切點。
+    """
+    starts = [float(cue_start)]
+    for word in words[1:]:
+        stamp = min(max(float(word["start"]), starts[-1]), float(cue_end))
+        starts.append(stamp)
+    events = []
+    for index, stamp in enumerate(starts):
+        stop = starts[index + 1] if index + 1 < len(starts) else float(cue_end)
+        events.append((stamp, stop))
+    return events
+
+
+def _dynamic_dialogues(cue: Mapping, mode: str, highlight_tag: str) -> list:
+    """
+    把一個帶逐字時間軸的 cue 展開成多個 ASS Dialogue 文字內容。
+
+    回傳 [(start, end, text), ...]；呼叫端負責組 Dialogue 行。
+    karaoke：整句顯示、當前字換色；word：只顯示當前字並帶彈出動畫。
+    """
+    # 空字（例如被尋找取代刪成空字串）不產生事件。
+    words = [w for w in (cue.get("words") or []) if (w.get("word") or "").strip()]
+    if not words:
+        return []
+    texts = [w["word"] for w in words]
+    events = _dynamic_event_times(words, cue["start"], cue["end"])
+    dialogues = []
+    for index, (start, end) in enumerate(events):
+        if end - start < _MIN_EVENT:
+            continue
+        if mode == "word":
+            text = f"{_POP_TAG}{texts[index]}"
+        else:
+            # karaoke：當前字包色彩標籤、其餘維持樣式色。
+            # 空白間隔依「原始文字」判斷（標籤本身不能影響 CJK 判斷）。
+            parts = []
+            previous_raw = ""
+            for i, raw in enumerate(texts):
+                if parts and raw and previous_raw \
+                        and not _is_cjk_char(raw[0]) \
+                        and not _is_cjk_char(previous_raw[-1]):
+                    parts.append(" ")
+                parts.append(f"{highlight_tag}{raw}{{\\r}}"
+                             if i == index else raw)
+                previous_raw = raw
+            text = "".join(parts)
+        dialogues.append((start, end, text))
+    return dialogues
+
+
 def _ass_alignment(position_y: float) -> int:
     """依垂直位置選擇 ASS 對齊代號（2=底部、5=中部、8=頂部，皆置中）。"""
     if position_y <= 0.33:
@@ -207,18 +275,30 @@ def cues_to_ass(cues: Iterable[Mapping], style: Mapping | None = None,
             str(style.get("emphasis_words") or ""))
     emphasis_color = style.get("emphasis_color", "#FFD700")
 
+    # 逐字動態字幕：cue 需帶逐字時間軸（cue["words"]）才會展開；
+    # 沒有逐字資料的 cue（手動輸入、文字稿對齊、編輯過）退回一般整句。
+    dynamic_mode = str(style.get("dynamic_mode") or "off")
+    if dynamic_mode not in DYNAMIC_MODES:
+        dynamic_mode = "off"
+    highlight_tag = f"{{\\1c{_hex_to_ass_inline(emphasis_color)}}}"
+
+    def dialogue(start, end, text):
+        return "Dialogue: 0,{s},{e},Default,,0,0,0,,{t}\n".format(
+            s=format_ass_timestamp(start), e=format_ass_timestamp(end), t=text)
+
     lines = [header]
     for cue in cues:
+        if dynamic_mode != "off" and cue.get("words"):
+            expanded = _dynamic_dialogues(cue, dynamic_mode, highlight_tag)
+            if expanded:
+                for start, end, text in expanded:
+                    lines.append(dialogue(start, end, text))
+                continue
+            # 逐字資料無效（如全被取代成空字串）時退回一般整句。
         text = (cue.get("text") or "").replace("\n", "\\N").replace("\r", "")
         if emphasis_words:
             text = apply_emphasis(text, emphasis_words, emphasis_color)
-        lines.append(
-            "Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n".format(
-                start=format_ass_timestamp(cue["start"]),
-                end=format_ass_timestamp(cue["end"]),
-                text=text,
-            )
-        )
+        lines.append(dialogue(cue["start"], cue["end"], text))
     return "".join(lines)
 
 
