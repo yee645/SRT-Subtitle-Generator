@@ -117,6 +117,20 @@ DEFAULT_CONFIG = {
         "duck_strength": 8.0,       # 閃避強度：講話時音樂被壓低的程度
         "duck_sensitivity": 0.06,   # 閃避靈敏度：越低越容易被輕聲觸發
     },
+    # 封面候選擷取設定（審片助手用）：自動挑清晰畫面輸出 PNG 候選圖。
+    "thumbnails": {
+        "count": 6,               # 候選張數（2~12）
+        "min_spacing": 8.0,       # 候選之間最小時間間隔（秒）
+        "prefer_highlights": True,# 優先從精彩段落取樣
+        "width": 1280,            # 輸出圖片寬度（YouTube 封面標準 1280）
+    },
+    # 音訊健檢門檻（上片前檢查爆音、音量、底噪與聲道平衡）。
+    "audiocheck": {
+        "quiet_lufs": -19.0,      # 響度低於此值（LUFS）判定太小聲
+        "noise_floor_db": -50.0,  # 底噪高於此值（dB）判定偏高
+        "clip_peak_db": -0.5,     # 峰值高於此值（dB）視為爆音風險
+        "balance_db": 6.0,        # 左右聲道相差超過此值（dB）判定不平衡
+    },
     # Shorts 直式短片輸出設定（審片助手用）。
     "shorts": {
         "mode": "crop",           # crop＝裁切；blur＝模糊背景填滿
