@@ -45,6 +45,7 @@ jobs:
         shell: python
         env:
           INPUT_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           import os
           import pathlib
@@ -59,17 +60,29 @@ jobs:
               match = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', source)
               tag = f"v{match.group(1)}"
           # 該版本的 Release 已存在時跳過建置（防止重複發版）。
+          # 帶 GITHUB_TOKEN 認證避免共享 IP 的匿名限額（曾發生 403
+          # rate limit 讓整個建置失敗）；查詢失敗時視為「不存在」繼續
+          # 建置——就算真的重複，gh release create 對既有 tag 會失敗，
+          # 守衛降級不會造成重複發版。
           import urllib.request
           import urllib.error
           exists = "false"
           url = (f"https://api.github.com/repos/"
                  f"{os.environ['GITHUB_REPOSITORY']}/releases/tags/{tag}")
+          request = urllib.request.Request(url, headers={
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+              "Accept": "application/vnd.github+json",
+          })
           try:
-              with urllib.request.urlopen(url, timeout=15):
+              with urllib.request.urlopen(request, timeout=15):
                   exists = "true"
           except urllib.error.HTTPError as err:
               if err.code != 404:
-                  raise
+                  print(f"::warning::Release 存在性查詢失敗（HTTP {err.code}），"
+                        "視為不存在並繼續建置。")
+          except OSError as err:
+              print(f"::warning::Release 存在性查詢失敗（{err}），"
+                    "視為不存在並繼續建置。")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fp:
               fp.write(f"RELEASE_TAG={tag}\n")
               fp.write(f"RELEASE_EXISTS={exists}\n")
