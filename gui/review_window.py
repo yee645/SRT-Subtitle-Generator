@@ -23,6 +23,7 @@ from subtitle.burner import ffmpeg_available
 from subtitle.exporter import export as export_subtitle
 from subtitle.media import probe_duration
 from subtitle.pipeline import resolve_output_dir, unique_path
+from subtitle.publisher import build_publish_pack, resolve_publish_settings
 from subtitle.segmenter import build_cues_from_words
 from subtitle.shorts import cut_vertical_clip, resolve_shorts_settings
 from subtitle.review import (CATEGORY_COLORS, CATEGORY_LABELS,
@@ -263,11 +264,19 @@ class ReviewWindow(tk.Toplevel):
                 (row2, "匯出 EDL（進剪輯軟體）", self._on_export_edl),
                 (row2, "匯出審片標記字幕", self._on_export_review_srt),
                 (row2, "匯出 CSV 清單", self._on_export_csv),
-                (row2, "複製 YouTube 章節", self._on_copy_chapters)]:
+                (row2, "複製 YouTube 章節", self._on_copy_chapters),
+                (row2, "匯出發佈包", self._on_export_publish_pack)]:
             btn = tk.Button(parent, text=label, command=command,
                             state="disabled")
             btn.pack(side="left", padx=3)
             self.export_buttons.append(btn)
+
+        # 粗剪選項：同時剪掉口頭禪字詞（Descript 式 filler-word removal）。
+        self.cut_fillers_var = tk.BooleanVar(
+            value=settings["cut_filler_words"])
+        tk.Checkbutton(
+            row1, text="剪除口頭禪字",
+            variable=self.cut_fillers_var).pack(side="left", padx=(8, 0))
 
         # 第三排：Shorts 直式短片（9:16）輸出與其版式設定。
         shorts_cfg = resolve_shorts_settings(self.config_data)
@@ -329,6 +338,7 @@ class ReviewWindow(tk.Toplevel):
             for key, var in self.weight_vars.items()
         })
         current["voice_band"] = bool(safe(self.voice_band_var, True))
+        current["cut_filler_words"] = bool(safe(self.cut_fillers_var, False))
         self.config_data["review"] = current
         try:
             save_config(self.config_data)
@@ -571,7 +581,8 @@ class ReviewWindow(tk.Toplevel):
         output = self._default_path("_粗剪", ".mp4")
         self._set_processing(True)
         threading.Thread(
-            target=self._cut_worker, args=(self.items, output),
+            target=self._cut_worker,
+            args=(self.items, output, self._cut_fillers_enabled()),
             daemon=True).start()
 
     def _on_highlight_cut(self):
@@ -595,15 +606,29 @@ class ReviewWindow(tk.Toplevel):
         output = self._default_path("_精彩合輯", ".mp4")
         self._set_processing(True)
         threading.Thread(
-            target=self._cut_worker, args=(highlights, output),
+            target=self._cut_worker,
+            args=(highlights, output, self._cut_fillers_enabled()),
             daemon=True).start()
 
-    def _cut_worker(self, items, output):
+    def _cut_fillers_enabled(self):
+        """讀取「剪除口頭禪字」勾選並記憶於設定檔。"""
+        enabled = bool(self.cut_fillers_var.get())
+        current = dict(self.config_data.get("review", {}))
+        current["cut_filler_words"] = enabled
+        self.config_data["review"] = current
+        try:
+            save_config(self.config_data)
+        except OSError:
+            pass
+        return enabled
+
+    def _cut_worker(self, items, output, drop_filler_words=False):
         try:
             cut_rough_video(
                 self.media_path, items, output,
                 progress_cb=lambda ratio, msg: self.result_queue.put(
-                    ("status", (msg, ratio))))
+                    ("status", (msg, ratio))),
+                drop_filler_words=drop_filler_words)
             self.result_queue.put(("cut_done", output))
         except Exception as exc:
             logger.exception("剪輯輸出失敗")
@@ -752,7 +777,8 @@ class ReviewWindow(tk.Toplevel):
         path = self._default_path("_粗剪", ".edl")
         try:
             export_edl(self.items, path,
-                       clip_name=os.path.basename(self.media_path))
+                       clip_name=os.path.basename(self.media_path),
+                       drop_filler_words=self._cut_fillers_enabled())
         except (OSError, ValueError) as exc:
             messagebox.showerror("匯出失敗", str(exc), parent=self)
             return
@@ -791,6 +817,35 @@ class ReviewWindow(tk.Toplevel):
         self.clipboard_clear()
         self.clipboard_append(text)
         self.status_var.set("YouTube 章節草稿已複製到剪貼簿，可直接貼上說明欄。")
+
+    def _on_export_publish_pack(self):
+        """匯出發佈包：建議標題＋描述草稿＋標籤，上傳時直接取用。"""
+        if not self.items:
+            return
+        settings = self._collect_review_settings()
+        chapters = build_chapters(
+            self.items,
+            min_chapter_seconds=settings["chapter_min_seconds"],
+            break_gap=settings["silence_gap"])
+        pack = build_publish_pack(
+            self.items,
+            settings=resolve_publish_settings(self.config_data),
+            chapters=chapters,
+            source_name=os.path.basename(self.media_path),
+            extra_words=settings["extra_excite_words"])
+        path = self._default_path("_發佈包", ".txt")
+        try:
+            with open(path, "w", encoding="utf-8") as fp:
+                fp.write(pack)
+        except OSError as exc:
+            messagebox.showerror("匯出失敗", str(exc), parent=self)
+            return
+        self.status_var.set(f"已匯出發佈包：{path}")
+        messagebox.showinfo(
+            "匯出完成",
+            f"發佈包已儲存至：\n{path}\n\n"
+            "內含建議標題、描述草稿（含章節）與建議標籤，"
+            "上傳 YouTube 時直接取用、自行潤飾。", parent=self)
 
     # ==================================================================
     # 狀態

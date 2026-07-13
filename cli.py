@@ -25,6 +25,7 @@ import sys
 from config import load_config
 from subtitle.media import probe_duration
 from subtitle.pipeline import EXPORT_FORMATS, run_batch, unique_path
+from subtitle.publisher import build_publish_pack, resolve_publish_settings
 from subtitle.review import (analyze, build_chapters, collect_highlights,
                              compute_loudness, export_batch_csv,
                              export_batch_html, export_csv,
@@ -166,13 +167,20 @@ def _run_review_batch(files: list, config: dict, report) -> list:
             base = os.path.splitext(os.path.basename(path))[0]
             csv_path = unique_path(os.path.join(out_dir, f"{base}_審片清單.csv"))
             export_csv(items, csv_path)
+            chapters = build_chapters(
+                items,
+                min_chapter_seconds=settings["chapter_min_seconds"],
+                break_gap=settings["silence_gap"])
             html_path = unique_path(os.path.join(out_dir, f"{base}_審片報告.html"))
             export_html_report(items, html_path, source_name=os.path.basename(path),
-                               media_duration=duration,
-                               chapters=build_chapters(
-                                   items,
-                                   min_chapter_seconds=settings["chapter_min_seconds"],
-                                   break_gap=settings["silence_gap"]))
+                               media_duration=duration, chapters=chapters)
+            # 發佈包：建議標題＋描述草稿＋標籤，上傳時直接取用。
+            pack_path = unique_path(os.path.join(out_dir, f"{base}_發佈包.txt"))
+            with open(pack_path, "w", encoding="utf-8") as fp:
+                fp.write(build_publish_pack(
+                    items, settings=resolve_publish_settings(config),
+                    chapters=chapters, source_name=os.path.basename(path),
+                    extra_words=settings["extra_excite_words"]))
             dropped = sum(1 for item in items if not item["keep"])
             report(f"{prefix}分析完成，共 {len(items)} 段（建議捨棄 {dropped} 段）",
                    (index + 1) / total)
@@ -180,7 +188,7 @@ def _run_review_batch(files: list, config: dict, report) -> list:
             last_out_dir = out_dir
             results.append({
                 "path": path, "ok": True, "error": None,
-                "result": {"exports": [csv_path, html_path],
+                "result": {"exports": [csv_path, html_path, pack_path],
                            "burned": None, "cues": []},
             })
         except Exception as exc:  # 單檔失敗不中斷批次。
