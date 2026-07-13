@@ -49,6 +49,7 @@ _DEFAULT_REVIEW = {
     "weight_exclaim": 1.0,         # 驚嘆／疑問句
     "batch_top_n": 10,             # 多檔審片彙總取跨檔精彩片段前 N 段
     "voice_band": True,            # 音量分析聚焦人聲頻帶，降低背景音樂干擾
+    "cut_filler_words": False,     # 粗剪/EDL 同時剪掉口頭禪字詞（呃、嗯…）
 }
 
 # 預設斷句參數。
@@ -103,6 +104,12 @@ DEFAULT_CONFIG = {
         "loudnorm": False,        # 燒錄時同步做響度正規化
         "loudnorm_target": -14.0, # 目標響度（LUFS）；-14 為 YouTube 標準
         "output_dir": "",         # 輸出資料夾；留空表示與來源檔相同資料夾
+    },
+    # 發佈包設定：從審片結果組出建議標題／描述草稿／標籤。
+    "publish": {
+        "title_candidates": 3,    # 建議標題數量（2~6）
+        "title_max_chars": 40,    # 標題長度上限（行動裝置可見長度，20~60）
+        "tag_count": 15,          # 建議標籤數量（5~30）
     },
     # 背景音樂自動閃避設定（配樂助手用）：講話時自動壓低音樂音量。
     "ducking": {

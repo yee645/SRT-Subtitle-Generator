@@ -91,6 +91,8 @@ DEFAULT_SETTINGS = {
     "batch_top_n": 10,
     # 音量分析聚焦人聲頻帶（150~4000 Hz），降低背景音樂干擾。
     "voice_band": True,
+    # 粗剪與 EDL 輸出時，同時剪掉口頭禪字詞（呃、嗯…）。
+    "cut_filler_words": False,
 }
 
 
@@ -140,6 +142,7 @@ def resolve_settings(config: Optional[dict] = None) -> dict:
         "weight_exclaim": clamp(raw.get("weight_exclaim"), 0.0, 3.0, 1.0),
         "batch_top_n": int(clamp(raw.get("batch_top_n"), 3, 50, 10)),
         "voice_band": bool(raw.get("voice_band", True)),
+        "cut_filler_words": bool(raw.get("cut_filler_words", False)),
         "excite_words": tuple(_EXCITE_WORDS) + tuple(extra),
         "filler_chars": filler,
     }
@@ -347,7 +350,7 @@ def _score_highlights(items: list, loudness: list,
 
 
 def build_speech_segments(words, segment_gap: float = DEFAULT_SEGMENT_GAP):
-    """依字與字之間的停頓把逐字時間軸切成講話段落。"""
+    """依字與字之間的停頓把逐字時間軸切成講話段落（保留逐字引用）。"""
     segments = []
     bucket = []
     for index, word in enumerate(words):
@@ -359,9 +362,39 @@ def build_speech_segments(words, segment_gap: float = DEFAULT_SEGMENT_GAP):
                 "start": bucket[0]["start"],
                 "end": bucket[-1]["end"],
                 "text": _join_words(bucket),
+                "words": bucket,
             })
             bucket = []
     return segments
+
+
+def _is_filler_word(text: str, filler_chars: str) -> bool:
+    """判斷單一逐字是否為口頭禪（中文逐字比對或英文填充詞整字比對）。"""
+    text = (text or "").strip()
+    if not text:
+        return False
+    if all(ch in filler_chars for ch in text):
+        return True
+    return bool(_FILLER_LATIN.fullmatch(text))
+
+
+def find_filler_spans(seg_words, filler_chars: str = _FILLER_CJK) -> list:
+    """
+    找出段落逐字清單中口頭禪字詞的時間區間 [(start, end), ...]。
+
+    相鄰的口頭禪（如「呃⋯嗯」連著講）自動合併成一段，
+    供粗剪時整段剪除（Descript 式 filler-word removal）。
+    """
+    spans = []
+    for word in seg_words or []:
+        if not _is_filler_word(word.get("word", ""), filler_chars):
+            continue
+        start, end = float(word["start"]), float(word["end"])
+        if spans and start <= spans[-1][1] + 0.15:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], end))
+        else:
+            spans.append((start, end))
+    return spans
 
 
 def analyze(
@@ -438,6 +471,8 @@ def analyze(
             "text": seg["text"],
             "tags": tags,
             "fillers": fillers,
+            # 口頭禪字詞的逐字時間區間（粗剪可選擇整字剪除）。
+            "filler_spans": find_filler_spans(seg.get("words"), filler_chars),
             "score": 0.0,
             "keep": keep,
         })
@@ -460,6 +495,7 @@ def _silence_item(start: float, end: float) -> dict:
         "text": f"（冷場 {end - start:.1f} 秒，無人聲）",
         "tags": [TAG_SILENCE],
         "fillers": 0,
+        "filler_spans": [],
         "score": 0.0,
         "keep": False,
     }
@@ -498,11 +534,41 @@ def search_segments(items, keyword: str) -> list:
 # 匯出：粗剪影片 / EDL / CSV / YouTube 章節
 # ---------------------------------------------------------------------------
 
-def kept_ranges(items, padding: float = _CUT_PADDING) -> list:
+# 口頭禪剪除的細節門檻：太短的口頭禪不剪（跳剪會抖動）、剪點內縮緩衝、
+# 剪除後留下的過短殘片直接捨棄。
+_FILLER_MIN_CUT = 0.12
+_FILLER_TRIM_PAD = 0.02
+_MIN_FRAGMENT = 0.10
+
+
+def _subtract_spans(ranges: list, spans: list) -> list:
+    """從 (start, end) 區間清單中挖掉指定的時間段，回傳新的區間清單。"""
+    for cut_start, cut_end in spans:
+        updated = []
+        for start, end in ranges:
+            if cut_end <= start or cut_start >= end:
+                updated.append((start, end))
+                continue
+            if cut_start - start >= _MIN_FRAGMENT:
+                updated.append((start, cut_start))
+            if end - cut_end >= _MIN_FRAGMENT:
+                updated.append((cut_end, end))
+        ranges = updated
+    return ranges
+
+
+def kept_ranges(items, padding: float = _CUT_PADDING,
+                drop_filler_words: bool = False) -> list:
     """
     取出保留段落的 (start, end) 區間：前後加緩衝、相鄰或重疊區間自動合併。
+
+    drop_filler_words 為真時，另把保留段落內的口頭禪字詞時間段挖掉
+    （Descript 式 filler-word removal）：只剪長度足夠的口頭禪
+    （≥ 0.12 秒，太短的跳剪會造成畫面抖動），剪點向內縮小緩衝
+    避免切到相鄰字的字頭字尾。
     """
     ranges = []
+    filler_spans = []
     for item in items:
         if not item["keep"]:
             continue
@@ -512,6 +578,14 @@ def kept_ranges(items, padding: float = _CUT_PADDING) -> list:
             ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
         else:
             ranges.append((start, end))
+        if drop_filler_words:
+            for span_start, span_end in item.get("filler_spans") or []:
+                if span_end - span_start < _FILLER_MIN_CUT:
+                    continue
+                filler_spans.append((span_start + _FILLER_TRIM_PAD,
+                                     span_end - _FILLER_TRIM_PAD))
+    if filler_spans:
+        ranges = _subtract_spans(ranges, filler_spans)
     return ranges
 
 
@@ -520,6 +594,7 @@ def cut_rough_video(
     items: list,
     output_path: str,
     progress_cb: Optional[Callable[[float, str], None]] = None,
+    drop_filler_words: bool = False,
 ) -> str:
     """
     以 ffmpeg 把保留段落串接成粗剪影片（自動跳剪掉捨棄的段落）。
@@ -529,10 +604,11 @@ def cut_rough_video(
         items: analyze() 的段落清單（依 keep 旗標取捨）。
         output_path: 輸出影片路徑（建議 .mp4）。
         progress_cb: (ratio, message) 進度回呼。
+        drop_filler_words: 同時剪掉保留段落內的口頭禪字詞（呃、嗯…）。
     """
     if not ffmpeg_available():
         raise RuntimeError("找不到 ffmpeg，請先安裝並加入系統 PATH。")
-    ranges = kept_ranges(items)
+    ranges = kept_ranges(items, drop_filler_words=drop_filler_words)
     if not ranges:
         raise ValueError("沒有任何保留的段落可輸出。")
 
@@ -592,11 +668,15 @@ def _timecode(seconds: float, fps: int) -> str:
 
 
 def export_edl(items, path: str, clip_name: str = "SOURCE",
-               fps: int = 30, title: str = "ROUGH CUT") -> str:
+               fps: int = 30, title: str = "ROUGH CUT",
+               drop_filler_words: bool = False) -> str:
     """
     匯出 CMX3600 EDL：保留段落依序接成時間軸，可匯入 Premiere / Resolve。
+
+    drop_filler_words 為真時，時間軸同步剪掉口頭禪字詞（與粗剪一致）。
     """
-    ranges = kept_ranges(items, padding=0.0)
+    ranges = kept_ranges(items, padding=0.0,
+                         drop_filler_words=drop_filler_words)
     if not ranges:
         raise ValueError("沒有任何保留的段落可輸出。")
     lines = [f"TITLE: {title}", "FCM: NON-DROP FRAME", ""]
