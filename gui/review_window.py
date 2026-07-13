@@ -26,6 +26,8 @@ from subtitle.pipeline import resolve_output_dir, unique_path
 from subtitle.publisher import build_publish_pack, resolve_publish_settings
 from subtitle.segmenter import build_cues_from_words
 from subtitle.shorts import cut_vertical_clip, resolve_shorts_settings
+from subtitle.thumbnails import (generate_thumbnails,
+                                 resolve_thumbnail_settings)
 from subtitle.review import (CATEGORY_COLORS, CATEGORY_LABELS,
                              TAG_HIGHLIGHT, TAG_REPEATED, TAG_SILENCE,
                              analyze, build_chapters, build_review_cues,
@@ -44,8 +46,8 @@ class ReviewWindow(tk.Toplevel):
     def __init__(self, master, config_data, media_path):
         super().__init__(master)
         self.title("審片助手：快速找可用片段")
-        # 預設尺寸需容納偵測設定（4 列，含訊號權重）、時間軸與 3 排輸出按鈕。
-        self.geometry("1020x790")
+        # 預設尺寸需容納偵測設定（4 列，含訊號權重）、時間軸與 4 排輸出按鈕。
+        self.geometry("1020x820")
         self.minsize(840, 580)
 
         self.config_data = config_data
@@ -312,6 +314,37 @@ class ReviewWindow(tk.Toplevel):
         shorts_btn.pack(side="left", padx=(8, 3))
         self.export_buttons.append(shorts_btn)
 
+        # 第四排：封面候選圖擷取（精彩高峰＋畫面清晰度自動評分）。
+        thumbs_cfg = resolve_thumbnail_settings(self.config_data)
+        row4 = ttk.Frame(exports)
+        row4.pack(fill="x", pady=(4, 0))
+        tk.Label(row4, text="封面候選:").pack(side="left")
+        tk.Label(row4, text="張數").pack(side="left", padx=(6, 2))
+        self.thumb_count_var = tk.IntVar(value=thumbs_cfg["count"])
+        tk.Spinbox(
+            row4, from_=2, to=12, increment=1, width=4,
+            textvariable=self.thumb_count_var).pack(side="left")
+        tk.Label(row4, text="最小間隔").pack(side="left", padx=(8, 2))
+        self.thumb_spacing_var = tk.DoubleVar(
+            value=thumbs_cfg["min_spacing"])
+        tk.Spinbox(
+            row4, from_=1.0, to=120.0, increment=1.0, width=5,
+            textvariable=self.thumb_spacing_var, format="%.0f",
+        ).pack(side="left")
+        tk.Label(row4, text="秒").pack(side="left")
+        self.thumb_highlight_var = tk.BooleanVar(
+            value=thumbs_cfg["prefer_highlights"])
+        tk.Checkbutton(
+            row4, text="優先取精彩段落",
+            variable=self.thumb_highlight_var).pack(side="left", padx=(8, 0))
+        thumbs_btn = tk.Button(
+            row4, text="擷取封面候選圖",
+            command=self._on_export_thumbnails, state="disabled")
+        thumbs_btn.pack(side="left", padx=(8, 3))
+        self.export_buttons.append(thumbs_btn)
+        tk.Label(row4, text="（自動挑清晰、有內容的畫面，輸出 PNG）",
+                 fg="#666666").pack(side="left")
+
     # ==================================================================
     # 分析
     # ==================================================================
@@ -400,6 +433,19 @@ class ReviewWindow(tk.Toplevel):
                     messagebox.showinfo(
                         "短片輸出完成",
                         "已輸出直式短片：\n" + "\n".join(payload),
+                        parent=self)
+                elif kind == "thumbs_done":
+                    self._set_processing(False)
+                    self.status_var.set(
+                        f"封面候選輸出完成，共 {len(payload)} 張。")
+                    lines = [
+                        (f"{os.path.basename(item['path'])}"
+                         f"（{int(item['time']) // 60:02d}:"
+                         f"{int(item['time']) % 60:02d} 處）")
+                        for item in payload]
+                    messagebox.showinfo(
+                        "封面候選完成",
+                        "已依畫面清晰度排序輸出候選圖：\n" + "\n".join(lines),
                         parent=self)
                 elif kind == "error":
                     self._set_processing(False)
@@ -726,6 +772,59 @@ class ReviewWindow(tk.Toplevel):
             self.result_queue.put(("shorts_done", outputs))
         except Exception as exc:
             logger.exception("直式短片輸出失敗")
+            self.result_queue.put(("error", str(exc)))
+
+    def _collect_thumbnail_settings(self):
+        """把介面上的封面候選參數寫回設定並存檔，回傳解析後的 settings。"""
+        current = dict(self.config_data.get("thumbnails", {}))
+        try:
+            count = int(self.thumb_count_var.get())
+        except (tk.TclError, ValueError):
+            count = 6
+        try:
+            spacing = float(self.thumb_spacing_var.get())
+        except (tk.TclError, ValueError):
+            spacing = 8.0
+        current.update({
+            "count": count,
+            "min_spacing": spacing,
+            "prefer_highlights": bool(self.thumb_highlight_var.get()),
+        })
+        self.config_data["thumbnails"] = current
+        try:
+            save_config(self.config_data)
+        except OSError:
+            pass
+        return resolve_thumbnail_settings(self.config_data)
+
+    def _on_export_thumbnails(self):
+        """擷取封面候選圖：精彩高峰取樣、清晰度評分，輸出 PNG。"""
+        if self.is_processing or not self.items:
+            return
+        if not ffmpeg_available():
+            messagebox.showerror(
+                "找不到 ffmpeg",
+                "擷取封面候選需要 ffmpeg。請依說明安裝並加入系統 PATH。",
+                parent=self)
+            return
+        settings = self._collect_thumbnail_settings()
+        self._set_processing(True)
+        threading.Thread(
+            target=self._thumbs_worker, args=(settings,),
+            daemon=True).start()
+
+    def _thumbs_worker(self, settings):
+        try:
+            results = generate_thumbnails(
+                self.media_path, self.items, self.media_duration,
+                output_paths=lambda rank: self._default_path(
+                    f"_封面{rank:02d}", ".png"),
+                settings=settings,
+                progress_cb=lambda ratio, msg: self.result_queue.put(
+                    ("status", (msg, ratio))))
+            self.result_queue.put(("thumbs_done", results))
+        except Exception as exc:
+            logger.exception("封面候選輸出失敗")
             self.result_queue.put(("error", str(exc)))
 
     def _on_export_html(self):

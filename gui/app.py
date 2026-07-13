@@ -38,6 +38,7 @@ from subtitle.pipeline import run_batch
 from subtitle.segmenter import build_cues_from_words
 from subtitle.textedit import apply_corrections
 from subtitle.transcriber import transcribe
+from gui.audiocheck_dialog import AudioCheckDialog
 from gui.cue_editor import CueEditDialog
 from gui.music_dialog import MusicDuckingDialog
 from gui.preview_panel import PreviewPanel
@@ -164,6 +165,10 @@ class SrtApp(tk.Tk):
         ttk.Button(
             toolbar, text="配樂助手（自動閃避）", width=18,
             command=self._open_music_dialog,
+        ).pack(side="right", padx=(0, 8))
+        ttk.Button(
+            toolbar, text="音訊健檢（上片前）", width=16,
+            command=self._open_audiocheck_dialog,
         ).pack(side="right", padx=(0, 8))
         ttk.Label(
             toolbar, text=f"v{APP_VERSION}", foreground="#888888",
@@ -598,6 +603,12 @@ class SrtApp(tk.Tk):
         files = self._selected_files()
         video_path = files[0] if files and os.path.exists(files[0]) else ""
         MusicDuckingDialog(self, self.config_data, video_path)
+
+    def _open_audiocheck_dialog(self):
+        """開啟音訊健檢：以第一個選取檔案為預設素材（可留空自行選擇）。"""
+        files = self._selected_files()
+        media_path = files[0] if files and os.path.exists(files[0]) else ""
+        AudioCheckDialog(self, self.config_data, media_path)
 
     def _on_style_change(self, style):
         """樣式面板變動時：更新設定、即時存檔、重繪預覽。"""

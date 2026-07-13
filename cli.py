@@ -12,6 +12,9 @@
     python main.py --formats srt,ass 影片.mp4     # 本次改匯出 SRT 與 ASS
     python main.py --output-dir D:/out 影片.mp4   # 本次改輸出到指定資料夾
     python main.py --review 素材1.mp4 素材2.mp4   # 批次審片：輸出片段分析 CSV
+    python main.py --audiocheck 影片.mp4          # 上片前音訊健檢（免轉錄）
+    python main.py --thumbnails 影片.mp4          # 封面候選圖（免轉錄）
+    python main.py --review --thumbnails 素材.mp4 # 審片＋精彩段落封面候選
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
 """
@@ -23,9 +26,12 @@ import os
 import sys
 
 from config import load_config
+from subtitle.audiocheck import format_report, run_audio_check
 from subtitle.media import probe_duration
 from subtitle.pipeline import EXPORT_FORMATS, run_batch, unique_path
 from subtitle.publisher import build_publish_pack, resolve_publish_settings
+from subtitle.thumbnails import (generate_thumbnails,
+                                 resolve_thumbnail_settings)
 from subtitle.review import (analyze, build_chapters, collect_highlights,
                              compute_loudness, export_batch_csv,
                              export_batch_html, export_csv,
@@ -68,6 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--review", action="store_true",
         help="審片模式：不產字幕，改為分析素材（冷場、重複拍攝、口頭禪）"
              "並輸出「檔名_審片清單.csv」，供快速挑選可用片段。")
+    parser.add_argument(
+        "--audiocheck", action="store_true",
+        help="音訊健檢：檢查爆音、音量、底噪與聲道平衡，"
+             "輸出「檔名_音訊健檢.txt」報告；可單獨使用或與 --review 併用。")
+    parser.add_argument(
+        "--thumbnails", action="store_true",
+        help="封面候選：自動挑清晰畫面輸出「檔名_封面NN.png」候選圖；"
+             "與 --review 併用時優先取精彩段落，單獨使用時整片均勻取樣。")
     return parser
 
 
@@ -106,7 +120,16 @@ def main(argv=None) -> int:
         print(f"{percent}{message}", flush=True)
 
     if args.review:
-        results = _run_review_batch(args.files, config, report)
+        results = _run_review_batch(
+            args.files, config, report,
+            with_audiocheck=args.audiocheck,
+            with_thumbnails=args.thumbnails)
+    elif args.audiocheck or args.thumbnails:
+        # 免轉錄的輕量工具模式：健檢與封面候選都只需 ffmpeg 掃描。
+        results = _run_tools_batch(
+            args.files, config, report,
+            do_audiocheck=args.audiocheck,
+            do_thumbnails=args.thumbnails)
     else:
         results = run_batch(
             args.files, config, mode=args.mode, report=report)
@@ -140,7 +163,69 @@ def main(argv=None) -> int:
     return 1 if failed else 0
 
 
-def _run_review_batch(files: list, config: dict, report) -> list:
+def _export_audiocheck(path: str, config: dict, out_dir: str,
+                       base: str) -> str:
+    """對單檔跑音訊健檢並輸出報告文字檔，回傳報告路徑。"""
+    result = run_audio_check(path, config)
+    text = format_report(result, os.path.basename(path))
+    check_path = unique_path(os.path.join(out_dir, f"{base}_音訊健檢.txt"))
+    with open(check_path, "w", encoding="utf-8") as fp:
+        fp.write(text)
+    print(text, flush=True)
+    return check_path
+
+
+def _export_thumbnails(path: str, items, duration: float, config: dict,
+                       out_dir: str, base: str) -> list:
+    """對單檔擷取封面候選圖，回傳輸出路徑清單。"""
+    results = generate_thumbnails(
+        path, items, duration,
+        output_paths=lambda rank: unique_path(
+            os.path.join(out_dir, f"{base}_封面{rank:02d}.png")),
+        settings=resolve_thumbnail_settings(config))
+    return [item["path"] for item in results]
+
+
+def _run_tools_batch(files: list, config: dict, report,
+                     do_audiocheck: bool = False,
+                     do_thumbnails: bool = False) -> list:
+    """輕量工具批次（免轉錄）：音訊健檢與封面候選，回傳與 run_batch 同構的結果。"""
+    automation = config.get("automation", {})
+    results = []
+    total = len(files)
+    for index, path in enumerate(files):
+        prefix = (f"[{index + 1}/{total}] {os.path.basename(path)}："
+                  if total > 1 else "")
+        try:
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"找不到檔案：{path}")
+            out_dir = (automation.get("output_dir") or "").strip() \
+                or os.path.dirname(os.path.abspath(path))
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(path))[0]
+            exports = []
+            if do_audiocheck:
+                report(f"{prefix}音訊健檢中...")
+                exports.append(_export_audiocheck(path, config, out_dir, base))
+            if do_thumbnails:
+                report(f"{prefix}擷取封面候選中（整片均勻取樣）...")
+                exports.extend(_export_thumbnails(
+                    path, None, probe_duration(path), config, out_dir, base))
+            report(f"{prefix}完成", (index + 1) / total)
+            results.append({
+                "path": path, "ok": True, "error": None,
+                "result": {"exports": exports, "burned": None, "cues": []},
+            })
+        except Exception as exc:  # 單檔失敗不中斷批次。
+            results.append(
+                {"path": path, "ok": False, "result": None, "error": str(exc)})
+            report(f"{prefix}失敗：{exc}", (index + 1) / total)
+    return results
+
+
+def _run_review_batch(files: list, config: dict, report,
+                      with_audiocheck: bool = False,
+                      with_thumbnails: bool = False) -> list:
     """審片模式批次：逐檔轉錄、分析並輸出審片清單 CSV，回傳與 run_batch 同構的結果。"""
     automation = config.get("automation", {})
     settings = resolve_settings(config)
@@ -181,6 +266,14 @@ def _run_review_batch(files: list, config: dict, report) -> list:
                     items, settings=resolve_publish_settings(config),
                     chapters=chapters, source_name=os.path.basename(path),
                     extra_words=settings["extra_excite_words"]))
+            exports = [csv_path, html_path, pack_path]
+            if with_audiocheck:
+                report(f"{prefix}音訊健檢中...")
+                exports.append(_export_audiocheck(path, config, out_dir, base))
+            if with_thumbnails:
+                report(f"{prefix}擷取封面候選中（優先精彩段落）...")
+                exports.extend(_export_thumbnails(
+                    path, items, duration, config, out_dir, base))
             dropped = sum(1 for item in items if not item["keep"])
             report(f"{prefix}分析完成，共 {len(items)} 段（建議捨棄 {dropped} 段）",
                    (index + 1) / total)
@@ -188,8 +281,7 @@ def _run_review_batch(files: list, config: dict, report) -> list:
             last_out_dir = out_dir
             results.append({
                 "path": path, "ok": True, "error": None,
-                "result": {"exports": [csv_path, html_path, pack_path],
-                           "burned": None, "cues": []},
+                "result": {"exports": exports, "burned": None, "cues": []},
             })
         except Exception as exc:  # 單檔失敗不中斷批次。
             results.append(
