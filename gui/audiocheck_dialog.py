@@ -19,6 +19,8 @@ from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
 from subtitle.audiocheck import (format_report, resolve_audiocheck_settings,
                                  run_audio_check)
+from subtitle.audiofix import (fix_audio, resolve_audiofix_settings,
+                               suggest_output_path)
 from subtitle.burner import ffmpeg_available
 from subtitle.pipeline import unique_path
 
@@ -36,8 +38,8 @@ class AudioCheckDialog(tk.Toplevel):
     def __init__(self, master, config_data, media_path=""):
         super().__init__(master)
         self.title("音訊健檢：上片前檢查爆音、音量與底噪")
-        self.geometry("640x560")
-        self.minsize(560, 460)
+        self.geometry("660x680")
+        self.minsize(600, 560)
         self.transient(master)
 
         self.config_data = config_data
@@ -125,6 +127,43 @@ class AudioCheckDialog(tk.Toplevel):
         self.report.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
+        # 音訊修復：健檢發現問題後不必離開程式，直接輸出修復版。
+        fix_settings = resolve_audiofix_settings(config_data)
+        fix_frame = ttk.LabelFrame(
+            body, text="音訊修復（畫面原樣複製、僅處理音軌）",
+            padding=(10, 6))
+        fix_frame.pack(fill="x", pady=(8, 0))
+        fix_row = ttk.Frame(fix_frame)
+        fix_row.pack(fill="x")
+        self.fix_denoise_var = tk.BooleanVar(value=fix_settings["denoise"])
+        tk.Checkbutton(fix_row, text="降噪",
+                       variable=self.fix_denoise_var).pack(side="left")
+        self.fix_strength_var = tk.DoubleVar(
+            value=fix_settings["denoise_strength"])
+        tk.Spinbox(fix_row, from_=6.0, to=40.0, increment=1.0, width=4,
+                   textvariable=self.fix_strength_var,
+                   format="%.0f").pack(side="left", padx=(2, 2))
+        tk.Label(fix_row, text="dB").pack(side="left", padx=(0, 10))
+        self.fix_highpass_var = tk.BooleanVar(value=fix_settings["highpass"])
+        tk.Checkbutton(fix_row, text="去低頻隆隆",
+                       variable=self.fix_highpass_var).pack(side="left")
+        self.fix_hz_var = tk.DoubleVar(value=fix_settings["highpass_hz"])
+        tk.Spinbox(fix_row, from_=40.0, to=200.0, increment=10.0, width=5,
+                   textvariable=self.fix_hz_var,
+                   format="%.0f").pack(side="left", padx=(2, 2))
+        tk.Label(fix_row, text="Hz").pack(side="left", padx=(0, 10))
+        self.fix_loudnorm_var = tk.BooleanVar(value=fix_settings["loudnorm"])
+        tk.Checkbutton(fix_row, text="響度正規化",
+                       variable=self.fix_loudnorm_var).pack(side="left")
+        self.fix_btn = ttk.Button(fix_row, text="輸出修復版",
+                                  command=self._on_fix)
+        self.fix_btn.pack(side="right")
+        tk.Label(
+            fix_frame, fg="#666666", anchor="w", justify="left",
+            text="降噪對冷氣聲、電流聲等穩態底噪有效；強度過高人聲會發悶，"
+                 "建議先用預設值試聽。",
+        ).pack(fill="x", pady=(2, 0))
+
         buttons = ttk.Frame(body)
         buttons.pack(fill="x", pady=(8, 0))
         self.run_btn = ttk.Button(buttons, text="開始健檢",
@@ -163,6 +202,13 @@ class AudioCheckDialog(tk.Toplevel):
             "clip_peak_db": safe(self.clip_var, -0.5),
             "balance_db": safe(self.balance_var, 6.0),
         }
+        self.config_data["audiofix"] = {
+            "denoise": bool(self.fix_denoise_var.get()),
+            "denoise_strength": safe(self.fix_strength_var, 12.0),
+            "highpass": bool(self.fix_highpass_var.get()),
+            "highpass_hz": safe(self.fix_hz_var, 80.0),
+            "loudnorm": bool(self.fix_loudnorm_var.get()),
+        }
         try:
             save_config(self.config_data)
         except OSError:
@@ -189,6 +235,45 @@ class AudioCheckDialog(tk.Toplevel):
             target=self._run_worker, args=(media_path, config),
             daemon=True).start()
 
+    def _on_fix(self):
+        """輸出修復版：依勾選套用降噪／去低頻／響度正規化。"""
+        if self.is_processing:
+            return
+        media_path = self.media_var.get().strip()
+        if not media_path or not os.path.exists(media_path):
+            messagebox.showinfo("提示", "請選擇有效的影音檔。", parent=self)
+            return
+        if not ffmpeg_available():
+            show_friendly_error(
+                self, "音訊修復需要 ffmpeg",
+                RuntimeError("找不到 ffmpeg，請先安裝並加入系統 PATH。"),
+                on_install_ffmpeg=self._open_ffmpeg_installer)
+            return
+        config = self._collect_settings()
+        fix_settings = resolve_audiofix_settings(config)
+        if not (fix_settings["denoise"] or fix_settings["highpass"]
+                or fix_settings["loudnorm"]):
+            messagebox.showinfo(
+                "提示", "請至少勾選一個修復項目（降噪、去低頻或響度正規化）。",
+                parent=self)
+            return
+        output = unique_path(suggest_output_path(media_path))
+        self._set_processing(True)
+        threading.Thread(
+            target=self._fix_worker, args=(media_path, output, fix_settings),
+            daemon=True).start()
+
+    def _fix_worker(self, media_path, output, fix_settings):
+        try:
+            def report(ratio, message):
+                self.result_queue.put(("status", (message, ratio)))
+            fix_audio(media_path, output, settings=fix_settings,
+                      progress_cb=report)
+            self.result_queue.put(("fix_done", output))
+        except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
+            logger.exception("音訊修復失敗")
+            self.result_queue.put(("error", exc))
+
     def _run_worker(self, media_path, config):
         try:
             def report(ratio, message):
@@ -213,6 +298,14 @@ class AudioCheckDialog(tk.Toplevel):
                     self._set_processing(False)
                     self._show_report(payload)
                     self.status_var.set("健檢完成，結果如下。")
+                elif kind == "fix_done":
+                    self._set_processing(False)
+                    self.status_var.set(f"修復版已輸出：{payload}")
+                    messagebox.showinfo(
+                        "修復完成",
+                        f"已輸出修復版：\n{payload}\n\n"
+                        "建議試聽確認降噪強度合適（過強人聲會發悶），"
+                        "也可對修復版再跑一次健檢比對。", parent=self)
                 elif kind == "error":
                     self._set_processing(False)
                     self.status_var.set("健檢失敗。")
@@ -272,7 +365,9 @@ class AudioCheckDialog(tk.Toplevel):
 
     def _set_processing(self, processing):
         self.is_processing = processing
-        self.run_btn.configure(state="disabled" if processing else "normal")
+        state = "disabled" if processing else "normal"
+        self.run_btn.configure(state=state)
+        self.fix_btn.configure(state=state)
 
     def _on_close(self):
         if getattr(self, "_poll_job", None):

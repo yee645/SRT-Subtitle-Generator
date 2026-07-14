@@ -14,6 +14,7 @@
     python main.py --review 素材1.mp4 素材2.mp4   # 批次審片：輸出片段分析 CSV
     python main.py --audiocheck 影片.mp4          # 上片前音訊健檢（免轉錄）
     python main.py --thumbnails 影片.mp4          # 封面候選圖（免轉錄）
+    python main.py --audiofix 影片.mp4            # 音訊修復版（降噪等，免轉錄）
     python main.py --review --thumbnails 素材.mp4 # 審片＋精彩段落封面候選
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
@@ -26,7 +27,10 @@ import os
 import sys
 
 from config import load_config
+from subtitle.adbreaks import resolve_adbreak_settings, suggest_ad_breaks
 from subtitle.audiocheck import format_report, run_audio_check
+from subtitle.audiofix import (fix_audio, resolve_audiofix_settings,
+                               suggest_output_path)
 from subtitle.errors import format_error_text
 from subtitle.ffmpeg_setup import ensure_ffmpeg_on_path
 from subtitle.media import probe_duration
@@ -84,6 +88,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--thumbnails", action="store_true",
         help="封面候選：自動挑清晰畫面輸出「檔名_封面NN.png」候選圖；"
              "與 --review 併用時優先取精彩段落，單獨使用時整片均勻取樣。")
+    parser.add_argument(
+        "--audiofix", action="store_true",
+        help="音訊修復：依 config.json 的 audiofix 設定（降噪／去低頻／"
+             "響度正規化）輸出「檔名_修復」版本，畫面原樣複製。")
     return parser
 
 
@@ -128,12 +136,13 @@ def main(argv=None) -> int:
             args.files, config, report,
             with_audiocheck=args.audiocheck,
             with_thumbnails=args.thumbnails)
-    elif args.audiocheck or args.thumbnails:
-        # 免轉錄的輕量工具模式：健檢與封面候選都只需 ffmpeg 掃描。
+    elif args.audiocheck or args.thumbnails or args.audiofix:
+        # 免轉錄的輕量工具模式：健檢、封面候選與音訊修復都只需 ffmpeg。
         results = _run_tools_batch(
             args.files, config, report,
             do_audiocheck=args.audiocheck,
-            do_thumbnails=args.thumbnails)
+            do_thumbnails=args.thumbnails,
+            do_audiofix=args.audiofix)
     else:
         results = run_batch(
             args.files, config, mode=args.mode, report=report)
@@ -195,7 +204,8 @@ def _export_thumbnails(path: str, items, duration: float, config: dict,
 
 def _run_tools_batch(files: list, config: dict, report,
                      do_audiocheck: bool = False,
-                     do_thumbnails: bool = False) -> list:
+                     do_thumbnails: bool = False,
+                     do_audiofix: bool = False) -> list:
     """輕量工具批次（免轉錄）：音訊健檢與封面候選，回傳與 run_batch 同構的結果。"""
     automation = config.get("automation", {})
     results = []
@@ -218,6 +228,13 @@ def _run_tools_batch(files: list, config: dict, report,
                 report(f"{prefix}擷取封面候選中（整片均勻取樣）...")
                 exports.extend(_export_thumbnails(
                     path, None, probe_duration(path), config, out_dir, base))
+            if do_audiofix:
+                report(f"{prefix}輸出音訊修復版中...")
+                fix_out = unique_path(os.path.join(
+                    out_dir, os.path.basename(suggest_output_path(path))))
+                fix_audio(path, fix_out,
+                          settings=resolve_audiofix_settings(config))
+                exports.append(fix_out)
             report(f"{prefix}完成", (index + 1) / total)
             results.append({
                 "path": path, "ok": True, "error": None,
@@ -272,7 +289,10 @@ def _run_review_batch(files: list, config: dict, report,
                 fp.write(build_publish_pack(
                     items, settings=resolve_publish_settings(config),
                     chapters=chapters, source_name=os.path.basename(path),
-                    extra_words=settings["extra_excite_words"]))
+                    extra_words=settings["extra_excite_words"],
+                    ad_breaks=suggest_ad_breaks(
+                        items, duration,
+                        settings=resolve_adbreak_settings(config))))
             exports = [csv_path, html_path, pack_path]
             if with_audiocheck:
                 report(f"{prefix}音訊健檢中...")

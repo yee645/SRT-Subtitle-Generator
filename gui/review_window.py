@@ -20,6 +20,8 @@ from tkinter import filedialog, messagebox, ttk
 from config import save_config
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
+from subtitle.adbreaks import (MIDROLL_MIN_SECONDS, format_ad_breaks,
+                               resolve_adbreak_settings, suggest_ad_breaks)
 from subtitle.audio import DEFAULT_TARGET_LUFS
 from subtitle.burner import ffmpeg_available
 from subtitle.exporter import export as export_subtitle
@@ -48,8 +50,8 @@ class ReviewWindow(tk.Toplevel):
     def __init__(self, master, config_data, media_path):
         super().__init__(master)
         self.title("審片助手：快速找可用片段")
-        # 預設尺寸需容納偵測設定（4 列，含訊號權重）、時間軸與 4 排輸出按鈕。
-        self.geometry("1020x820")
+        # 預設尺寸需容納偵測設定（4 列，含訊號權重）、時間軸與 5 排輸出按鈕。
+        self.geometry("1020x850")
         self.minsize(840, 580)
 
         self.config_data = config_data
@@ -359,6 +361,33 @@ class ReviewWindow(tk.Toplevel):
         thumbs_btn.pack(side="left", padx=(8, 3))
         self.export_buttons.append(thumbs_btn)
         tk.Label(row4, text="（自動挑清晰、有內容的畫面，輸出 PNG）",
+                 fg="#666666").pack(side="left")
+
+        # 第五排：mid-roll 廣告插入點（放自然停頓處才容易被投放）。
+        ad_cfg = resolve_adbreak_settings(self.config_data)
+        row5 = ttk.Frame(exports)
+        row5.pack(fill="x", pady=(4, 0))
+        tk.Label(row5, text="廣告插入點:").pack(side="left")
+        tk.Label(row5, text="最小間隔").pack(side="left", padx=(6, 2))
+        self.ad_spacing_var = tk.DoubleVar(
+            value=ad_cfg["min_spacing_minutes"])
+        tk.Spinbox(
+            row5, from_=2.0, to=15.0, increment=0.5, width=5,
+            textvariable=self.ad_spacing_var, format="%.1f",
+        ).pack(side="left")
+        tk.Label(row5, text="分").pack(side="left")
+        tk.Label(row5, text="最多").pack(side="left", padx=(8, 2))
+        self.ad_max_var = tk.IntVar(value=ad_cfg["max_breaks"])
+        tk.Spinbox(
+            row5, from_=1, to=20, increment=1, width=4,
+            textvariable=self.ad_max_var).pack(side="left")
+        tk.Label(row5, text="個").pack(side="left")
+        ad_btn = tk.Button(
+            row5, text="複製廣告插入點",
+            command=self._on_copy_ad_breaks, state="disabled")
+        ad_btn.pack(side="left", padx=(8, 3))
+        self.export_buttons.append(ad_btn)
+        tk.Label(row5, text="（挑自然停頓處；YouTube 8 分鐘以上影片適用）",
                  fg="#666666").pack(side="left")
 
     # ==================================================================
@@ -847,6 +876,53 @@ class ReviewWindow(tk.Toplevel):
             logger.exception("封面候選輸出失敗")
             self.result_queue.put(("error", exc))
 
+    def _collect_adbreak_settings(self):
+        """把介面上的廣告插入點參數寫回設定並存檔，回傳解析後的 settings。"""
+        current = dict(self.config_data.get("adbreaks", {}))
+        try:
+            current["min_spacing_minutes"] = float(self.ad_spacing_var.get())
+        except (tk.TclError, ValueError):
+            pass
+        try:
+            current["max_breaks"] = int(self.ad_max_var.get())
+        except (tk.TclError, ValueError):
+            pass
+        self.config_data["adbreaks"] = current
+        try:
+            save_config(self.config_data)
+        except OSError:
+            pass
+        return resolve_adbreak_settings(self.config_data)
+
+    def _suggest_ad_breaks(self):
+        return suggest_ad_breaks(
+            self.items, self.media_duration,
+            settings=self._collect_adbreak_settings())
+
+    def _on_copy_ad_breaks(self):
+        """複製 mid-roll 廣告插入點建議（自然停頓處）到剪貼簿。"""
+        if not self.items:
+            return
+        breaks = self._suggest_ad_breaks()
+        if not breaks:
+            if self.media_duration < MIDROLL_MIN_SECONDS:
+                messagebox.showinfo(
+                    "不適用 mid-roll",
+                    "素材不足 8 分鐘——YouTube 只允許 8 分鐘以上的影片"
+                    "放置 mid-roll 廣告。", parent=self)
+            else:
+                messagebox.showinfo(
+                    "找不到合適的停頓",
+                    "在頭尾保留區之外找不到夠長的自然停頓。\n"
+                    "可調低「最小間隔」或於 config.json 調低 "
+                    "adbreaks.min_pause 後再試。", parent=self)
+            return
+        self.clipboard_clear()
+        self.clipboard_append(format_ad_breaks(breaks))
+        self.status_var.set(
+            f"已複製 {len(breaks)} 個廣告插入點建議，"
+            "可貼到記事本對照 YouTube Studio 手動放置。")
+
     def _on_export_html(self):
         """匯出 HTML 審片報告（彩色時間軸 + 統計 + 段落表，單檔可分享）。"""
         if not self.items:
@@ -951,7 +1027,8 @@ class ReviewWindow(tk.Toplevel):
             settings=resolve_publish_settings(self.config_data),
             chapters=chapters,
             source_name=os.path.basename(self.media_path),
-            extra_words=settings["extra_excite_words"])
+            extra_words=settings["extra_excite_words"],
+            ad_breaks=self._suggest_ad_breaks())
         path = self._default_path("_發佈包", ".txt")
         try:
             with open(path, "w", encoding="utf-8") as fp:
