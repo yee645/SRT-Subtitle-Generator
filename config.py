@@ -131,6 +131,22 @@ DEFAULT_CONFIG = {
         "clip_peak_db": -0.5,     # 峰值高於此值（dB）視為爆音風險
         "balance_db": 6.0,        # 左右聲道相差超過此值（dB）判定不平衡
     },
+    # 音訊修復設定（健檢視窗的一鍵修復）。
+    "audiofix": {
+        "denoise": True,            # FFT 頻譜降噪（afftdn）
+        "denoise_strength": 12.0,   # 降噪量（dB，6~40）：過高人聲會發悶
+        "highpass": True,           # 高通濾波去低頻隆隆（風切、震動）
+        "highpass_hz": 80.0,        # 高通截止頻率（Hz，40~200）
+        "loudnorm": False,          # 修復時同步做響度正規化
+    },
+    # mid-roll 廣告插入點建議（審片助手與發佈包用）。
+    "adbreaks": {
+        "min_spacing_minutes": 4.0, # 兩個廣告點的最小間隔（分鐘）
+        "max_breaks": 6,            # 建議數量上限
+        "min_pause": 1.2,           # 視為自然停頓的最短無人聲秒數
+        "skip_head_minutes": 2.0,   # 影片開頭不放廣告的長度（分鐘）
+        "skip_tail_minutes": 1.0,   # 影片結尾不放廣告的長度（分鐘）
+    },
     # Shorts 直式短片輸出設定（審片助手用）。
     "shorts": {
         "mode": "crop",           # crop＝裁切；blur＝模糊背景填滿

@@ -166,7 +166,8 @@ def evaluate(loudness: Optional[dict], astats: Optional[dict],
             f"量測 {lufs:.1f} LUFS，低於門檻 {settings['quiet_lufs']:.1f}。"
             "YouTube 只會把太大聲的調小、不會把太小聲的調大，"
             "觀眾得自己開大音量。",
-            "燒錄或輸出時勾選「響度正規化」（目標 -14 LUFS）即可自動修正。"))
+            "用健檢視窗下方的「音訊修復」勾選響度正規化一鍵輸出修復版；"
+            "或於燒錄／輸出時勾選「響度正規化」。"))
     elif lufs > -13.0:
         findings.append(_finding(
             LEVEL_WARN, "整體響度",
@@ -218,8 +219,8 @@ def evaluate(loudness: Optional[dict], astats: Optional[dict],
             f"底噪約 {noise:.1f} dB，高於門檻 "
             f"{settings['noise_floor_db']:.1f} dB，"
             "安靜段落可能聽得到嘶聲或環境噪音。",
-            "可在剪輯軟體以降噪濾鏡處理，或錄音時關閉風扇冷氣、"
-            "麥克風靠近嘴巴以提高訊噪比。"))
+            "用健檢視窗下方的「音訊修復」一鍵降噪輸出修復版；"
+            "重錄時關閉風扇冷氣、麥克風靠近嘴巴以提高訊噪比。"))
     else:
         findings.append(_finding(
             LEVEL_GOOD, "底噪檢查",

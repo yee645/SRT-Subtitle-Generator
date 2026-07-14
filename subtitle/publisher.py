@@ -185,7 +185,7 @@ def _format_chapters(chapters) -> str:
 
 def build_publish_pack(items, settings: Optional[dict] = None,
                        chapters=None, source_name: str = "",
-                       extra_words: str = "") -> str:
+                       extra_words: str = "", ad_breaks=None) -> str:
     """
     組出完整發佈包文字（標題候選＋描述草稿＋標籤清單）。
 
@@ -195,6 +195,8 @@ def build_publish_pack(items, settings: Optional[dict] = None,
         chapters: build_chapters() 的結果（可省略）。
         source_name: 素材檔名（僅作抬頭註記）。
         extra_words: 使用者自訂情緒詞（審片設定共用，作優先標籤）。
+        ad_breaks: suggest_ad_breaks() 的結果（可省略；影片不足
+                   8 分鐘時本來就是空清單，該區塊自動略去）。
     """
     settings = settings or resolve_publish_settings()
     titles = suggest_titles(items, settings["title_candidates"],
@@ -232,4 +234,11 @@ def build_publish_pack(items, settings: Optional[dict] = None,
     lines.append(f"【建議標籤（{len(tags)} 個，取自素材中實際講到的高頻詞，"
                  "上傳時可自行增刪）】")
     lines.append(", ".join(tags) if tags else "（素材中沒有足夠的高頻詞）")
+
+    # mid-roll 廣告插入點：放在自然停頓處才容易被投放（不足 8 分鐘略去）。
+    if ad_breaks:
+        from .adbreaks import format_ad_breaks
+        lines.append("")
+        lines.append("【mid-roll 廣告插入點（8 分鐘以上影片適用）】")
+        lines.append(format_ad_breaks(ad_breaks))
     return "\n".join(lines)

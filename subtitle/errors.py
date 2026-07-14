@@ -44,7 +44,7 @@ _ISSUE_URL = "https://github.com/yee645/SRT-Subtitle-Generator/issues"
 # ffmpeg 執行中失敗的訊息開頭（各模組 raise 時帶原始 stderr 尾段）。
 _FFMPEG_RUN_FAILURES = (
     "ffmpeg 燒錄失敗", "ffmpeg 粗剪失敗", "響度正規化失敗", "背景音樂混音失敗",
-    "短片輸出失敗", "畫面擷取失敗", "無法啟動 ffmpeg",
+    "短片輸出失敗", "畫面擷取失敗", "音訊修復失敗", "無法啟動 ffmpeg",
 )
 
 
