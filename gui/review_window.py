@@ -18,6 +18,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from config import save_config
+from gui.error_dialog import show_friendly_error
+from gui.ffmpeg_dialog import FfmpegInstallDialog
 from subtitle.audio import DEFAULT_TARGET_LUFS
 from subtitle.burner import ffmpeg_available
 from subtitle.exporter import export as export_subtitle
@@ -76,6 +78,20 @@ class ReviewWindow(tk.Toplevel):
             top, text=f"素材：{os.path.basename(self.media_path)}",
             font=("Microsoft JhengHei", 10, "bold"),
         ).pack(side="left")
+
+        # 前置檢查：缺 ffmpeg 時開窗即提示並提供一鍵安裝，不必等輸出才報錯。
+        self.ffmpeg_banner = None
+        if not ffmpeg_available():
+            banner = tk.Frame(self, bg="#fdf3d7")
+            banner.pack(fill="x", padx=10, pady=(2, 0))
+            tk.Label(
+                banner, bg="#fdf3d7", fg="#8a5a00", anchor="w",
+                text="⚠ 尚未安裝 ffmpeg：轉錄、粗剪、短片等功能需要它。",
+            ).pack(side="left", padx=6, pady=4)
+            tk.Button(banner, text="自動安裝 ffmpeg",
+                      command=self._open_ffmpeg_installer).pack(
+                side="right", padx=6, pady=2)
+            self.ffmpeg_banner = banner
 
         # 偵測設定：所有參數可調並記憶於 config.json，下次分析生效。
         settings = resolve_settings(self.config_data)
@@ -407,7 +423,7 @@ class ReviewWindow(tk.Toplevel):
             self.result_queue.put(("done", (items, duration, words)))
         except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
             logger.exception("審片分析失敗")
-            self.result_queue.put(("error", str(exc)))
+            self.result_queue.put(("error", exc))
 
     def _poll_queue(self):
         try:
@@ -450,10 +466,30 @@ class ReviewWindow(tk.Toplevel):
                 elif kind == "error":
                     self._set_processing(False)
                     self.status_var.set("處理失敗。")
-                    messagebox.showerror("處理失敗", payload, parent=self)
+                    show_friendly_error(
+                        self, "處理失敗", payload,
+                        on_install_ffmpeg=self._open_ffmpeg_installer)
         except queue.Empty:
             pass
         self._poll_job = self.after(120, self._poll_queue)
+
+    def _open_ffmpeg_installer(self):
+        """開啟 ffmpeg 一鍵安裝；完成後移除警告條。"""
+        def done():
+            if self.ffmpeg_banner is not None:
+                self.ffmpeg_banner.destroy()
+                self.ffmpeg_banner = None
+        FfmpegInstallDialog(self, on_done=done)
+
+    def _require_ffmpeg(self, action_label):
+        """輸出前檢查 ffmpeg；缺少時顯示友善錯誤（含一鍵安裝）。"""
+        if ffmpeg_available():
+            return True
+        show_friendly_error(
+            self, f"{action_label}需要 ffmpeg",
+            RuntimeError("找不到 ffmpeg，請先安裝並加入系統 PATH。"),
+            on_install_ffmpeg=self._open_ffmpeg_installer)
+        return False
 
     def _on_analyze_done(self, payload):
         items, duration, words = payload
@@ -618,11 +654,7 @@ class ReviewWindow(tk.Toplevel):
     def _on_rough_cut(self):
         if self.is_processing or not self.items:
             return
-        if not ffmpeg_available():
-            messagebox.showerror(
-                "找不到 ffmpeg",
-                "粗剪輸出需要 ffmpeg。請依說明安裝並加入系統 PATH。",
-                parent=self)
+        if not self._require_ffmpeg("粗剪輸出"):
             return
         output = self._default_path("_粗剪", ".mp4")
         self._set_processing(True)
@@ -643,11 +675,7 @@ class ReviewWindow(tk.Toplevel):
                 "本素材未偵測到精彩片段。可於清單手動確認內容，"
                 "或改用「輸出粗剪影片」。", parent=self)
             return
-        if not ffmpeg_available():
-            messagebox.showerror(
-                "找不到 ffmpeg",
-                "輸出合輯需要 ffmpeg。請依說明安裝並加入系統 PATH。",
-                parent=self)
+        if not self._require_ffmpeg("輸出合輯"):
             return
         output = self._default_path("_精彩合輯", ".mp4")
         self._set_processing(True)
@@ -678,7 +706,7 @@ class ReviewWindow(tk.Toplevel):
             self.result_queue.put(("cut_done", output))
         except Exception as exc:
             logger.exception("剪輯輸出失敗")
-            self.result_queue.put(("error", str(exc)))
+            self.result_queue.put(("error", exc))
 
     def _collect_shorts_settings(self):
         """把介面上的短片設定寫回設定並存檔，回傳解析後的 settings。"""
@@ -705,11 +733,7 @@ class ReviewWindow(tk.Toplevel):
         """輸出直式短片：選取的段落各輸出一支 9:16 影片；未選取時用精彩段落。"""
         if self.is_processing or not self.items:
             return
-        if not ffmpeg_available():
-            messagebox.showerror(
-                "找不到 ffmpeg",
-                "輸出短片需要 ffmpeg。請依說明安裝並加入系統 PATH。",
-                parent=self)
+        if not self._require_ffmpeg("輸出短片"):
             return
         selection = self.tree.selection()
         if selection:
@@ -772,7 +796,7 @@ class ReviewWindow(tk.Toplevel):
             self.result_queue.put(("shorts_done", outputs))
         except Exception as exc:
             logger.exception("直式短片輸出失敗")
-            self.result_queue.put(("error", str(exc)))
+            self.result_queue.put(("error", exc))
 
     def _collect_thumbnail_settings(self):
         """把介面上的封面候選參數寫回設定並存檔，回傳解析後的 settings。"""
@@ -801,11 +825,7 @@ class ReviewWindow(tk.Toplevel):
         """擷取封面候選圖：精彩高峰取樣、清晰度評分，輸出 PNG。"""
         if self.is_processing or not self.items:
             return
-        if not ffmpeg_available():
-            messagebox.showerror(
-                "找不到 ffmpeg",
-                "擷取封面候選需要 ffmpeg。請依說明安裝並加入系統 PATH。",
-                parent=self)
+        if not self._require_ffmpeg("擷取封面候選"):
             return
         settings = self._collect_thumbnail_settings()
         self._set_processing(True)
@@ -825,7 +845,7 @@ class ReviewWindow(tk.Toplevel):
             self.result_queue.put(("thumbs_done", results))
         except Exception as exc:
             logger.exception("封面候選輸出失敗")
-            self.result_queue.put(("error", str(exc)))
+            self.result_queue.put(("error", exc))
 
     def _on_export_html(self):
         """匯出 HTML 審片報告（彩色時間軸 + 統計 + 段落表，單檔可分享）。"""

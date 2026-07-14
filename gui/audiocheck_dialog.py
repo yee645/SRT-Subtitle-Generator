@@ -15,8 +15,11 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from config import save_config
+from gui.error_dialog import show_friendly_error
+from gui.ffmpeg_dialog import FfmpegInstallDialog
 from subtitle.audiocheck import (format_report, resolve_audiocheck_settings,
                                  run_audio_check)
+from subtitle.burner import ffmpeg_available
 from subtitle.pipeline import unique_path
 
 logger = logging.getLogger(__name__)
@@ -54,6 +57,20 @@ class AudioCheckDialog(tk.Toplevel):
             side="left", fill="x", expand=True, padx=(6, 4))
         ttk.Button(row_file, text="瀏覽...", width=8,
                    command=self._choose_media).pack(side="left")
+
+        # 前置檢查：缺 ffmpeg 時開窗即提示並提供一鍵安裝。
+        self.ffmpeg_banner = None
+        if not ffmpeg_available():
+            banner = tk.Frame(body, bg="#fdf3d7")
+            banner.pack(fill="x", pady=(8, 0))
+            tk.Label(
+                banner, bg="#fdf3d7", fg="#8a5a00", anchor="w",
+                text="⚠ 尚未安裝 ffmpeg：音訊健檢需要它才能量測音軌。",
+            ).pack(side="left", padx=6, pady=4)
+            tk.Button(banner, text="自動安裝 ffmpeg",
+                      command=self._open_ffmpeg_installer).pack(
+                side="right", padx=6, pady=2)
+            self.ffmpeg_banner = banner
 
         # 判定門檻（自動記憶）：不同錄音環境可自行放寬或收緊。
         options = ttk.LabelFrame(body, text="判定門檻（自動記憶）",
@@ -160,6 +177,12 @@ class AudioCheckDialog(tk.Toplevel):
         if not media_path or not os.path.exists(media_path):
             messagebox.showinfo("提示", "請選擇有效的影音檔。", parent=self)
             return
+        if not ffmpeg_available():
+            show_friendly_error(
+                self, "音訊健檢需要 ffmpeg",
+                RuntimeError("找不到 ffmpeg，請先安裝並加入系統 PATH。"),
+                on_install_ffmpeg=self._open_ffmpeg_installer)
+            return
         config = self._collect_settings()
         self._set_processing(True)
         threading.Thread(
@@ -175,7 +198,7 @@ class AudioCheckDialog(tk.Toplevel):
             self.result_queue.put(("done", text))
         except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
             logger.exception("音訊健檢失敗")
-            self.result_queue.put(("error", str(exc)))
+            self.result_queue.put(("error", exc))
 
     def _poll_queue(self):
         try:
@@ -193,10 +216,20 @@ class AudioCheckDialog(tk.Toplevel):
                 elif kind == "error":
                     self._set_processing(False)
                     self.status_var.set("健檢失敗。")
-                    messagebox.showerror("音訊健檢", payload, parent=self)
+                    show_friendly_error(
+                        self, "音訊健檢失敗", payload,
+                        on_install_ffmpeg=self._open_ffmpeg_installer)
         except queue.Empty:
             pass
         self._poll_job = self.after(120, self._poll_queue)
+
+    def _open_ffmpeg_installer(self):
+        """開啟 ffmpeg 一鍵安裝；完成後移除警告條。"""
+        def done():
+            if self.ffmpeg_banner is not None:
+                self.ffmpeg_banner.destroy()
+                self.ffmpeg_banner = None
+        FfmpegInstallDialog(self, on_done=done)
 
     def _show_report(self, text):
         self.report_text = text

@@ -15,7 +15,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from config import save_config
+from gui.error_dialog import show_friendly_error
+from gui.ffmpeg_dialog import FfmpegInstallDialog
 from subtitle.audio import mix_background_music, resolve_ducking_settings
+from subtitle.burner import ffmpeg_available
 from subtitle.pipeline import unique_path
 
 logger = logging.getLogger(__name__)
@@ -157,6 +160,12 @@ class MusicDuckingDialog(tk.Toplevel):
         if not music_path or not os.path.exists(music_path):
             messagebox.showinfo("提示", "請選擇有效的背景音樂檔。", parent=self)
             return
+        if not ffmpeg_available():
+            show_friendly_error(
+                self, "配樂混音需要 ffmpeg",
+                RuntimeError("找不到 ffmpeg，請先安裝並加入系統 PATH。"),
+                on_install_ffmpeg=lambda: FfmpegInstallDialog(self))
+            return
         settings = self._collect_settings()
         base, ext = os.path.splitext(video_path)
         output_path = unique_path(f"{base}_配樂{ext or '.mp4'}")
@@ -177,7 +186,7 @@ class MusicDuckingDialog(tk.Toplevel):
             self.result_queue.put(("done", output_path))
         except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
             logger.exception("配樂混音失敗")
-            self.result_queue.put(("error", str(exc)))
+            self.result_queue.put(("error", exc))
 
     def _poll_queue(self):
         try:
@@ -196,7 +205,9 @@ class MusicDuckingDialog(tk.Toplevel):
                 elif kind == "error":
                     self._set_processing(False)
                     self.status_var.set("混音失敗。")
-                    messagebox.showerror("配樂助手", payload, parent=self)
+                    show_friendly_error(
+                        self, "配樂混音失敗", payload,
+                        on_install_ffmpeg=lambda: FfmpegInstallDialog(self))
         except queue.Empty:
             pass
         self._poll_job = self.after(120, self._poll_queue)
