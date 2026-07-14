@@ -27,6 +27,8 @@ import sys
 
 from config import load_config
 from subtitle.audiocheck import format_report, run_audio_check
+from subtitle.errors import format_error_text
+from subtitle.ffmpeg_setup import ensure_ffmpeg_on_path
 from subtitle.media import probe_duration
 from subtitle.pipeline import EXPORT_FORMATS, run_batch, unique_path
 from subtitle.publisher import build_publish_pack, resolve_publish_settings
@@ -112,6 +114,8 @@ def _apply_overrides(config: dict, args: argparse.Namespace) -> None:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    # 先前「自動安裝 ffmpeg」裝好的執行檔在此生效（不改動系統 PATH）。
+    ensure_ffmpeg_on_path()
     config = load_config()
     _apply_overrides(config, args)
 
@@ -147,7 +151,10 @@ def main(argv=None) -> int:
         else:
             failed += 1
             lines.append(f"✘ {item['path']}")
-            lines.append(f"    原因：{item['error']}")
+            # 翻譯成「原因＋解法」，取代原始技術訊息。
+            lines.extend(f"    {line}"
+                         for line in format_error_text(
+                             item["error"]).splitlines())
     total = len(results)
     summary = f"共 {total} 個檔案，成功 {total - failed}、失敗 {failed}。"
 

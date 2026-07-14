@@ -39,6 +39,8 @@ from subtitle.segmenter import build_cues_from_words
 from subtitle.textedit import apply_corrections
 from subtitle.transcriber import transcribe
 from gui.audiocheck_dialog import AudioCheckDialog
+from gui.error_dialog import show_friendly_error
+from gui.ffmpeg_dialog import FfmpegInstallDialog
 from gui.cue_editor import CueEditDialog
 from gui.music_dialog import MusicDuckingDialog
 from gui.preview_panel import PreviewPanel
@@ -1043,7 +1045,7 @@ class SrtApp(tk.Tk):
             self.result_queue.put(("auto_done", results))
         except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
             logger.exception("一鍵完成流程發生錯誤")
-            self.result_queue.put(("error", str(exc)))
+            self.result_queue.put(("error", exc))
 
     def _on_auto_done(self, results):
         """一鍵完成結束：載入最後一個成功檔案的字幕供檢視，並顯示總結。"""
@@ -1102,7 +1104,7 @@ class SrtApp(tk.Tk):
             self.result_queue.put(("done", cues))
         except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
             logger.exception("生成字幕時發生錯誤")
-            self.result_queue.put(("error", str(exc)))
+            self.result_queue.put(("error", exc))
 
     def _poll_queue(self):
         """主執行緒定時輪詢背景結果。"""
@@ -1151,10 +1153,12 @@ class SrtApp(tk.Tk):
         self._refresh_preview()
 
     def _on_generation_error(self, message):
-        """生成失敗：顯示錯誤訊息。"""
+        """生成失敗：顯示原因與解決方法。"""
         self._set_processing(False)
         self.status_var.set("生成失敗。")
-        messagebox.showerror("生成失敗", message)
+        show_friendly_error(
+            self, "生成失敗", message,
+            on_install_ffmpeg=lambda: FfmpegInstallDialog(self))
 
     # ==================================================================
     # 自動更新
@@ -1371,7 +1375,7 @@ class SrtApp(tk.Tk):
             self.result_queue.put(("burn_done", output_path))
         except Exception as exc:
             logger.exception("燒錄字幕時發生錯誤")
-            self.result_queue.put(("burn_error", str(exc)))
+            self.result_queue.put(("burn_error", exc))
 
     def _on_burn_done(self, output_path):
         """燒錄成功通知。"""
@@ -1380,10 +1384,12 @@ class SrtApp(tk.Tk):
         messagebox.showinfo("燒錄完成", f"已輸出影片：\n{output_path}")
 
     def _on_burn_error(self, message):
-        """燒錄失敗通知。"""
+        """燒錄失敗：顯示原因與解決方法。"""
         self._set_processing(False)
         self.status_var.set("燒錄失敗。")
-        messagebox.showerror("燒錄失敗", message)
+        show_friendly_error(
+            self, "燒錄失敗", message,
+            on_install_ffmpeg=lambda: FfmpegInstallDialog(self))
 
     # ==================================================================
     # 設定儲存
@@ -1406,9 +1412,23 @@ class SrtApp(tk.Tk):
 
 def main():
     """建立並執行應用程式。"""
+    from subtitle.ffmpeg_setup import app_root, ensure_ffmpeg_on_path
+
+    handlers = [logging.StreamHandler()]
+    try:
+        # 錯誤記錄檔：回報問題時可直接附上（錯誤對話框會提到它）。
+        from logging.handlers import RotatingFileHandler
+        handlers.append(RotatingFileHandler(
+            os.path.join(app_root(), "app.log"),
+            maxBytes=1024 * 1024, backupCount=2, encoding="utf-8"))
+    except OSError:
+        pass  # 程式資料夾不可寫時僅輸出到 console，不影響啟動。
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=handlers,
     )
+    # 先前「自動安裝 ffmpeg」裝好的執行檔在此生效（不改動系統 PATH）。
+    ensure_ffmpeg_on_path()
     app = SrtApp()
     app.mainloop()
