@@ -15,6 +15,7 @@
     python main.py --audiocheck 影片.mp4          # 上片前音訊健檢（免轉錄）
     python main.py --thumbnails 影片.mp4          # 封面候選圖（免轉錄）
     python main.py --audiofix 影片.mp4            # 音訊修復版（降噪等，免轉錄）
+    python main.py --branding 影片.mp4          # 套用已設定的片頭/片尾/浮水印
     python main.py --review --thumbnails 素材.mp4 # 審片＋精彩段落封面候選
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
@@ -31,6 +32,9 @@ from subtitle.adbreaks import resolve_adbreak_settings, suggest_ad_breaks
 from subtitle.audiocheck import format_report, run_audio_check
 from subtitle.audiofix import (fix_audio, resolve_audiofix_settings,
                                suggest_output_path)
+from subtitle.branding import (apply_branding, resolve_branding_settings,
+                               suggest_output_path as
+                               suggest_branding_output_path)
 from subtitle.errors import format_error_text
 from subtitle.ffmpeg_setup import ensure_ffmpeg_on_path
 from subtitle.media import probe_duration
@@ -92,6 +96,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--audiofix", action="store_true",
         help="音訊修復：依 config.json 的 audiofix 設定（降噪／去低頻／"
              "響度正規化）輸出「檔名_修復」版本，畫面原樣複製。")
+    parser.add_argument(
+        "--branding", action="store_true",
+        help="品牌套版：套用 config.json 已設定的片頭／片尾／浮水印，"
+             "輸出「檔名_套版」版本；未設定任何一項時單檔略過並提示。")
     return parser
 
 
@@ -136,13 +144,14 @@ def main(argv=None) -> int:
             args.files, config, report,
             with_audiocheck=args.audiocheck,
             with_thumbnails=args.thumbnails)
-    elif args.audiocheck or args.thumbnails or args.audiofix:
-        # 免轉錄的輕量工具模式：健檢、封面候選與音訊修復都只需 ffmpeg。
+    elif args.audiocheck or args.thumbnails or args.audiofix or args.branding:
+        # 免轉錄的輕量工具模式：健檢、封面候選、音訊修復與品牌套版都只需 ffmpeg。
         results = _run_tools_batch(
             args.files, config, report,
             do_audiocheck=args.audiocheck,
             do_thumbnails=args.thumbnails,
-            do_audiofix=args.audiofix)
+            do_audiofix=args.audiofix,
+            do_branding=args.branding)
     else:
         results = run_batch(
             args.files, config, mode=args.mode, report=report)
@@ -205,7 +214,8 @@ def _export_thumbnails(path: str, items, duration: float, config: dict,
 def _run_tools_batch(files: list, config: dict, report,
                      do_audiocheck: bool = False,
                      do_thumbnails: bool = False,
-                     do_audiofix: bool = False) -> list:
+                     do_audiofix: bool = False,
+                     do_branding: bool = False) -> list:
     """輕量工具批次（免轉錄）：音訊健檢與封面候選，回傳與 run_batch 同構的結果。"""
     automation = config.get("automation", {})
     results = []
@@ -235,6 +245,19 @@ def _run_tools_batch(files: list, config: dict, report,
                 fix_audio(path, fix_out,
                           settings=resolve_audiofix_settings(config))
                 exports.append(fix_out)
+            if do_branding:
+                branding_settings = resolve_branding_settings(config)
+                if (branding_settings["intro_path"]
+                        or branding_settings["outro_path"]
+                        or branding_settings["watermark_path"]):
+                    report(f"{prefix}套用品牌套版中...")
+                    brand_out = unique_path(os.path.join(
+                        out_dir, os.path.basename(
+                            suggest_branding_output_path(path))))
+                    apply_branding(path, brand_out, settings=branding_settings)
+                    exports.append(brand_out)
+                else:
+                    report(f"{prefix}尚未設定片頭／片尾／浮水印，略過品牌套版。")
             report(f"{prefix}完成", (index + 1) / total)
             results.append({
                 "path": path, "ok": True, "error": None,

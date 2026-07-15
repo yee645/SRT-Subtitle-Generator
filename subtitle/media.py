@@ -65,3 +65,53 @@ def probe_dimensions(media_path: str) -> tuple:
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return fallback
+
+
+def has_audio_stream(media_path: str) -> bool:
+    """檢查媒體檔是否含音訊串流。"""
+    if not ffprobe_available():
+        return True  # 保守假設有音訊，交由後續步驟處理。
+    try:
+        completed = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a:0",
+                "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0",
+                media_path,
+            ],
+            capture_output=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return bool((completed.stdout or b"").decode(
+        "utf-8", errors="ignore").strip())
+
+
+def probe_fps(media_path: str) -> float:
+    """以 ffprobe 取得影片畫面更新率（fps）；失敗時回傳 30.0 保底值。"""
+    fallback = 30.0
+    if not ffprobe_available():
+        return fallback
+    try:
+        completed = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=r_frame_rate",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                media_path,
+            ],
+            capture_output=True, timeout=30,
+        )
+        if completed.returncode != 0:
+            return fallback
+        text = (completed.stdout or b"").decode(
+            "utf-8", errors="ignore").strip()
+        if "/" in text:
+            num, den = text.split("/")
+            den = float(den)
+            return float(num) / den if den else fallback
+        return float(text) if text else fallback
+    except (OSError, ValueError, ZeroDivisionError, subprocess.SubprocessError):
+        return fallback

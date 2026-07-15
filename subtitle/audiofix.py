@@ -178,7 +178,7 @@ def fix_audio(
     except OSError as exc:
         raise RuntimeError(f"無法啟動 ffmpeg：{exc}") from exc
 
-    _stream_progress(process, duration, progress_cb)
+    _stream_progress(process, duration, progress_cb, label="修復")
     ret = process.wait()
     if ret != 0:
         stderr = (process.stderr.read() if process.stderr else "") or ""

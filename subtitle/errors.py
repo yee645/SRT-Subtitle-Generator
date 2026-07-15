@@ -45,6 +45,7 @@ _ISSUE_URL = "https://github.com/yee645/SRT-Subtitle-Generator/issues"
 _FFMPEG_RUN_FAILURES = (
     "ffmpeg 燒錄失敗", "ffmpeg 粗剪失敗", "響度正規化失敗", "背景音樂混音失敗",
     "短片輸出失敗", "畫面擷取失敗", "音訊修復失敗", "無法啟動 ffmpeg",
+    "品牌套版失敗",
 )
 
 
@@ -155,7 +156,8 @@ def describe_exception(exc: Union[BaseException, str]) -> FriendlyError:
 
     if isinstance(exc, FileNotFoundError) or "找不到檔案" in text \
             or "找不到來源影片" in text or "找不到背景音樂檔" in text \
-            or "找不到指定的音訊" in text:
+            or "找不到指定的音訊" in text or "找不到片頭檔案" in text \
+            or "找不到片尾檔案" in text or "找不到浮水印檔案" in text:
         return FriendlyError(
             "找不到來源檔案",
             cause="檔案在選取之後被移動、改名或刪除了。",

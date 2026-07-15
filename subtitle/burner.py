@@ -174,7 +174,8 @@ def burn_subtitles(
 
 
 def _stream_progress(process: subprocess.Popen, duration: float,
-                     progress_cb: Optional[ProgressCallback]) -> None:
+                     progress_cb: Optional[ProgressCallback],
+                     label: str = "燒錄") -> None:
     """從 ffmpeg 的 stdout 解析 progress 並轉成 0~1 比例回報。"""
     if not progress_cb or not process.stdout:
         return
@@ -196,8 +197,8 @@ def _stream_progress(process: subprocess.Popen, duration: float,
             if ratio > last_ratio + 0.005:
                 last_ratio = ratio
                 progress_cb(ratio,
-                            f"燒錄中 {int(ratio * 100)}%（已處理 "
+                            f"{label}中 {int(ratio * 100)}%（已處理 "
                             f"{processed_seconds:.1f}s / {duration:.1f}s）")
         elif key == "progress" and value == "end":
-            progress_cb(1.0, "字幕燒錄完成")
+            progress_cb(1.0, f"{label}完成")
             return
