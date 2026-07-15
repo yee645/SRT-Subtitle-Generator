@@ -171,7 +171,7 @@ class ReviewWindow(tk.Toplevel):
         tk.Label(row_w, text="（0＝停用該訊號、1＝預設）",
                  fg="#666666").pack(side="left", padx=(10, 0))
         self.voice_band_var = tk.BooleanVar(value=settings["voice_band"])
-        tk.Checkbutton(
+        ttk.Checkbutton(
             row_w, text="音量聚焦人聲頻帶",
             variable=self.voice_band_var).pack(side="left", padx=(12, 0))
 
@@ -294,7 +294,7 @@ class ReviewWindow(tk.Toplevel):
         # 粗剪選項：同時剪掉口頭禪字詞（Descript 式 filler-word removal）。
         self.cut_fillers_var = tk.BooleanVar(
             value=settings["cut_filler_words"])
-        tk.Checkbutton(
+        ttk.Checkbutton(
             row1, text="剪除口頭禪字",
             variable=self.cut_fillers_var).pack(side="left", padx=(8, 0))
 
@@ -320,11 +320,11 @@ class ReviewWindow(tk.Toplevel):
                  fg="#666666").pack(side="left")
         self.shorts_subs_var = tk.BooleanVar(
             value=shorts_cfg["burn_subtitles"])
-        tk.Checkbutton(row3, text="燒錄字幕",
+        ttk.Checkbutton(row3, text="燒錄字幕",
                        variable=self.shorts_subs_var).pack(side="left",
                                                            padx=(8, 0))
         self.shorts_loudnorm_var = tk.BooleanVar(value=shorts_cfg["loudnorm"])
-        tk.Checkbutton(row3, text="響度正規化",
+        ttk.Checkbutton(row3, text="響度正規化",
                        variable=self.shorts_loudnorm_var).pack(side="left")
         shorts_btn = tk.Button(
             row3, text="輸出直式短片（選取段落）",
@@ -352,7 +352,7 @@ class ReviewWindow(tk.Toplevel):
         tk.Label(row4, text="秒").pack(side="left")
         self.thumb_highlight_var = tk.BooleanVar(
             value=thumbs_cfg["prefer_highlights"])
-        tk.Checkbutton(
+        ttk.Checkbutton(
             row4, text="優先取精彩段落",
             variable=self.thumb_highlight_var).pack(side="left", padx=(8, 0))
         thumbs_btn = tk.Button(
