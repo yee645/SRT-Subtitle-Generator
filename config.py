@@ -154,6 +154,16 @@ DEFAULT_CONFIG = {
         "burn_subtitles": True,   # 短片是否燒錄字幕
         "loudnorm": False,        # 短片輸出時做響度正規化
     },
+    # 品牌套版設定（片頭／片尾接續、浮水印疊加）。
+    "branding": {
+        "intro_path": "",
+        "outro_path": "",
+        "watermark_path": "",
+        "watermark_position": "bottom_right",
+        "watermark_opacity": 0.85,
+        "watermark_scale": 0.15,
+        "watermark_margin": 24,
+    },
     # 其他狀態。
     "last_dir": "",               # 上次開啟檔案的目錄
 }
