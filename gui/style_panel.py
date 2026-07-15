@@ -156,7 +156,7 @@ class StylePanel(tk.LabelFrame):
         # 重點字上色（燒錄與 ASS 匯出時，把指定詞彙換色強調）。
         self.emphasis_var = tk.BooleanVar(
             value=bool(style.get("emphasis_enabled", False)))
-        tk.Checkbutton(
+        ttk.Checkbutton(
             self, text="重點字上色", variable=self.emphasis_var,
             command=self._emit_change,
         ).grid(row=8, column=0, sticky="w", pady=3)

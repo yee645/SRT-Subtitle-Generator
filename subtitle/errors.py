@@ -93,6 +93,16 @@ def describe_exception(exc: Union[BaseException, str]) -> FriendlyError:
                      "pip install --upgrade openai-whisper。",
             details=text)
 
+    if "無法解析外部 Whisper 的輸出結果" in text:
+        return FriendlyError(
+            "無法解析外部 Whisper 的辨識結果",
+            cause="外部 Python 執行 Whisper 時，回傳內容不是預期的乾淨 JSON"
+                  "（例如混入下載進度、套件警告等雜訊，或主控台編碼造成亂碼）。",
+            solution="重新執行一次通常就會恢復正常；若持續發生，"
+                     "於該 Python 環境重跑 pip install --upgrade openai-whisper "
+                     "更新版本，或改用「轉寫設定」的 OpenAI API 模式。",
+            details=text)
+
     if "尚未填入 OpenAI API 金鑰" in text:
         return FriendlyError(
             "API 模式缺少金鑰",

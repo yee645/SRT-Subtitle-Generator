@@ -237,12 +237,12 @@ class SrtApp(tk.Tk):
         row2 = tk.Frame(frame)
         row2.pack(fill="x", pady=2)
         self.use_api_var = tk.BooleanVar(value=transcription_cfg["use_api"])
-        tk.Checkbutton(
+        ttk.Checkbutton(
             row2, text="改用 OpenAI API", variable=self.use_api_var,
         ).pack(side="left")
         self.use_cache_var = tk.BooleanVar(
             value=transcription_cfg.get("use_cache", True))
-        tk.Checkbutton(
+        ttk.Checkbutton(
             row2, text="重用轉錄快取", variable=self.use_cache_var,
         ).pack(side="left", padx=(8, 0))
         tk.Label(row2, text="API 金鑰:").pack(side="left", padx=(8, 0))
@@ -361,12 +361,12 @@ class SrtApp(tk.Tk):
             key = f"export_{ext.lstrip('.')}"
             var = tk.BooleanVar(value=bool(automation.get(key)))
             self.auto_export_vars[key] = var
-            tk.Checkbutton(
+            ttk.Checkbutton(
                 row1, text=ext.lstrip(".").upper(), variable=var,
                 command=self._collect_automation_config,
             ).pack(side="left", padx=(4, 0))
         self.auto_burn_var = tk.BooleanVar(value=bool(automation.get("burn_video")))
-        tk.Checkbutton(
+        ttk.Checkbutton(
             row1, text="燒錄硬字幕影片", variable=self.auto_burn_var,
             command=self._collect_automation_config,
         ).pack(side="left", padx=(14, 0))
@@ -375,7 +375,7 @@ class SrtApp(tk.Tk):
         row_ln.pack(fill="x", pady=2)
         self.auto_loudnorm_var = tk.BooleanVar(
             value=bool(automation.get("loudnorm")))
-        tk.Checkbutton(
+        ttk.Checkbutton(
             row_ln, text="燒錄時響度正規化", variable=self.auto_loudnorm_var,
             command=self._collect_automation_config,
         ).pack(side="left")

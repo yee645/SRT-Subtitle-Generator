@@ -136,7 +136,7 @@ class AudioCheckDialog(tk.Toplevel):
         fix_row = ttk.Frame(fix_frame)
         fix_row.pack(fill="x")
         self.fix_denoise_var = tk.BooleanVar(value=fix_settings["denoise"])
-        tk.Checkbutton(fix_row, text="降噪",
+        ttk.Checkbutton(fix_row, text="降噪",
                        variable=self.fix_denoise_var).pack(side="left")
         self.fix_strength_var = tk.DoubleVar(
             value=fix_settings["denoise_strength"])
@@ -145,7 +145,7 @@ class AudioCheckDialog(tk.Toplevel):
                    format="%.0f").pack(side="left", padx=(2, 2))
         tk.Label(fix_row, text="dB").pack(side="left", padx=(0, 10))
         self.fix_highpass_var = tk.BooleanVar(value=fix_settings["highpass"])
-        tk.Checkbutton(fix_row, text="去低頻隆隆",
+        ttk.Checkbutton(fix_row, text="去低頻隆隆",
                        variable=self.fix_highpass_var).pack(side="left")
         self.fix_hz_var = tk.DoubleVar(value=fix_settings["highpass_hz"])
         tk.Spinbox(fix_row, from_=40.0, to=200.0, increment=10.0, width=5,
@@ -153,7 +153,7 @@ class AudioCheckDialog(tk.Toplevel):
                    format="%.0f").pack(side="left", padx=(2, 2))
         tk.Label(fix_row, text="Hz").pack(side="left", padx=(0, 10))
         self.fix_loudnorm_var = tk.BooleanVar(value=fix_settings["loudnorm"])
-        tk.Checkbutton(fix_row, text="響度正規化",
+        ttk.Checkbutton(fix_row, text="響度正規化",
                        variable=self.fix_loudnorm_var).pack(side="left")
         self.fix_btn = ttk.Button(fix_row, text="輸出修復版",
                                   command=self._on_fix)

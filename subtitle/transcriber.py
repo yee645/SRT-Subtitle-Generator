@@ -34,20 +34,40 @@ _MODEL_TIME_FACTOR = {
 
 # 外部 Python 子程序所執行的 whisper 轉寫工作腳本內容。
 # 以子程序方式執行，可讓打包後的 exe 使用使用者自行安裝的 whisper。
+#
+# whisper 匯入、下載模型、推論過程可能印出雜訊（下載進度、numba 編譯
+# 提示、棄用警告等，某些版本甚至來自 C 層級輸出而非 Python print），
+# 若這些雜訊混進 stdout，本程式最後解析 JSON 時就會失敗
+# （曾實際發生：「無法解析外部 Whisper 的輸出結果」）。故用 os.dup2
+# 把 stdout 檔案描述元暫時導到 devnull，涵蓋 Python 與 C 層級輸出，
+# 推論結束才切回並寫入最終 JSON，確保 stdout 只有這一份乾淨結果。
 _WORKER_SCRIPT = '''# -*- coding: utf-8 -*-
-import sys, json
-import whisper
+import sys, json, os
+
+
+def _run(audio_path, model_name, language, initial_prompt):
+    import whisper
+    model = whisper.load_model(model_name)
+    kwargs = {"word_timestamps": True, "verbose": False}
+    if language and language != "auto":
+        kwargs["language"] = language
+    if initial_prompt:
+        kwargs["initial_prompt"] = initial_prompt
+    return model.transcribe(audio_path, **kwargs)
+
 
 audio_path, model_name, language = sys.argv[1], sys.argv[2], sys.argv[3]
 initial_prompt = sys.argv[4] if len(sys.argv) > 4 else ""
 
-model = whisper.load_model(model_name)
-kwargs = {"word_timestamps": True, "verbose": False}
-if language and language != "auto":
-    kwargs["language"] = language
-if initial_prompt:
-    kwargs["initial_prompt"] = initial_prompt
-result = model.transcribe(audio_path, **kwargs)
+_stdout_fd = os.dup(1)
+_devnull_fd = os.open(os.devnull, os.O_WRONLY)
+os.dup2(_devnull_fd, 1)
+try:
+    result = _run(audio_path, model_name, language, initial_prompt)
+finally:
+    os.dup2(_stdout_fd, 1)
+    os.close(_stdout_fd)
+    os.close(_devnull_fd)
 
 words = []
 for segment in result.get("segments", []):
