@@ -30,7 +30,7 @@ import subprocess
 from typing import Callable, Optional
 
 from .burner import ffmpeg_available, _stream_progress
-from .segmenter import _is_cjk_char
+from .segmenter import join_words as _join_words
 
 ProgressCallback = Callable[[str, Optional[float]], None]
 
@@ -174,18 +174,6 @@ def categorize(item: dict) -> str:
     if TAG_FILLER in tags:
         return "review"
     return "normal"
-
-
-def _join_words(words) -> str:
-    """把逐字結果串回句子：拉丁字之間補空白、中日韓文字直接相連。"""
-    parts = []
-    for item in words:
-        text = item["word"]
-        if parts and text and not _is_cjk_char(text[0]) \
-                and not _is_cjk_char(parts[-1][-1]):
-            parts.append(" ")
-        parts.append(text)
-    return "".join(parts).strip()
 
 
 def count_fillers(text: str, filler_chars: str = _FILLER_CJK) -> int:

@@ -69,8 +69,8 @@ class SrtApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"SRT 自動字幕生成與編輯工具 v{APP_VERSION}")
-        self.geometry("1180x780")
-        self.minsize(820, 520)
+        self.geometry("1400x800")
+        self.minsize(900, 560)
 
         # 載入設定檔，達成記憶功能。
         self.config_data = load_config()
@@ -104,6 +104,11 @@ class SrtApp(tk.Tk):
         except Exception:
             # 主題套用失敗不影響核心功能。
             pass
+        # 捲動容器的 Canvas 不是 ttk 元件，主題切換時需手動同步背景色，
+        # 否則深色主題下會露出一塊淺色畫布（見 v1.14.1 修復）。
+        scroll_frame = getattr(self, "scroll_frame", None)
+        if scroll_frame is not None:
+            scroll_frame.refresh_theme(theme)
 
     def _toggle_theme(self):
         """切換淺色與深色主題並寫回設定。"""
@@ -127,13 +132,15 @@ class SrtApp(tk.Tk):
         # 頂部工具列：主題切換等全域控制。
         self._build_toolbar()
 
-        scroll = ScrollableFrame(self)
+        scroll = ScrollableFrame(self, theme=self.config_data.get("theme", "light"))
         scroll.pack(fill="both", expand=True)
         container = scroll.interior
+        # 供 _apply_theme 在主題切換時同步更新 Canvas 背景色。
+        self.scroll_frame = scroll
 
-        left = tk.Frame(container, padx=10, pady=10)
+        left = ttk.Frame(container, padding=10)
         left.pack(side="left", fill="both", expand=True)
-        right = tk.Frame(container, padx=10, pady=10)
+        right = ttk.Frame(container, padding=10)
         right.pack(side="right", fill="y")
 
         self._build_mode_section(left)
@@ -191,17 +198,17 @@ class SrtApp(tk.Tk):
         frame = ttk.LabelFrame(parent, text="運作模式", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.mode_var = tk.StringVar(value=MODE_TRANSCRIBE)
-        tk.Radiobutton(
+        ttk.Radiobutton(
             frame, text="模式一：音訊轉錄（自動產生逐字稿與時間軸）",
             variable=self.mode_var, value=MODE_TRANSCRIBE,
             command=self._update_mode_state,
         ).pack(anchor="w")
-        tk.Radiobutton(
+        ttk.Radiobutton(
             frame, text="模式二：文字稿對齊（貼上現成文字稿，自動對齊時間軸）",
             variable=self.mode_var, value=MODE_ALIGN,
             command=self._update_mode_state,
         ).pack(anchor="w")
-        tk.Radiobutton(
+        ttk.Radiobutton(
             frame, text="模式三：手動字幕模式（從零建立字幕、手動標記時間）",
             variable=self.mode_var, value=MODE_MANUAL,
             command=self._update_mode_state,
@@ -213,9 +220,9 @@ class SrtApp(tk.Tk):
             parent, text="影片 / 音訊檔案（可多選，以 ; 分隔）", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.file_var = tk.StringVar()
-        tk.Entry(frame, textvariable=self.file_var).pack(
+        ttk.Entry(frame, textvariable=self.file_var).pack(
             side="left", fill="x", expand=True, padx=(0, 6))
-        tk.Button(frame, text="瀏覽...", command=self._choose_file).pack(side="left")
+        ttk.Button(frame, text="瀏覽...", command=self._choose_file).pack(side="left")
 
     def _build_transcription_section(self, parent):
         """轉寫設定區（模式一相關）。"""
@@ -224,22 +231,22 @@ class SrtApp(tk.Tk):
         self.transcription_frame = frame
         transcription_cfg = self.config_data["transcription"]
 
-        row1 = tk.Frame(frame)
+        row1 = ttk.Frame(frame)
         row1.pack(fill="x", pady=2)
-        tk.Label(row1, text="本地模型:").pack(side="left")
+        ttk.Label(row1, text="本地模型:").pack(side="left")
         self.model_var = tk.StringVar(value=transcription_cfg["model"])
         ttk.Combobox(
             row1, textvariable=self.model_var, width=10, state="readonly",
             values=["tiny", "base", "small", "medium", "large"],
         ).pack(side="left", padx=(0, 12))
-        tk.Label(row1, text="語言:").pack(side="left")
+        ttk.Label(row1, text="語言:").pack(side="left")
         self.language_var = tk.StringVar(value=transcription_cfg["language"])
         ttk.Combobox(
             row1, textvariable=self.language_var, width=10,
             values=["auto", "zh", "zh-TW", "en", "ja", "ko"],
         ).pack(side="left")
 
-        row2 = tk.Frame(frame)
+        row2 = ttk.Frame(frame)
         row2.pack(fill="x", pady=2)
         self.use_api_var = tk.BooleanVar(value=transcription_cfg["use_api"])
         ttk.Checkbutton(
@@ -250,38 +257,38 @@ class SrtApp(tk.Tk):
         ttk.Checkbutton(
             row2, text="重用轉錄快取", variable=self.use_cache_var,
         ).pack(side="left", padx=(8, 0))
-        tk.Label(row2, text="API 金鑰:").pack(side="left", padx=(8, 0))
+        ttk.Label(row2, text="API 金鑰:").pack(side="left", padx=(8, 0))
         self.api_key_var = tk.StringVar(value=transcription_cfg["api_key"])
-        tk.Entry(
+        ttk.Entry(
             row2, textvariable=self.api_key_var, show="*", width=30,
         ).pack(side="left", fill="x", expand=True)
 
-        row3 = tk.Frame(frame)
+        row3 = ttk.Frame(frame)
         row3.pack(fill="x", pady=2)
-        tk.Label(row3, text="本地 Python:").pack(side="left")
+        ttk.Label(row3, text="本地 Python:").pack(side="left")
         self.python_path_var = tk.StringVar(
             value=transcription_cfg.get("python_path", ""))
-        tk.Entry(
+        ttk.Entry(
             row3, textvariable=self.python_path_var,
         ).pack(side="left", fill="x", expand=True, padx=(0, 4))
-        tk.Button(
+        ttk.Button(
             row3, text="瀏覽...", command=self._choose_python,
         ).pack(side="left")
-        tk.Label(
-            frame, fg="#666666",
+        ttk.Label(
+            frame, foreground="#666666",
             text="留空則自動偵測；指向已安裝 openai-whisper 的 python.exe 即可使用本地轉錄。",
         ).pack(anchor="w", pady=(2, 0))
 
-        row4 = tk.Frame(frame)
+        row4 = ttk.Frame(frame)
         row4.pack(fill="x", pady=(6, 2))
-        tk.Label(row4, text="轉寫提示:").pack(side="left")
+        ttk.Label(row4, text="轉寫提示:").pack(side="left")
         self.prompt_var = tk.StringVar(
             value=transcription_cfg.get("prompt", ""))
-        tk.Entry(
+        ttk.Entry(
             row4, textvariable=self.prompt_var,
         ).pack(side="left", fill="x", expand=True)
-        tk.Label(
-            frame, fg="#666666",
+        ttk.Label(
+            frame, foreground="#666666",
             text=("可填入常出現的專有名詞、人名或易聽錯的詞彙（以空白或逗號分隔），"
                   "用於導正辨識結果。模式二會與文字稿一併使用。"),
         ).pack(anchor="w", pady=(2, 0))
@@ -293,52 +300,52 @@ class SrtApp(tk.Tk):
         self.segmentation_frame = frame
         seg = self.config_data["segmentation"]
 
-        row1 = tk.Frame(frame)
+        row1 = ttk.Frame(frame)
         row1.pack(fill="x", pady=2)
-        tk.Label(row1, text="中文單行上限:").pack(side="left")
+        ttk.Label(row1, text="中文單行上限:").pack(side="left")
         self.cjk_limit_var = tk.IntVar(value=seg["max_chars_cjk"])
         tk.Spinbox(
             row1, from_=4, to=40, width=6, textvariable=self.cjk_limit_var,
         ).pack(side="left", padx=(0, 4))
-        tk.Label(row1, text="字").pack(side="left", padx=(0, 14))
-        tk.Label(row1, text="英文單行上限:").pack(side="left")
+        ttk.Label(row1, text="字").pack(side="left", padx=(0, 14))
+        ttk.Label(row1, text="英文單行上限:").pack(side="left")
         self.latin_limit_var = tk.IntVar(value=seg["max_chars_latin"])
         tk.Spinbox(
             row1, from_=10, to=90, width=6, textvariable=self.latin_limit_var,
         ).pack(side="left", padx=(0, 4))
-        tk.Label(row1, text="字母").pack(side="left")
+        ttk.Label(row1, text="字母").pack(side="left")
 
-        row2 = tk.Frame(frame)
+        row2 = ttk.Frame(frame)
         row2.pack(fill="x", pady=2)
-        tk.Label(row2, text="最短秒數:").pack(side="left")
+        ttk.Label(row2, text="最短秒數:").pack(side="left")
         self.min_dur_var = tk.DoubleVar(value=seg["min_duration"])
         tk.Spinbox(
             row2, from_=0.3, to=5.0, increment=0.1, width=5,
             textvariable=self.min_dur_var, format="%.1f",
         ).pack(side="left", padx=(0, 12))
-        tk.Label(row2, text="最長秒數:").pack(side="left")
+        ttk.Label(row2, text="最長秒數:").pack(side="left")
         self.max_dur_var = tk.DoubleVar(value=seg["max_duration"])
         tk.Spinbox(
             row2, from_=2.0, to=15.0, increment=0.5, width=5,
             textvariable=self.max_dur_var, format="%.1f",
         ).pack(side="left", padx=(0, 12))
-        tk.Label(row2, text="停頓秒數:").pack(side="left")
+        ttk.Label(row2, text="停頓秒數:").pack(side="left")
         self.pause_gap_var = tk.DoubleVar(value=seg["pause_gap"])
         tk.Spinbox(
             row2, from_=0.2, to=2.0, increment=0.1, width=5,
             textvariable=self.pause_gap_var, format="%.1f",
         ).pack(side="left")
 
-        row3 = tk.Frame(frame)
+        row3 = ttk.Frame(frame)
         row3.pack(fill="x", pady=2)
-        tk.Label(row3, text="時間軸微調:").pack(side="left")
+        ttk.Label(row3, text="時間軸微調:").pack(side="left")
         self.time_offset_var = tk.DoubleVar(value=seg.get("time_offset", 0.0))
         tk.Spinbox(
             row3, from_=-10.0, to=10.0, increment=0.1, width=6,
             textvariable=self.time_offset_var, format="%.1f",
         ).pack(side="left", padx=(0, 4))
-        tk.Label(
-            row3, text="秒（正值整體延後、負值整體提前）", fg="#666666",
+        ttk.Label(
+            row3, text="秒（正值整體延後、負值整體提前）", foreground="#666666",
         ).pack(side="left")
 
     def _build_transcript_section(self, parent):
@@ -349,7 +356,7 @@ class SrtApp(tk.Tk):
         self.transcript_text = tk.Text(frame, height=6, wrap="word")
         self.transcript_text.pack(fill="both", expand=True)
         hint = "請於此貼上現成逐字稿，系統會依語音長度與停頓自動分配時間軸。"
-        tk.Label(frame, text=hint, fg="#666666").pack(anchor="w", pady=(4, 0))
+        ttk.Label(frame, text=hint, foreground="#666666").pack(anchor="w", pady=(4, 0))
 
     def _build_automation_section(self, parent):
         """一鍵自動化輸出設定區：勾選格式與燒錄後，「一鍵完成」全程免對話框。"""
@@ -358,9 +365,9 @@ class SrtApp(tk.Tk):
         self.automation_frame = frame
         automation = self.config_data["automation"]
 
-        row1 = tk.Frame(frame)
+        row1 = ttk.Frame(frame)
         row1.pack(fill="x", pady=2)
-        tk.Label(row1, text="自動匯出:").pack(side="left")
+        ttk.Label(row1, text="自動匯出:").pack(side="left")
         self.auto_export_vars = {}
         for ext in (".srt", ".vtt", ".ass", ".txt"):
             key = f"export_{ext.lstrip('.')}"
@@ -376,7 +383,7 @@ class SrtApp(tk.Tk):
             command=self._collect_automation_config,
         ).pack(side="left", padx=(14, 0))
 
-        row_ln = tk.Frame(frame)
+        row_ln = ttk.Frame(frame)
         row_ln.pack(fill="x", pady=2)
         self.auto_loudnorm_var = tk.BooleanVar(
             value=bool(automation.get("loudnorm")))
@@ -384,7 +391,7 @@ class SrtApp(tk.Tk):
             row_ln, text="燒錄時響度正規化", variable=self.auto_loudnorm_var,
             command=self._collect_automation_config,
         ).pack(side="left")
-        tk.Label(row_ln, text="目標:").pack(side="left", padx=(8, 2))
+        ttk.Label(row_ln, text="目標:").pack(side="left", padx=(8, 2))
         self.auto_loudnorm_target_var = tk.DoubleVar(
             value=float(automation.get("loudnorm_target", -14.0)))
         tk.Spinbox(
@@ -392,36 +399,36 @@ class SrtApp(tk.Tk):
             textvariable=self.auto_loudnorm_target_var, format="%.1f",
             command=self._collect_automation_config,
         ).pack(side="left")
-        tk.Label(
+        ttk.Label(
             row_ln, text="LUFS（YouTube 標準 -14；音量偏小的素材建議勾選）",
-            fg="#666666",
+            foreground="#666666",
         ).pack(side="left", padx=(4, 0))
 
-        row2 = tk.Frame(frame)
+        row2 = ttk.Frame(frame)
         row2.pack(fill="x", pady=2)
-        tk.Label(row2, text="輸出資料夾:").pack(side="left")
+        ttk.Label(row2, text="輸出資料夾:").pack(side="left")
         self.auto_output_dir_var = tk.StringVar(
             value=automation.get("output_dir", ""))
-        tk.Entry(row2, textvariable=self.auto_output_dir_var).pack(
+        ttk.Entry(row2, textvariable=self.auto_output_dir_var).pack(
             side="left", fill="x", expand=True, padx=(0, 4))
-        tk.Button(
+        ttk.Button(
             row2, text="瀏覽...", command=self._choose_output_dir,
         ).pack(side="left")
-        tk.Label(
-            frame, fg="#666666",
+        ttk.Label(
+            frame, foreground="#666666",
             text="留空＝輸出到來源檔資料夾。輸出檔自動以來源檔名命名，不會跳出任何對話框。",
         ).pack(anchor="w", pady=(2, 0))
 
     def _build_action_section(self, parent):
         """生成 / 匯出 / 燒錄按鈕與狀態列。"""
-        frame = tk.Frame(parent)
+        frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(0, 8))
         self.action_frame = frame
-        self.generate_btn = tk.Button(
+        self.generate_btn = ttk.Button(
             frame, text="開始生成字幕", width=16, command=self._on_generate,
         )
         self.generate_btn.pack(side="left")
-        self.auto_btn = tk.Button(
+        self.auto_btn = ttk.Button(
             frame, text="一鍵完成（生成＋匯出＋燒錄）", width=26,
             command=self._on_auto_run,
         )
@@ -436,11 +443,11 @@ class SrtApp(tk.Tk):
         )
         self.progress.pack(side="left", padx=6)
         self.progress_label_var = tk.StringVar(value="")
-        tk.Label(frame, textvariable=self.progress_label_var, width=6,
+        ttk.Label(frame, textvariable=self.progress_label_var, width=6,
                  anchor="w").pack(side="left")
 
         self.status_var = tk.StringVar(value="就緒。")
-        tk.Label(parent, textvariable=self.status_var, fg="#1a5fb4",
+        ttk.Label(parent, textvariable=self.status_var, foreground="#1a5fb4",
                  anchor="w").pack(fill="x")
 
     def _build_cue_list(self, parent):
@@ -470,22 +477,22 @@ class SrtApp(tk.Tk):
 
     def _build_cue_edit_controls(self, parent):
         """字幕列操作按鈕：新增、編輯、刪除、上移、下移、清空。"""
-        frame = tk.Frame(parent)
+        frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(4, 0))
         self.cue_edit_frame = frame
-        tk.Button(frame, text="新增字幕", width=10,
+        ttk.Button(frame, text="新增字幕", width=10,
                   command=self._on_add_cue).pack(side="left", padx=2)
-        tk.Button(frame, text="編輯選取", width=10,
+        ttk.Button(frame, text="編輯選取", width=10,
                   command=self._on_edit_cue).pack(side="left", padx=2)
-        tk.Button(frame, text="刪除選取", width=10,
+        ttk.Button(frame, text="刪除選取", width=10,
                   command=self._on_delete_cue).pack(side="left", padx=2)
-        tk.Button(frame, text="上移", width=6,
+        ttk.Button(frame, text="上移", width=6,
                   command=lambda: self._on_move_cue(-1)).pack(side="left", padx=2)
-        tk.Button(frame, text="下移", width=6,
+        ttk.Button(frame, text="下移", width=6,
                   command=lambda: self._on_move_cue(1)).pack(side="left", padx=2)
-        tk.Button(frame, text="清空清單", width=10,
+        ttk.Button(frame, text="清空清單", width=10,
                   command=self._on_clear_cues).pack(side="left", padx=2)
-        tk.Button(frame, text="尋找取代", width=10,
+        ttk.Button(frame, text="尋找取代", width=10,
                   command=self._on_find_replace).pack(side="left", padx=2)
 
     def _build_export_section(self, parent):
@@ -494,27 +501,27 @@ class SrtApp(tk.Tk):
         frame.pack(fill="x", pady=(8, 0))
         self.export_frame = frame
 
-        self.export_btn_srt = tk.Button(
+        self.export_btn_srt = ttk.Button(
             frame, text="匯出 SRT", width=11,
             command=lambda: self._on_export(".srt"), state="disabled",
         )
         self.export_btn_srt.pack(side="left", padx=2)
-        self.export_btn_vtt = tk.Button(
+        self.export_btn_vtt = ttk.Button(
             frame, text="匯出 VTT", width=11,
             command=lambda: self._on_export(".vtt"), state="disabled",
         )
         self.export_btn_vtt.pack(side="left", padx=2)
-        self.export_btn_ass = tk.Button(
+        self.export_btn_ass = ttk.Button(
             frame, text="匯出 ASS", width=11,
             command=lambda: self._on_export(".ass"), state="disabled",
         )
         self.export_btn_ass.pack(side="left", padx=2)
-        self.export_btn_txt = tk.Button(
+        self.export_btn_txt = ttk.Button(
             frame, text="匯出 TXT", width=11,
             command=lambda: self._on_export(".txt"), state="disabled",
         )
         self.export_btn_txt.pack(side="left", padx=2)
-        self.burn_btn = tk.Button(
+        self.burn_btn = ttk.Button(
             frame, text="燒錄字幕到影片", width=16,
             command=self._on_burn, state="disabled",
         )
@@ -539,9 +546,9 @@ class SrtApp(tk.Tk):
         frame = ttk.LabelFrame(parent, text="習慣設定（樣式組合）", padding=(8, 6))
         frame.pack(fill="x", pady=(0, 8))
 
-        row = tk.Frame(frame)
+        row = ttk.Frame(frame)
         row.pack(fill="x")
-        tk.Label(row, text="目前樣式:").pack(side="left")
+        ttk.Label(row, text="目前樣式:").pack(side="left")
         self.preset_var = tk.StringVar(value=self.config_data["active_preset"])
         self.preset_box = ttk.Combobox(
             row, textvariable=self.preset_var, state="readonly", width=16,
@@ -551,15 +558,15 @@ class SrtApp(tk.Tk):
         self.preset_box.bind(
             "<<ComboboxSelected>>", lambda _e: self._apply_preset())
 
-        btn_row = tk.Frame(frame)
+        btn_row = ttk.Frame(frame)
         btn_row.pack(fill="x", pady=(6, 0))
-        tk.Button(
+        ttk.Button(
             btn_row, text="另存新樣式", command=self._save_new_preset,
         ).pack(side="left", padx=(0, 4))
-        tk.Button(
+        ttk.Button(
             btn_row, text="更新目前樣式", command=self._update_preset,
         ).pack(side="left", padx=4)
-        tk.Button(
+        ttk.Button(
             btn_row, text="刪除", command=self._delete_preset,
         ).pack(side="left", padx=4)
 

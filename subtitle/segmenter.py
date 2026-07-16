@@ -44,6 +44,39 @@ def _is_cjk_char(char):
     return any(low <= code <= high for low, high in CJK_RANGES)
 
 
+# 標點前不補空白：這些字元若剛好落在新 token 的開頭（Whisper 偶爾把標點
+# 切成獨立 token），不應在其前方多出一個孤立空白（如「today .」）。
+# 除了本模組既有的句末／子句停頓標點，另外補上 STRONG_PUNCT／WEAK_PUNCT
+# 未涵蓋的常見半形收尾標點（如英文句點「.」），確保英文標點也不會被誤加
+# 空白；引號因半形寫法開闔同形（開頭/結尾都用同一個字元），無法單靠字元
+# 本身判斷方向，故不列入（保守起見，寧可漏掉極少數情境也不誤刪必要空白）。
+_NO_LEADING_SPACE = (frozenset(STRONG_PUNCT + WEAK_PUNCT)
+                     | frozenset(".,!?;:)]}%")) - {" "}
+
+
+def join_words(words) -> str:
+    """
+    把逐字時間軸的文字串回句子：拉丁字之間補空白、中日韓文字直接相連。
+
+    Whisper 的逐字 token 在傳入前已被呼叫端 strip() 過（見
+    transcriber.py），原始的前導空白資訊已經遺失，因此這裡改以「相鄰兩字
+    是否都不是 CJK」判斷是否要補回空白，而非依賴 token 本身有無空白。
+    中英混排時只在拉丁字與拉丁字的邊界補空白，CJK 字元前後不加空白；
+    標點（句尾或停頓標點）開頭的 token 也不補空白，避免標點前出現孤立空白。
+    """
+    parts = []
+    for item in words:
+        text = item["word"] if isinstance(item, dict) else item
+        if not text:
+            continue
+        if parts and text[0] not in _NO_LEADING_SPACE \
+                and not _is_cjk_char(text[0]) \
+                and not _is_cjk_char(parts[-1][-1]):
+            parts.append(" ")
+        parts.append(text)
+    return "".join(parts).strip()
+
+
 def is_cjk_dominant(text):
     """判斷一段文字是否以中文等全形文字為主（含少量英數仍視為中文）。"""
     chars = [c for c in text if not c.isspace()]
@@ -233,7 +266,7 @@ def build_cues_from_words(words, seg_cfg):
 
     for index, word in enumerate(words):
         bucket.append(word)
-        text = "".join(item["word"] for item in bucket).strip()
+        text = join_words(bucket)
         limit = _line_limit(text, seg_cfg)
         next_word = words[index + 1] if index + 1 < len(words) else None
         next_length = _length(next_word["word"]) if next_word else 0
@@ -308,11 +341,8 @@ def _post_process(cues, seg_cfg, words=None):
         if cue["end"] - cue["start"] > max_duration:
             cue["end"] = cue["start"] + max_duration
 
-    # 修正重疊：若後一句開始時間早於前一句結束，截短前一句。
-    for i in range(1, len(expanded)):
-        if expanded[i]["start"] < expanded[i - 1]["end"]:
-            expanded[i - 1]["end"] = max(expanded[i - 1]["start"] + 0.1,
-                                         expanded[i]["start"])
+    # 修正重疊：確保輸出嚴格不重疊且時間單調遞增（不重疊優先於最短秒數）。
+    expanded = _normalize_no_overlap(expanded)
 
     # 合併過短的孤字，避免單一字（如英文單字尾巴）被擠到下一段顯示。
     expanded = _merge_orphan_cues(expanded)
@@ -371,6 +401,46 @@ def _attach_words(cues, words, time_offset=0.0):
 
 # 視為「孤字碎片」的最大字數，達此長度以下會被併回前一句。
 _MAX_ORPHAN_CHARS = 2
+
+# 不重疊正規化用的極小間隔（秒）：兩句時間衝突到無法單靠截短前一句解決時
+# （例如起始時間相同或反序），前一句最少也要有這麼長，避免變成零長度或負值。
+_MIN_GAP_EPSILON = 0.05
+
+
+def _normalize_no_overlap(cues):
+    """
+    最終正規化：確保輸出嚴格不重疊、且時間單調遞增。
+
+    對齊模式（模式二）常見兩句幾乎同時起始（甚至起始時間完全相同）的情況；
+    先前只靠「截短前一句」的作法在起始時間相同或反序時無法真正消除重疊
+    （見 v1.14.1 修復的 Issue：前一句被延長到最短秒數後，
+    截短時又被拉回原本過短的結束時間，導致與下一句重疊）。
+
+    修正原則：不重疊優先於最短秒數——寧可前一句稍短，也不要兩句重疊：
+    1. 若前一句結束時間超過下一句開始時間，先嘗試把前一句結束時間
+       截到下一句的開始時間（兩句剛好首尾相接，不算重疊）。
+    2. 若下一句開始時間早於（或等於）前一句開始時間（起始時間相同或反序），
+       單靠截短前一句無法避免重疊：改為讓前一句維持極小長度
+       （_MIN_GAP_EPSILON），並把下一句整段順延相同的時間，
+       保留下一句原本的長度不變。
+    依序處理相鄰兩句，順延效應會在下一輪迭代中一併處理後續的句子，
+    確保整體時間軸不會因此在更後面重新產生重疊。
+    """
+    for i in range(1, len(cues)):
+        previous = cues[i - 1]
+        current = cues[i]
+        if previous["end"] <= current["start"]:
+            continue  # 未重疊，維持原樣（不影響一般不衝突的情況）。
+        new_previous_end = current["start"]
+        if new_previous_end <= previous["start"]:
+            # 起始時間相同或反序：改為順延下一句，保留其原本長度。
+            new_previous_end = previous["start"] + _MIN_GAP_EPSILON
+            shift = new_previous_end - current["start"]
+            duration = current["end"] - current["start"]
+            current["start"] = new_previous_end
+            current["end"] = current["start"] + duration
+        previous["end"] = new_previous_end
+    return cues
 
 
 def _merge_duplicate_cues(cues, max_duration):

@@ -18,7 +18,7 @@ import os
 import re
 from typing import Iterable, Mapping
 
-from .segmenter import _is_cjk_char
+from .segmenter import _is_cjk_char, _NO_LEADING_SPACE
 
 # 逐字動態字幕模式（樣式 dynamic_mode 的合法值）：
 #   off     ＝一般整句字幕
@@ -211,6 +211,7 @@ def _dynamic_dialogues(cue: Mapping, mode: str, highlight_tag: str) -> list:
             previous_raw = ""
             for i, raw in enumerate(texts):
                 if parts and raw and previous_raw \
+                        and raw[0] not in _NO_LEADING_SPACE \
                         and not _is_cjk_char(raw[0]) \
                         and not _is_cjk_char(previous_raw[-1]):
                     parts.append(" ")
