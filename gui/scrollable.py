@@ -12,14 +12,31 @@
 import tkinter as tk
 from tkinter import ttk
 
+# sv-ttk（Sun Valley）兩種主題各自的一般背景色（取自套件的 theme/light.tcl、
+# theme/dark.tcl 的 colors(-bg)）。Canvas 不是 ttk 元件，換主題時不會自動變色，
+# 且經測試 ttk::style lookup 在主題「第一次」套用時會因 sv-ttk 的
+# <<ThemeChanged>> 綁定尚未觸發而查不到值，並不可靠；改用這裡的固定對照表，
+# 由呼叫端（app.py）直接告知目前主題名稱，簡單且不受該時序問題影響。
+_THEME_CANVAS_BG = {
+    "light": "#fafafa",
+    "dark": "#1c1c1c",
+}
+_DEFAULT_BG = "#f0f0f0"  # 未安裝 sv-ttk 時的系統預設外觀。
 
-class ScrollableFrame(tk.Frame):
+
+class ScrollableFrame(ttk.Frame):
     """提供垂直與水平捲動的容器。"""
 
-    def __init__(self, master, **kwargs):
+    def __init__(self, master, theme="light", **kwargs):
         super().__init__(master, **kwargs)
+        self._theme = theme
 
-        self.canvas = tk.Canvas(self, highlightthickness=0)
+        # Canvas 不是 ttk 元件，sv-ttk 換主題時不會自動變色，
+        # 因此背景色需自行依目前主題設定（並在切換主題時由 refresh_theme
+        # 重新套用），否則深色主題下會露出一塊不搭調的淺色畫布
+        # （v1.14.1 修復）。
+        self.canvas = tk.Canvas(
+            self, highlightthickness=0, background=self._background_for(theme))
         v_scroll = ttk.Scrollbar(
             self, orient="vertical", command=self.canvas.yview)
         h_scroll = ttk.Scrollbar(
@@ -32,8 +49,8 @@ class ScrollableFrame(tk.Frame):
         h_scroll.pack(side="bottom", fill="x")
         self.canvas.pack(side="left", fill="both", expand=True)
 
-        # 實際放置內容的內層 Frame。
-        self.interior = tk.Frame(self.canvas)
+        # 實際放置內容的內層 Frame（改用 ttk.Frame 才會隨主題變色）。
+        self.interior = ttk.Frame(self.canvas)
         self._window_id = self.canvas.create_window(
             (0, 0), window=self.interior, anchor="nw")
 
@@ -44,6 +61,15 @@ class ScrollableFrame(tk.Frame):
         # 滑鼠移入時啟用滾輪捲動，移出時解除。
         self.canvas.bind("<Enter>", self._bind_mousewheel)
         self.canvas.bind("<Leave>", self._unbind_mousewheel)
+
+    @staticmethod
+    def _background_for(theme):
+        return _THEME_CANVAS_BG.get(theme, _DEFAULT_BG)
+
+    def refresh_theme(self, theme):
+        """主題切換後呼叫：把 Canvas 背景色同步成新主題的顏色。"""
+        self._theme = theme
+        self.canvas.configure(background=self._background_for(theme))
 
     def _on_interior_configure(self, _event):
         """內容尺寸變動時，重新計算可捲動範圍。"""
