@@ -5,8 +5,9 @@
 調研顯示多數創作者花大量時間剪片，標題、描述與標籤卻隨便帶過，
 導致點擊率與搜尋排名低迷。本模組把已有的分析結果組裝成發佈包：
 
-- 建議標題候選：取精彩分數最高的段落文字（行動裝置標題只顯示前
-  約 40 字、關鍵字越前面權重越高——候選皆已截到可調的長度上限）
+- 建議標題候選：按有效標題的常見型態各出一手（精華句／疑問句／
+  數字句／關鍵字冠頭），剝句首贅詞、以完整子句湊到長度上限，
+  不再是把逐字稿攔腰截斷（行動裝置標題只顯示前約 40 字）
 - 描述草稿：開場鉤子（第一個保留段落）＋建議章節＋hashtag 行
 - 建議標籤：素材中實際高頻出現的詞（中文 n-gram 頻率統計＋
   英文詞頻＋使用者自訂情緒詞），供上傳時挑選增刪
@@ -80,20 +81,92 @@ def resolve_publish_settings(config: Optional[dict] = None) -> dict:
     }
 
 
+# 標題候選的句首贅詞（口語開場、連接詞）：出現在句首就剝掉，
+# 讓標題直接從賣點開始（「然後這台真的很猛」→「這台真的很猛」）。
+_LEAD_FILLER_RE = re.compile(
+    r"^(?:然後|接下來|接著|再來|所以|所以說|那|那個|就是|就是說|其實|"
+    r"欸|呃|嗯|好|好啦|好了|OK|okay)+[，,、\s]*", re.I)
+# 疑問句判定：結尾語氣詞或句首疑問詞（好奇缺口式標題點閱率較高）。
+_QUESTION_ENDS = ("？", "?", "嗎", "呢", "吧")
+_QUESTION_LEADS = ("為什麼", "怎麼", "如何", "是不是", "到底", "你知道",
+                   "你有沒有", "什麼是")
+# 數字句判定：阿拉伯數字或常見中文數量詞組（數字標題具體、易獲點擊）。
+_NUMBER_RE = re.compile(r"[0-9０-９]+|[一二兩三四五六七八九十百千萬]{2,}")
+# 子句切分（保留完整子句，不從句中硬截斷）。
+_CLAUSE_SPLIT_RE = re.compile(r"[。！!？?；;，,、]+")
+
+
+def _hard_cut(text: str, max_chars: int) -> str:
+    """最後手段的硬截斷：不切在英文單字中間。"""
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars]
+    # 截點若落在拉丁字詞中間，退到前一個完整字詞結尾。
+    if re.match(r"[A-Za-z0-9]", text[max_chars:1 + max_chars] or ""):
+        trimmed = re.sub(r"[A-Za-z0-9']+$", "", cut)
+        if len(trimmed) >= 6:
+            cut = trimmed
+    return cut
+
+
 def _clean_title(text: str, max_chars: int) -> str:
-    """整理標題候選：去頭尾空白、截長度上限、去結尾殘標點。"""
-    text = re.sub(r"\s+", " ", (text or "").strip())
-    if len(text) > max_chars:
-        text = text[:max_chars]
-    return text.rstrip(_TRAILING_PUNCT)
-
-
-def suggest_titles(items, count: int = 3, max_chars: int = 40) -> list:
     """
-    從段落清單挑出建議標題候選（依精彩分數排序、去重）。
+    整理標題候選：去空白與句首贅詞後，以「完整子句」湊到長度上限。
 
-    精彩段落是「觀眾反應最大的內容」，其文字通常最貼近影片賣點；
-    不足時以較長的保留段落補齊。
+    舊版直接 text[:max]，常把句子攔腰切斷（甚至切在英文單字中間）；
+    改為逐子句累積、放不下就停在前一個子句結尾，讀起來才像標題。
+    """
+    text = re.sub(r"\s+", " ", (text or "").strip())
+    text = _LEAD_FILLER_RE.sub("", text)
+    if len(text) <= max_chars:
+        return text.rstrip(_TRAILING_PUNCT)
+    clauses = [c for c in _CLAUSE_SPLIT_RE.split(text) if c.strip()]
+    built = ""
+    for clause in clauses:
+        candidate = (built + "，" + clause.strip()) if built else clause.strip()
+        if len(candidate) > max_chars:
+            break
+        built = candidate
+    if len(built) < 6:  # 第一個子句就超長（口語長句無標點）→ 硬截斷保底。
+        built = _hard_cut(text, max_chars)
+    return built.rstrip(_TRAILING_PUNCT)
+
+
+def _is_question(text: str) -> bool:
+    stripped = (text or "").rstrip(_TRAILING_PUNCT + "！!")
+    return (stripped.endswith(_QUESTION_ENDS)
+            or stripped.startswith(_QUESTION_LEADS))
+
+
+def _top_keyword(items, extra_words: str = "") -> str:
+    """挑一個冠頭關鍵字：自訂情緒詞（實際講到的）優先，其次高頻詞。"""
+    text = " ".join(item["text"] for item in items
+                    if item["kind"] == "speech")
+    lowered = text.lower()
+    for word in re.split(r"[,，、\s]+", extra_words or ""):
+        word = word.strip()
+        if word and word.lower() in lowered:
+            return word
+    for gram, count in _cjk_ngram_counts(text).most_common():
+        if count >= _NGRAM_MIN_COUNT:
+            return gram
+    return ""
+
+
+def suggest_titles(items, count: int = 3, max_chars: int = 40,
+                   extra_words: str = "") -> list:
+    """
+    從段落清單組出多種型態的標題候選（依精彩分數排序、去重）。
+
+    舊版只是把精彩段落文字截前 40 字，常常是半句話、實用價值低。
+    現在按「有效標題」的常見型態各出一手，供創作者挑選或組合：
+
+    1. 精華句：精彩分數最高段落，剝句首贅詞、以完整子句湊長度
+    2. 疑問句：素材中實際講出的疑問（好奇缺口，觀眾想知道答案）
+    3. 數字句：含具體數字的句子（「只要三百塊」比「很便宜」有力）
+    4. 關鍵字冠頭：【關鍵字】＋精華子句（搜尋／辨識度導向）
+
+    仍為純文字啟發式；不足 count 時以其餘保留段落補齊。
     """
     speech = [item for item in items
               if item["kind"] == "speech" and item["keep"] and
@@ -103,16 +176,68 @@ def suggest_titles(items, count: int = 3, max_chars: int = 40) -> list:
     backfill = sorted(
         (i for i in speech if i not in highlights),
         key=lambda i: len(i["text"]), reverse=True)
+    ordered = highlights + backfill
+
+    def cleaned(item):
+        return _clean_title(item["text"], max_chars)
+
+    candidates = []
+
+    # 1. 精華句（永遠當第一候選：最貼近影片賣點）。
+    for item in ordered:
+        title = cleaned(item)
+        if len(title) >= 6:
+            candidates.append(title)
+            break
+
+    # 2. 疑問句：從分數高到低找素材中真實講出的疑問。
+    for item in ranked:
+        if _is_question(item["text"]):
+            title = _clean_title(item["text"], max_chars)
+            if len(title) >= 6:
+                # 疑問語氣是賣點，補回問號讓好奇缺口明確。
+                if not title.endswith(("？", "?")):
+                    title += "？"
+                candidates.append(title)
+                break
+
+    # 3. 數字句：含具體數字的高分句。
+    for item in ranked:
+        if _NUMBER_RE.search(item["text"]):
+            title = cleaned(item)
+            if len(title) >= 6:
+                candidates.append(title)
+                break
+
+    # 4. 關鍵字冠頭：【關鍵字】＋（與第一候選不同的）精華子句。
+    keyword = _top_keyword(items, extra_words)
+    if keyword:
+        for item in ordered:
+            body = _clean_title(item["text"], max(max_chars - len(keyword) - 2,
+                                                  10))
+            if len(body) >= 6:
+                title = f"【{keyword}】{body}"[:max_chars]
+                candidates.append(title)
+                break
+
+    # 去重（忽略結尾問號差異）後不足 count 再拿其餘段落補齊。
+    def norm(text):
+        return text.rstrip("？?")
 
     titles = []
-    for item in highlights + backfill:
-        title = _clean_title(item["text"], max_chars)
-        if len(title) < 6 or title in titles:
-            continue
-        titles.append(title)
+    seen = set()
+    def add(title):
+        if len(title) >= 6 and norm(title) not in seen:
+            titles.append(title)
+            seen.add(norm(title))
+
+    for title in candidates:
+        add(title)
+    for item in ordered:
         if len(titles) >= count:
             break
-    return titles
+        add(cleaned(item))
+    return titles[:count]
 
 
 def _cjk_ngram_counts(text: str) -> Counter:
@@ -200,7 +325,7 @@ def build_publish_pack(items, settings: Optional[dict] = None,
     """
     settings = settings or resolve_publish_settings()
     titles = suggest_titles(items, settings["title_candidates"],
-                            settings["title_max_chars"])
+                            settings["title_max_chars"], extra_words)
     tags = suggest_tags(items, settings["tag_count"], extra_words)
 
     kept = [item for item in items
@@ -209,8 +334,8 @@ def build_publish_pack(items, settings: Optional[dict] = None,
 
     lines = [f"===== 發佈包：{source_name or '素材'} =====", ""]
 
-    lines.append(f"【建議標題（{len(titles)} 個候選，挑一個或自行組合；"
-                 "關鍵字放前 40 字內）】")
+    lines.append(f"【建議標題（{len(titles)} 個候選，含精華句／疑問句／"
+                 "數字句／關鍵字型態，挑一個或自行組合）】")
     if titles:
         lines.extend(f"{index}. {title}"
                      for index, title in enumerate(titles, start=1))

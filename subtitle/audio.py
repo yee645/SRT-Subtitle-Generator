@@ -171,15 +171,21 @@ def normalize_video(
 # 背景音樂自動閃避（audio ducking）
 # ---------------------------------------------------------------------------
 
-# 三個使用者可調的強度旋鈕，皆有合理範圍與預設值。
+# 使用者可調的強度旋鈕，皆有合理範圍與預設值。
 DEFAULT_DUCKING = {
     "music_volume": 0.35,      # 背景音樂基礎音量（混音前，不受閃避影響時的音量）
     "duck_strength": 8.0,      # 閃避強度：講話時音樂被壓低的程度，越高壓得越低
     "duck_sensitivity": 0.06,  # 閃避靈敏度：越低，越輕的講話音量就會觸發閃避
+    "auto_sensitivity": True,  # 自動適應人聲音量：先量測人聲響度再計算靈敏度
 }
 _MUSIC_VOLUME_RANGE = (0.05, 1.0)
 _DUCK_STRENGTH_RANGE = (1.0, 20.0)
 _DUCK_SENSITIVITY_RANGE = (0.01, 0.5)
+# 自動靈敏度：threshold 取「人聲整體響度再低 N dB」，確保一般講話段落
+# 都能觸發閃避；換算後夾限的範圍比手動旋鈕更寬（很小聲的人聲需要
+# 更低的 threshold 才有意義，sidechaincompress 下限為 0.00097）。
+_AUTO_SENS_OFFSET_DB = 12.0
+_AUTO_SENS_RANGE = (0.002, 0.5)
 # 閃避的反應與回復速度（毫秒），固定為業界常用值，不開放調整以控制複雜度。
 _DUCK_ATTACK_MS = 5
 _DUCK_RELEASE_MS = 300
@@ -212,7 +218,57 @@ def resolve_ducking_settings(config: Optional[dict] = None) -> dict:
         "music_volume": music_volume,
         "duck_strength": duck_strength,
         "duck_sensitivity": duck_sensitivity,
+        "auto_sensitivity": bool(raw.get("auto_sensitivity", True)),
     }
+
+
+def compute_auto_sensitivity(voice_lufs,
+                             offset_db: float = _AUTO_SENS_OFFSET_DB):
+    """
+    由人聲整體響度（LUFS）換算閃避 threshold（線性振幅）。
+
+    固定靈敏度是絕對音量門檻：人聲偏小聲（未先正規化）時可能整段都
+    低於門檻、閃避完全不觸發（實測發生過）。改以量到的人聲響度再低
+    offset_db 當 threshold，講話段落必然高於門檻、必然觸發閃避。
+
+    回傳夾限後的 threshold；量測值無法解析或明顯異常（靜音 -inf、
+    正值）時回傳 None，呼叫端保留手動設定值。
+    """
+    try:
+        lufs = float(voice_lufs)
+    except (TypeError, ValueError):
+        return None
+    if not -70.0 <= lufs <= 0.0:
+        return None
+    linear = 10.0 ** ((lufs - offset_db) / 20.0)
+    low, high = _AUTO_SENS_RANGE
+    return max(low, min(linear, high))
+
+
+def resolve_auto_sensitivity(video_path: str, settings: dict,
+                             progress_cb=None) -> dict:
+    """
+    auto_sensitivity 開啟時：量測影片人聲響度並覆寫 duck_sensitivity。
+
+    量測失敗（無 ffmpeg、檔案異常、整段靜音）時保留手動值，
+    不中斷混音流程。回傳新的 settings 複本，不修改原 dict。
+    """
+    if not settings.get("auto_sensitivity"):
+        return settings
+    if progress_cb:
+        progress_cb(0.0, "正在量測人聲音量（自動計算閃避靈敏度）...")
+    measured = measure_loudness(video_path)
+    value = compute_auto_sensitivity(
+        measured.get("input_i")) if measured else None
+    resolved = dict(settings)
+    if value is not None:
+        resolved["duck_sensitivity"] = value
+        logger.info("自動閃避靈敏度：人聲 %s LUFS → threshold %.4f",
+                    measured.get("input_i"), value)
+    else:
+        logger.info("人聲響度量測失敗，閃避靈敏度沿用手動值 %.3f",
+                    settings.get("duck_sensitivity", 0.06))
+    return resolved
 
 
 def build_ducking_filter_complex(settings: dict) -> str:
@@ -283,6 +339,8 @@ def mix_background_music(
         raise FileNotFoundError(f"找不到背景音樂檔：{music_path}")
 
     settings = settings or resolve_ducking_settings()
+    # 自動適應人聲音量：先量測再定 threshold（失敗時沿用手動值）。
+    settings = resolve_auto_sensitivity(video_path, settings, progress_cb)
     duration = probe_duration(video_path)
     filter_complex = build_ducking_filter_complex(settings)
     command = _ducking_command(

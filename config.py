@@ -116,6 +116,7 @@ DEFAULT_CONFIG = {
         "music_volume": 0.35,       # 背景音樂基礎音量（混音前）
         "duck_strength": 8.0,       # 閃避強度：講話時音樂被壓低的程度
         "duck_sensitivity": 0.06,   # 閃避靈敏度：越低越容易被輕聲觸發
+        "auto_sensitivity": True,   # 自動適應人聲音量（量測後自動算靈敏度）
     },
     # 封面候選擷取設定（審片助手用）：自動挑清晰畫面輸出 PNG 候選圖。
     "thumbnails": {
