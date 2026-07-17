@@ -80,44 +80,59 @@ class MusicDuckingDialog(tk.Toplevel):
             textvariable=self.strength_var, format="%.1f",
         ).grid(row=3, column=1, sticky="w", padx=(6, 0))
 
-        ttk.Label(body, text="閃避靈敏度：").grid(row=4, column=0, sticky="w", pady=3)
+        # 自動適應人聲音量：量測人聲響度後自動算靈敏度（勾選時停用手動旋鈕）。
+        self.auto_var = tk.BooleanVar(value=settings["auto_sensitivity"])
+        ttk.Checkbutton(
+            body, text="自動適應人聲音量（建議：先量測人聲，再自動計算靈敏度）",
+            variable=self.auto_var, command=self._sync_auto_state,
+        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 3))
+
+        ttk.Label(body, text="閃避靈敏度：").grid(row=5, column=0, sticky="w", pady=3)
         self.sensitivity_var = tk.DoubleVar(value=settings["duck_sensitivity"])
-        tk.Spinbox(
+        self.sensitivity_spin = tk.Spinbox(
             body, from_=0.01, to=0.5, increment=0.01, width=6,
             textvariable=self.sensitivity_var, format="%.2f",
-        ).grid(row=4, column=1, sticky="w", padx=(6, 0))
+        )
+        self.sensitivity_spin.grid(row=5, column=1, sticky="w", padx=(6, 0))
 
-        tk.Label(
-            body, fg="#666666", justify="left",
+        ttk.Label(
+            body, foreground="#666666", justify="left",
             text=("音量：混音前的音樂基礎音量；強度：講話時音樂被壓低的程度；\n"
-                  "靈敏度：數值越低，越輕的講話聲就會觸發閃避。"),
-        ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(4, 8))
+                  "自動適應開啟時靈敏度自動計算（人聲偏小聲也能正確觸發閃避），\n"
+                  "取消勾選才使用手動靈敏度（數值越低，越輕的講話聲就會觸發）。"),
+        ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(4, 8))
 
         self.status_var = tk.StringVar(
             value="選好影片與背景音樂後按「輸出混音影片」。")
         ttk.Label(body, textvariable=self.status_var,
                  foreground="#1a5fb4").grid(
-            row=6, column=0, columnspan=3, sticky="w")
+            row=7, column=0, columnspan=3, sticky="w")
 
         self.progress_var = tk.DoubleVar(value=0.0)
         self.progress = ttk.Progressbar(
             body, mode="determinate", maximum=100.0,
             variable=self.progress_var)
-        self.progress.grid(row=7, column=0, columnspan=3, sticky="we",
+        self.progress.grid(row=8, column=0, columnspan=3, sticky="we",
                           pady=(4, 8))
 
         buttons = ttk.Frame(body)
-        buttons.grid(row=8, column=0, columnspan=3, sticky="we")
+        buttons.grid(row=9, column=0, columnspan=3, sticky="we")
         self.run_btn = ttk.Button(
             buttons, text="輸出混音影片", command=self._on_run)
         self.run_btn.pack(side="left")
         ttk.Button(buttons, text="關閉", command=self._on_close).pack(
             side="right")
 
+        self._sync_auto_state()
         self._poll_job = self.after(120, self._poll_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ------------------------------------------------------------------
+    def _sync_auto_state(self):
+        """自動適應開啟時停用手動靈敏度旋鈕，避免兩者混淆。"""
+        self.sensitivity_spin.configure(
+            state="disabled" if self.auto_var.get() else "normal")
+
     def _choose_video(self):
         path = filedialog.askopenfilename(
             title="選擇影片", filetypes=MEDIA_FILETYPES, parent=self)
@@ -141,6 +156,7 @@ class MusicDuckingDialog(tk.Toplevel):
             "music_volume": safe(self.volume_var, 0.35),
             "duck_strength": safe(self.strength_var, 8.0),
             "duck_sensitivity": safe(self.sensitivity_var, 0.06),
+            "auto_sensitivity": bool(self.auto_var.get()),
         }
         try:
             save_config(self.config_data)
