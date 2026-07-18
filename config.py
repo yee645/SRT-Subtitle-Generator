@@ -132,6 +132,14 @@ DEFAULT_CONFIG = {
         "clip_peak_db": -0.5,     # 峰值高於此值（dB）視為爆音風險
         "balance_db": 6.0,        # 左右聲道相差超過此值（dB）判定不平衡
     },
+    # 影片畫質健檢與去頭尾（健檢視窗的畫質段落）。
+    "videocheck": {
+        "bitrate_margin": 1.0,     # 位元率門檻＝YouTube 建議值 × 此倍率
+        "dead_air_db": -45.0,      # 視為「無聲」的音量門檻（dB）
+        "head_max_seconds": 1.0,   # 開頭廢秒超過此長度即提醒修剪
+        "tail_max_seconds": 1.5,   # 結尾廢秒超過此長度即提醒修剪
+        "trim_pad": 0.25,          # 修剪保留的緩衝秒數
+    },
     # 音訊修復設定（健檢視窗的一鍵修復）。
     "audiofix": {
         "denoise": True,            # FFT 頻譜降噪（afftdn）

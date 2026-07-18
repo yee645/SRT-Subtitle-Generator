@@ -23,6 +23,11 @@ from subtitle.audiofix import (fix_audio, resolve_audiofix_settings,
                                suggest_output_path)
 from subtitle.burner import ffmpeg_available
 from subtitle.pipeline import unique_path
+from subtitle.videocheck import (format_video_report,
+                                 resolve_videocheck_settings,
+                                 run_video_check, suggest_output_path
+                                 as suggest_trim_output_path,
+                                 suggest_trim, trim_video)
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +42,9 @@ class AudioCheckDialog(tk.Toplevel):
 
     def __init__(self, master, config_data, media_path=""):
         super().__init__(master)
-        self.title("音訊健檢：上片前檢查爆音、音量與底噪")
-        self.geometry("660x680")
-        self.minsize(600, 560)
+        self.title("上片前健檢：音訊＋影片畫質、一鍵去頭尾")
+        self.geometry("680x780")
+        self.minsize(620, 640)
         self.transient(master)
 
         self.config_data = config_data
@@ -106,6 +111,25 @@ class AudioCheckDialog(tk.Toplevel):
                    textvariable=self.balance_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row2, text="dB").pack(side="left")
+        # 影片畫質門檻（位元率寬嚴、開頭廢秒提醒門檻）。
+        vc_settings = resolve_videocheck_settings(config_data)
+        row3 = ttk.Frame(options)
+        row3.pack(fill="x", pady=2)
+        ttk.Label(row3, text="位元率寬嚴:").pack(side="left")
+        self.bitrate_margin_var = tk.DoubleVar(
+            value=vc_settings["bitrate_margin"])
+        tk.Spinbox(row3, from_=0.5, to=2.0, increment=0.1, width=7,
+                   textvariable=self.bitrate_margin_var,
+                   format="%.1f").pack(side="left", padx=(2, 2))
+        ttk.Label(row3, text="× YouTube 建議值").pack(
+            side="left", padx=(0, 14))
+        ttk.Label(row3, text="開頭廢秒門檻:").pack(side="left")
+        self.head_max_var = tk.DoubleVar(
+            value=vc_settings["head_max_seconds"])
+        tk.Spinbox(row3, from_=0.3, to=10.0, increment=0.1, width=7,
+                   textvariable=self.head_max_var, format="%.1f").pack(
+            side="left", padx=(2, 2))
+        ttk.Label(row3, text="秒").pack(side="left")
 
         self.status_var = tk.StringVar(
             value="選好素材後按「開始健檢」，掃描不會改動原始檔案。")
@@ -164,6 +188,34 @@ class AudioCheckDialog(tk.Toplevel):
                  "建議先用預設值試聽。",
         ).pack(fill="x", pady=(2, 0))
 
+        # 一鍵去頭尾：健檢偵測到廢秒後自動帶入建議值，可手動微調。
+        trim_frame = ttk.LabelFrame(
+            body, text="一鍵去頭尾（健檢後自動帶入偵測到的廢秒）",
+            padding=(10, 6))
+        trim_frame.pack(fill="x", pady=(8, 0))
+        trim_row = ttk.Frame(trim_frame)
+        trim_row.pack(fill="x")
+        ttk.Label(trim_row, text="去頭:").pack(side="left")
+        self.trim_head_var = tk.DoubleVar(value=0.0)
+        tk.Spinbox(trim_row, from_=0.0, to=600.0, increment=0.1, width=6,
+                   textvariable=self.trim_head_var, format="%.1f").pack(
+            side="left", padx=(2, 2))
+        ttk.Label(trim_row, text="秒").pack(side="left", padx=(0, 10))
+        ttk.Label(trim_row, text="去尾:").pack(side="left")
+        self.trim_tail_var = tk.DoubleVar(value=0.0)
+        tk.Spinbox(trim_row, from_=0.0, to=600.0, increment=0.1, width=6,
+                   textvariable=self.trim_tail_var, format="%.1f").pack(
+            side="left", padx=(2, 2))
+        ttk.Label(trim_row, text="秒").pack(side="left", padx=(0, 10))
+        self.trim_btn = ttk.Button(trim_row, text="輸出修剪版",
+                                   command=self._on_trim)
+        self.trim_btn.pack(side="right")
+        ttk.Label(
+            trim_frame, foreground="#666666", anchor="w", justify="left",
+            text="開頭空白是留存率殺手；修剪版重新編碼確保剪點精準、"
+                 "原始檔不受影響。",
+        ).pack(fill="x", pady=(2, 0))
+
         buttons = ttk.Frame(body)
         buttons.pack(fill="x", pady=(8, 0))
         self.run_btn = ttk.Button(buttons, text="開始健檢",
@@ -209,6 +261,12 @@ class AudioCheckDialog(tk.Toplevel):
             "highpass_hz": safe(self.fix_hz_var, 80.0),
             "loudnorm": bool(self.fix_loudnorm_var.get()),
         }
+        merged_vc = dict(self.config_data.get("videocheck", {}))
+        merged_vc.update({
+            "bitrate_margin": safe(self.bitrate_margin_var, 1.0),
+            "head_max_seconds": safe(self.head_max_var, 1.0),
+        })
+        self.config_data["videocheck"] = merged_vc
         try:
             save_config(self.config_data)
         except OSError:
@@ -280,9 +338,58 @@ class AudioCheckDialog(tk.Toplevel):
                 self.result_queue.put(("status", (message, ratio)))
             result = run_audio_check(media_path, config, progress_cb=report)
             text = format_report(result, os.path.basename(media_path))
-            self.result_queue.put(("done", text))
+            # 影片畫質健檢：純音訊檔（無影像串流）自動略過畫質段落。
+            report(0.85, "正在檢查影片畫質與頭尾廢秒...")
+            video_result = run_video_check(media_path, config)
+            video_text = format_video_report(video_result)
+            if video_text:
+                text = f"{text}\n\n{video_text}"
+            trim = suggest_trim(video_result.get("dead_air"),
+                                resolve_videocheck_settings(config))
+            self.result_queue.put(("done", (text, trim)))
         except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
-            logger.exception("音訊健檢失敗")
+            logger.exception("健檢失敗")
+            self.result_queue.put(("error", exc))
+
+    def _on_trim(self):
+        """輸出去頭尾修剪版：依（可微調的）偵測建議重新輸出。"""
+        if self.is_processing:
+            return
+        media_path = self.media_var.get().strip()
+        if not media_path or not os.path.exists(media_path):
+            messagebox.showinfo("提示", "請選擇有效的影音檔。", parent=self)
+            return
+        if not ffmpeg_available():
+            show_friendly_error(
+                self, "影片修剪需要 ffmpeg",
+                RuntimeError("找不到 ffmpeg，請先安裝並加入系統 PATH。"),
+                on_install_ffmpeg=self._open_ffmpeg_installer)
+            return
+        try:
+            head = max(float(self.trim_head_var.get()), 0.0)
+            tail = max(float(self.trim_tail_var.get()), 0.0)
+        except (tk.TclError, ValueError):
+            head, tail = 0.0, 0.0
+        if head <= 0 and tail <= 0:
+            messagebox.showinfo(
+                "提示", "去頭與去尾秒數皆為 0，沒有需要修剪的內容；"
+                "可先按「開始健檢」自動偵測廢秒。", parent=self)
+            return
+        output = unique_path(suggest_trim_output_path(media_path))
+        self._set_processing(True)
+        threading.Thread(
+            target=self._trim_worker, args=(media_path, output, head, tail),
+            daemon=True).start()
+
+    def _trim_worker(self, media_path, output, head, tail):
+        try:
+            def report(ratio, message):
+                self.result_queue.put(("status", (message, ratio)))
+            trim_video(media_path, output, head_seconds=head,
+                       tail_seconds=tail, progress_cb=report)
+            self.result_queue.put(("trim_done", output))
+        except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
+            logger.exception("影片修剪失敗")
             self.result_queue.put(("error", exc))
 
     def _poll_queue(self):
@@ -296,8 +403,23 @@ class AudioCheckDialog(tk.Toplevel):
                         self.progress_var.set(ratio * 100.0)
                 elif kind == "done":
                     self._set_processing(False)
-                    self._show_report(payload)
-                    self.status_var.set("健檢完成，結果如下。")
+                    text, trim = payload
+                    self._show_report(text)
+                    self.trim_head_var.set(trim[0])
+                    self.trim_tail_var.set(trim[1])
+                    if trim[0] > 0 or trim[1] > 0:
+                        self.status_var.set(
+                            "健檢完成；已偵測到頭尾廢秒並帶入下方修剪建議。")
+                    else:
+                        self.status_var.set("健檢完成，結果如下。")
+                elif kind == "trim_done":
+                    self._set_processing(False)
+                    self.status_var.set(f"修剪版已輸出：{payload}")
+                    messagebox.showinfo(
+                        "修剪完成",
+                        f"已輸出修剪版：\n{payload}\n\n"
+                        "建議播放確認剪點；可對修剪版再跑一次健檢。",
+                        parent=self)
                 elif kind == "fix_done":
                     self._set_processing(False)
                     self.status_var.set(f"修復版已輸出：{payload}")
@@ -368,6 +490,7 @@ class AudioCheckDialog(tk.Toplevel):
         state = "disabled" if processing else "normal"
         self.run_btn.configure(state=state)
         self.fix_btn.configure(state=state)
+        self.trim_btn.configure(state=state)
 
     def _on_close(self):
         if getattr(self, "_poll_job", None):

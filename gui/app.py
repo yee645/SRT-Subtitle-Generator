@@ -177,7 +177,7 @@ class SrtApp(tk.Tk):
             command=self._open_music_dialog,
         ).pack(side="right", padx=(0, 8))
         ttk.Button(
-            toolbar, text="音訊健檢（上片前）", width=16,
+            toolbar, text="上片前健檢", width=12,
             command=self._open_audiocheck_dialog,
         ).pack(side="right", padx=(0, 8))
         ttk.Button(
