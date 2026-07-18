@@ -69,7 +69,7 @@ class AudioCheckDialog(tk.Toplevel):
                 banner, bg="#fdf3d7", fg="#8a5a00", anchor="w",
                 text="⚠ 尚未安裝 ffmpeg：音訊健檢需要它才能量測音軌。",
             ).pack(side="left", padx=6, pady=4)
-            tk.Button(banner, text="自動安裝 ffmpeg",
+            ttk.Button(banner, text="自動安裝 ffmpeg",
                       command=self._open_ffmpeg_installer).pack(
                 side="right", padx=6, pady=2)
             self.ffmpeg_banner = banner
@@ -143,7 +143,7 @@ class AudioCheckDialog(tk.Toplevel):
         tk.Spinbox(fix_row, from_=6.0, to=40.0, increment=1.0, width=4,
                    textvariable=self.fix_strength_var,
                    format="%.0f").pack(side="left", padx=(2, 2))
-        tk.Label(fix_row, text="dB").pack(side="left", padx=(0, 10))
+        ttk.Label(fix_row, text="dB").pack(side="left", padx=(0, 10))
         self.fix_highpass_var = tk.BooleanVar(value=fix_settings["highpass"])
         ttk.Checkbutton(fix_row, text="去低頻隆隆",
                        variable=self.fix_highpass_var).pack(side="left")
@@ -151,15 +151,15 @@ class AudioCheckDialog(tk.Toplevel):
         tk.Spinbox(fix_row, from_=40.0, to=200.0, increment=10.0, width=5,
                    textvariable=self.fix_hz_var,
                    format="%.0f").pack(side="left", padx=(2, 2))
-        tk.Label(fix_row, text="Hz").pack(side="left", padx=(0, 10))
+        ttk.Label(fix_row, text="Hz").pack(side="left", padx=(0, 10))
         self.fix_loudnorm_var = tk.BooleanVar(value=fix_settings["loudnorm"])
         ttk.Checkbutton(fix_row, text="響度正規化",
                        variable=self.fix_loudnorm_var).pack(side="left")
         self.fix_btn = ttk.Button(fix_row, text="輸出修復版",
                                   command=self._on_fix)
         self.fix_btn.pack(side="right")
-        tk.Label(
-            fix_frame, fg="#666666", anchor="w", justify="left",
+        ttk.Label(
+            fix_frame, foreground="#666666", anchor="w", justify="left",
             text="降噪對冷氣聲、電流聲等穩態底噪有效；強度過高人聲會發悶，"
                  "建議先用預設值試聽。",
         ).pack(fill="x", pady=(2, 0))

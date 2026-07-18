@@ -402,6 +402,11 @@ def _attach_words(cues, words, time_offset=0.0):
 # 視為「孤字碎片」的最大字數，達此長度以下會被併回前一句。
 _MAX_ORPHAN_CHARS = 2
 
+# 孤字合併允許的最大時間差（秒）：孤字與前一句間隔超過此值時視為
+# 停頓後的獨立反應詞（「嗯」「喔」很常見），不併回——否則前一句的
+# 顯示時間會被拉長、橫跨整段靜音，畫面上字幕停留過久。
+_MAX_ORPHAN_GAP = 1.0
+
 # 不重疊正規化用的極小間隔（秒）：兩句時間衝突到無法單靠截短前一句解決時
 # （例如起始時間相同或反序），前一句最少也要有這麼長，避免變成零長度或負值。
 _MIN_GAP_EPSILON = 0.05
@@ -472,10 +477,12 @@ def _merge_orphan_cues(cues):
     merged = []
     for cue in cues:
         text = cue["text"].strip()
-        if merged and len(text) <= _MAX_ORPHAN_CHARS:
-            # 視為被擠出的碎片，直接接回前一句末端並延長其結束時間。
+        if (merged and len(text) <= _MAX_ORPHAN_CHARS
+                and cue["start"] - merged[-1]["end"] <= _MAX_ORPHAN_GAP):
+            # 視為被擠出的碎片，接回前一句末端並延長其結束時間；
+            # 以 CJK 感知組字接回（英文孤字如 ok 之前要補空白）。
             previous = merged[-1]
-            previous["text"] = previous["text"].rstrip() + text
+            previous["text"] = join_words([previous["text"].rstrip(), text])
             previous["end"] = cue["end"]
         else:
             merged.append(cue)

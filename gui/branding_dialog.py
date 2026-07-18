@@ -71,7 +71,7 @@ class BrandingDialog(tk.Toplevel):
                 banner, bg="#fdf3d7", fg="#8a5a00", anchor="w",
                 text="⚠ 尚未安裝 ffmpeg：品牌套版需要它才能處理影片。",
             ).pack(side="left", padx=6, pady=4)
-            tk.Button(banner, text="自動安裝 ffmpeg",
+            ttk.Button(banner, text="自動安裝 ffmpeg",
                       command=self._open_ffmpeg_installer).pack(
                 side="right", padx=6, pady=2)
             self.ffmpeg_banner = banner
