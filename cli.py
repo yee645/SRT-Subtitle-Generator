@@ -40,6 +40,7 @@ from subtitle.ffmpeg_setup import ensure_ffmpeg_on_path
 from subtitle.media import probe_duration
 from subtitle.pipeline import EXPORT_FORMATS, run_batch, unique_path
 from subtitle.publisher import build_publish_pack, resolve_publish_settings
+from subtitle.videocheck import (format_video_report, run_video_check)
 from subtitle.thumbnails import (generate_thumbnails,
                                  resolve_thumbnail_settings)
 from subtitle.review import (analyze, build_chapters, collect_highlights,
@@ -93,6 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="封面候選：自動挑清晰畫面輸出「檔名_封面NN.png」候選圖；"
              "與 --review 併用時優先取精彩段落，單獨使用時整片均勻取樣。")
     parser.add_argument(
+        "--videocheck", action="store_true",
+        help="影片畫質健檢：位元率／解析度／更新率／編碼對照 YouTube 建議，"
+             "並偵測頭尾廢秒，附加於健檢報告；可與 --audiocheck 併用。")
+    parser.add_argument(
         "--audiofix", action="store_true",
         help="音訊修復：依 config.json 的 audiofix 設定（降噪／去低頻／"
              "響度正規化）輸出「檔名_修復」版本，畫面原樣複製。")
@@ -144,14 +149,16 @@ def main(argv=None) -> int:
             args.files, config, report,
             with_audiocheck=args.audiocheck,
             with_thumbnails=args.thumbnails)
-    elif args.audiocheck or args.thumbnails or args.audiofix or args.branding:
+    elif (args.audiocheck or args.thumbnails or args.audiofix
+            or args.branding or args.videocheck):
         # 免轉錄的輕量工具模式：健檢、封面候選、音訊修復與品牌套版都只需 ffmpeg。
         results = _run_tools_batch(
             args.files, config, report,
             do_audiocheck=args.audiocheck,
             do_thumbnails=args.thumbnails,
             do_audiofix=args.audiofix,
-            do_branding=args.branding)
+            do_branding=args.branding,
+            do_videocheck=args.videocheck)
     else:
         results = run_batch(
             args.files, config, mode=args.mode, report=report)
@@ -215,7 +222,8 @@ def _run_tools_batch(files: list, config: dict, report,
                      do_audiocheck: bool = False,
                      do_thumbnails: bool = False,
                      do_audiofix: bool = False,
-                     do_branding: bool = False) -> list:
+                     do_branding: bool = False,
+                     do_videocheck: bool = False) -> list:
     """輕量工具批次（免轉錄）：音訊健檢與封面候選，回傳與 run_batch 同構的結果。"""
     automation = config.get("automation", {})
     results = []
@@ -234,6 +242,18 @@ def _run_tools_batch(files: list, config: dict, report,
             if do_audiocheck:
                 report(f"{prefix}音訊健檢中...")
                 exports.append(_export_audiocheck(path, config, out_dir, base))
+            if do_videocheck:
+                report(f"{prefix}影片畫質健檢中...")
+                vc_text = format_video_report(run_video_check(path, config))
+                if vc_text:
+                    vc_path = unique_path(os.path.join(
+                        out_dir, f"{base}_影片健檢.txt"))
+                    with open(vc_path, "w", encoding="utf-8") as fp:
+                        fp.write(vc_text)
+                    print(vc_text, flush=True)
+                    exports.append(vc_path)
+                else:
+                    report(f"{prefix}無影像串流，略過影片健檢。")
             if do_thumbnails:
                 report(f"{prefix}擷取封面候選中（整片均勻取樣）...")
                 exports.extend(_export_thumbnails(
