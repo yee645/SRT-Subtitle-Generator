@@ -42,8 +42,8 @@ class BrandingDialog(tk.Toplevel):
     def __init__(self, master, config_data, media_path=""):
         super().__init__(master)
         self.title("品牌套版：片頭／片尾接續、浮水印疊加")
-        self.geometry("640x560")
-        self.minsize(600, 520)
+        self.geometry("640x440")
+        self.minsize(600, 420)
         self.transient(master)
 
         self.config_data = config_data
