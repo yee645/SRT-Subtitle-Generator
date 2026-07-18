@@ -70,16 +70,36 @@ def resolve_thumbnail_settings(config: Optional[dict] = None) -> dict:
     }
 
 
+# 間隔比較的浮點容差：均勻取樣的間距與 effective_spacing 可能只差
+# 10^-15 級的浮點誤差，不加容差會被誤判為「太近」而剔除。
+_SPACING_TOLERANCE = 1e-6
+
+
+def effective_spacing(duration: float, count: int, spacing: float) -> float:
+    """
+    短素材時自動縮小候選間隔，確保要求的張數湊得滿。
+
+    固定間隔（預設 8 秒）在短素材上會讓候選數湊不滿（例如 20 秒素材
+    要 6 張，均勻取樣的間距只有約 2.9 秒，全被固定間隔剔除）；
+    取「設定值」與「素材長度均分」的較小者，並保留 0.5 秒下限
+    避免全擠在同一格。長素材不受影響（均分值大於設定值）。
+    """
+    if duration <= 0 or count <= 0:
+        return spacing
+    return max(min(spacing, duration / (count + 1)), 0.5)
+
+
 def sample_windows(items, duration: float, settings: dict) -> list:
     """
     決定要取樣的時間窗口，回傳 [(start, end), ...]（依優先序排列）。
 
     有審片結果時：精彩段落（分數高者優先）→ 其餘保留段落；
     窗口不足（段落太少或未分析）時以整片均勻取樣補齊。
-    窗口中心點彼此至少相隔 min_spacing 秒，避免候選集中在同一幕。
+    窗口中心點彼此至少相隔 effective_spacing() 秒（短素材自動縮小），
+    避免候選集中在同一幕。
     """
     count = settings["count"]
-    spacing = settings["min_spacing"]
+    spacing = effective_spacing(duration, count, settings["min_spacing"])
     speech = [i for i in (items or [])
               if i.get("kind") == "speech" and i.get("keep", True)]
     if settings["prefer_highlights"]:
@@ -96,7 +116,8 @@ def sample_windows(items, duration: float, settings: dict) -> list:
         if len(windows) >= count:
             break
         mid = (item["start"] + item["end"]) / 2.0
-        if any(abs(mid - c) < spacing for c in centers):
+        if any(abs(mid - c) < spacing - _SPACING_TOLERANCE
+               for c in centers):
             continue
         half = min(_WINDOW_SECONDS, item["end"] - item["start"]) / 2.0
         start = max(item["start"], mid - half)
@@ -111,7 +132,8 @@ def sample_windows(items, duration: float, settings: dict) -> list:
         step = duration / (need + 1)
         for k in range(1, need + 1):
             mid = step * k
-            if any(abs(mid - c) < spacing for c in centers):
+            if any(abs(mid - c) < spacing - _SPACING_TOLERANCE
+                   for c in centers):
                 continue
             start = max(0.0, mid - _WINDOW_SECONDS / 2.0)
             end = min(duration, mid + _WINDOW_SECONDS / 2.0)
@@ -191,9 +213,22 @@ def pick_frames(window_scores: list, count: int, min_spacing: float) -> list:
         if len(picks) >= count:
             break
         for time, score in sorted(scores, key=lambda p: -p[1]):
-            if all(abs(time - t) >= min_spacing for t, _ in picks):
+            if all(abs(time - t) >= min_spacing - _SPACING_TOLERANCE
+                   for t, _ in picks):
                 picks.append((time, score))
                 break
+    if len(picks) < count:
+        # 短素材上窗口高度重疊，某些窗口的所有取樣格都可能與已選候選
+        # 太近而整窗空手；改用全體取樣格（分數高→低）候補回填，
+        # 仍維持間隔限制，確保張數盡量湊滿。
+        pooled = sorted((p for scores in window_scores for p in scores),
+                        key=lambda p: -p[1])
+        for time, score in pooled:
+            if len(picks) >= count:
+                break
+            if all(abs(time - t) >= min_spacing - _SPACING_TOLERANCE
+                   for t, _ in picks):
+                picks.append((time, score))
     picks.sort(key=lambda p: -p[1])
     return picks[:count]
 
@@ -260,7 +295,8 @@ def generate_thumbnails(
         window_scores.append(scores)
 
     picks = pick_frames(window_scores, settings["count"],
-                        settings["min_spacing"])
+                        effective_spacing(duration, settings["count"],
+                                          settings["min_spacing"]))
     results = []
     for rank, (time, score) in enumerate(picks, start=1):
         if progress_cb:

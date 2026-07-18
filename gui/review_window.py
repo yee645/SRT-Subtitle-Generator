@@ -51,8 +51,8 @@ class ReviewWindow(tk.Toplevel):
         super().__init__(master)
         self.title("審片助手：快速找可用片段")
         # 預設尺寸需容納偵測設定（4 列，含訊號權重）、時間軸與 5 排輸出按鈕。
-        self.geometry("1020x850")
-        self.minsize(840, 580)
+        self.geometry("1020x900")
+        self.minsize(840, 620)
 
         self.config_data = config_data
         self.media_path = media_path
@@ -90,7 +90,7 @@ class ReviewWindow(tk.Toplevel):
                 banner, bg="#fdf3d7", fg="#8a5a00", anchor="w",
                 text="⚠ 尚未安裝 ffmpeg：轉錄、粗剪、短片等功能需要它。",
             ).pack(side="left", padx=6, pady=4)
-            tk.Button(banner, text="自動安裝 ffmpeg",
+            ttk.Button(banner, text="自動安裝 ffmpeg",
                       command=self._open_ffmpeg_installer).pack(
                 side="right", padx=6, pady=2)
             self.ffmpeg_banner = banner
@@ -103,29 +103,29 @@ class ReviewWindow(tk.Toplevel):
 
         row1 = ttk.Frame(options)
         row1.pack(fill="x", pady=2)
-        tk.Label(row1, text="冷場門檻:").pack(side="left")
+        ttk.Label(row1, text="冷場門檻:").pack(side="left")
         self.silence_var = tk.DoubleVar(value=settings["silence_gap"])
         tk.Spinbox(
             row1, from_=0.5, to=10.0, increment=0.5, width=5,
             textvariable=self.silence_var, format="%.1f",
         ).pack(side="left", padx=(2, 2))
-        tk.Label(row1, text="秒").pack(side="left", padx=(0, 12))
-        tk.Label(row1, text="段落切分停頓:").pack(side="left")
+        ttk.Label(row1, text="秒").pack(side="left", padx=(0, 12))
+        ttk.Label(row1, text="段落切分停頓:").pack(side="left")
         self.gap_var = tk.DoubleVar(value=settings["segment_gap"])
         tk.Spinbox(
             row1, from_=0.4, to=5.0, increment=0.2, width=5,
             textvariable=self.gap_var, format="%.1f",
         ).pack(side="left", padx=(2, 2))
-        tk.Label(row1, text="秒").pack(side="left", padx=(0, 12))
-        tk.Label(row1, text="精彩敏感度:").pack(side="left")
+        ttk.Label(row1, text="秒").pack(side="left", padx=(0, 12))
+        ttk.Label(row1, text="精彩敏感度:").pack(side="left")
         self.sensitivity_var = tk.DoubleVar(
             value=settings["highlight_sensitivity"])
         tk.Spinbox(
             row1, from_=0.2, to=3.0, increment=0.1, width=5,
             textvariable=self.sensitivity_var, format="%.1f",
         ).pack(side="left", padx=(2, 2))
-        tk.Label(row1, text="倍", fg="#666666").pack(side="left", padx=(0, 12))
-        tk.Label(row1, text="重複判定相似度:").pack(side="left")
+        ttk.Label(row1, text="倍", foreground="#666666").pack(side="left", padx=(0, 12))
+        ttk.Label(row1, text="重複判定相似度:").pack(side="left")
         self.similarity_var = tk.DoubleVar(value=settings["take_similarity"])
         tk.Spinbox(
             row1, from_=0.5, to=0.95, increment=0.05, width=5,
@@ -134,56 +134,56 @@ class ReviewWindow(tk.Toplevel):
 
         row2 = ttk.Frame(options)
         row2.pack(fill="x", pady=2)
-        tk.Label(row2, text="自訂情緒詞:").pack(side="left")
+        ttk.Label(row2, text="自訂情緒詞:").pack(side="left")
         self.excite_var = tk.StringVar(
             value=settings["extra_excite_words"])
-        tk.Entry(row2, textvariable=self.excite_var).pack(
+        ttk.Entry(row2, textvariable=self.excite_var).pack(
             side="left", fill="x", expand=True, padx=(2, 12))
-        tk.Label(row2, text="口頭禪字:").pack(side="left")
+        ttk.Label(row2, text="口頭禪字:").pack(side="left")
         self.filler_var = tk.StringVar(value=settings["filler_words"])
-        tk.Entry(row2, textvariable=self.filler_var, width=14).pack(
+        ttk.Entry(row2, textvariable=self.filler_var, width=14).pack(
             side="left", padx=(2, 12))
-        tk.Label(row2, text="章節最短:").pack(side="left")
+        ttk.Label(row2, text="章節最短:").pack(side="left")
         self.chapter_min_var = tk.DoubleVar(
             value=settings["chapter_min_seconds"])
         tk.Spinbox(
             row2, from_=10, to=600, increment=10, width=5,
             textvariable=self.chapter_min_var, format="%.0f",
         ).pack(side="left", padx=(2, 0))
-        tk.Label(row2, text="秒").pack(side="left")
+        ttk.Label(row2, text="秒").pack(side="left")
         # 精彩訊號個別權重：讓不同內容類型自訂判定依據
         # （例如教學型調低情緒詞、遊戲實況調高音量）。
         row_w = ttk.Frame(options)
         row_w.pack(fill="x", pady=2)
-        tk.Label(row_w, text="精彩訊號權重:").pack(side="left")
+        ttk.Label(row_w, text="精彩訊號權重:").pack(side="left")
         self.weight_vars = {}
         for key, label in (("weight_energy", "音量"),
                            ("weight_pace", "語速"),
                            ("weight_excite", "情緒詞"),
                            ("weight_exclaim", "驚嘆句")):
-            tk.Label(row_w, text=label).pack(side="left", padx=(10, 2))
+            ttk.Label(row_w, text=label).pack(side="left", padx=(10, 2))
             var = tk.DoubleVar(value=settings[key])
             tk.Spinbox(
                 row_w, from_=0.0, to=3.0, increment=0.1, width=4,
                 textvariable=var, format="%.1f",
             ).pack(side="left")
             self.weight_vars[key] = var
-        tk.Label(row_w, text="（0＝停用該訊號、1＝預設）",
-                 fg="#666666").pack(side="left", padx=(10, 0))
+        ttk.Label(row_w, text="（0＝停用該訊號、1＝預設）",
+                 foreground="#666666").pack(side="left", padx=(10, 0))
         self.voice_band_var = tk.BooleanVar(value=settings["voice_band"])
         ttk.Checkbutton(
             row_w, text="音量聚焦人聲頻帶",
             variable=self.voice_band_var).pack(side="left", padx=(12, 0))
 
-        tk.Label(
-            options, fg="#666666",
+        ttk.Label(
+            options, foreground="#666666",
             text=("敏感度 >1 更容易標記精彩、<1 更嚴格；情緒詞以逗號或空白分隔，"
                   "附加於內建詞庫；口頭禪字連寫（逐字比對）。"),
         ).pack(anchor="w", pady=(2, 0))
 
         row3 = ttk.Frame(options)
         row3.pack(fill="x", pady=(4, 0))
-        self.analyze_btn = tk.Button(
+        self.analyze_btn = ttk.Button(
             row3, text="開始分析", width=12, command=self._on_analyze)
         self.analyze_btn.pack(side="left")
 
@@ -195,8 +195,8 @@ class ReviewWindow(tk.Toplevel):
 
         self.status_var = tk.StringVar(
             value="按「開始分析」轉錄素材並自動標記可剪片段。")
-        tk.Label(self, textvariable=self.status_var, fg="#1a5fb4",
-                 anchor="w", padx=10).pack(fill="x")
+        ttk.Label(self, textvariable=self.status_var, foreground="#1a5fb4",
+                 anchor="w", padding=(10, 0)).pack(fill="x")
 
         # 彩色時間軸：一眼看出精彩（綠）、待審視（琥珀）、冷場（灰）分佈。
         timeline_frame = ttk.LabelFrame(
@@ -210,12 +210,12 @@ class ReviewWindow(tk.Toplevel):
         legend = ttk.Frame(timeline_frame)
         legend.pack(fill="x", pady=(4, 0))
         for key in ("highlight", "normal", "review", "silence"):
-            tk.Label(legend, text="■", fg=CATEGORY_COLORS[key]).pack(side="left")
-            tk.Label(legend, text=CATEGORY_LABELS[key],
-                     fg="#555555").pack(side="left", padx=(0, 10))
+            ttk.Label(legend, text="■", foreground=CATEGORY_COLORS[key]).pack(side="left")
+            ttk.Label(legend, text=CATEGORY_LABELS[key],
+                     foreground="#555555").pack(side="left", padx=(0, 10))
         self.stats_var = tk.StringVar(value="")
-        tk.Label(legend, textvariable=self.stats_var,
-                 fg="#555555").pack(side="right")
+        ttk.Label(legend, textvariable=self.stats_var,
+                 foreground="#555555").pack(side="right")
 
         # 段落清單。
         frame = ttk.LabelFrame(
@@ -247,13 +247,13 @@ class ReviewWindow(tk.Toplevel):
         # 段落操作、篩選與搜尋。
         ops = ttk.Frame(self, padding=(10, 4))
         ops.pack(fill="x")
-        tk.Button(ops, text="切換保留", width=9,
+        ttk.Button(ops, text="切換保留", width=9,
                   command=self._toggle_selected).pack(side="left", padx=2)
-        tk.Button(ops, text="套用建議", width=9,
+        ttk.Button(ops, text="套用建議", width=9,
                   command=self._apply_suggestions).pack(side="left", padx=2)
-        tk.Button(ops, text="全部保留", width=9,
+        ttk.Button(ops, text="全部保留", width=9,
                   command=self._keep_all).pack(side="left", padx=2)
-        tk.Label(ops, text="顯示:").pack(side="left", padx=(14, 2))
+        ttk.Label(ops, text="顯示:").pack(side="left", padx=(14, 2))
         self.filter_var = tk.StringVar(value="all")
         for value, label in (("all", "全部"), ("highlight", "只看精彩"),
                              ("review", "只看待審視")):
@@ -261,12 +261,12 @@ class ReviewWindow(tk.Toplevel):
                 ops, text=label, value=value, variable=self.filter_var,
                 command=self._on_filter_change,
             ).pack(side="left")
-        tk.Label(ops, text="關鍵字:").pack(side="left", padx=(14, 2))
+        ttk.Label(ops, text="關鍵字:").pack(side="left", padx=(14, 2))
         self.search_var = tk.StringVar()
-        entry = tk.Entry(ops, textvariable=self.search_var, width=16)
+        entry = ttk.Entry(ops, textvariable=self.search_var, width=16)
         entry.pack(side="left")
         entry.bind("<Return>", lambda _e: self._on_search())
-        tk.Button(ops, text="搜尋下一個", width=10,
+        ttk.Button(ops, text="搜尋下一個", width=10,
                   command=self._on_search).pack(side="left", padx=4)
 
         # 匯出列（兩排：影片輸出與清單交付）。
@@ -286,7 +286,7 @@ class ReviewWindow(tk.Toplevel):
                 (row2, "匯出 CSV 清單", self._on_export_csv),
                 (row2, "複製 YouTube 章節", self._on_copy_chapters),
                 (row2, "匯出發佈包", self._on_export_publish_pack)]:
-            btn = tk.Button(parent, text=label, command=command,
+            btn = ttk.Button(parent, text=label, command=command,
                             state="disabled")
             btn.pack(side="left", padx=3)
             self.export_buttons.append(btn)
@@ -302,22 +302,22 @@ class ReviewWindow(tk.Toplevel):
         shorts_cfg = resolve_shorts_settings(self.config_data)
         row3 = ttk.Frame(exports)
         row3.pack(fill="x", pady=(4, 0))
-        tk.Label(row3, text="直式短片:").pack(side="left")
-        tk.Label(row3, text="版式").pack(side="left", padx=(6, 2))
+        ttk.Label(row3, text="直式短片:").pack(side="left")
+        ttk.Label(row3, text="版式").pack(side="left", padx=(6, 2))
         self.shorts_mode_var = tk.StringVar(
             value="模糊背景" if shorts_cfg["mode"] == "blur" else "裁切")
         ttk.Combobox(
             row3, textvariable=self.shorts_mode_var, state="readonly",
             width=8, values=["裁切", "模糊背景"],
         ).pack(side="left")
-        tk.Label(row3, text="焦點").pack(side="left", padx=(8, 2))
+        ttk.Label(row3, text="焦點").pack(side="left", padx=(8, 2))
         self.shorts_focus_var = tk.DoubleVar(value=shorts_cfg["focus_x"])
         tk.Spinbox(
             row3, from_=0.0, to=1.0, increment=0.05, width=5,
             textvariable=self.shorts_focus_var, format="%.2f",
         ).pack(side="left")
-        tk.Label(row3, text="（0 左、0.5 中、1 右）",
-                 fg="#666666").pack(side="left")
+        ttk.Label(row3, text="（0 左、0.5 中、1 右）",
+                 foreground="#666666").pack(side="left")
         self.shorts_subs_var = tk.BooleanVar(
             value=shorts_cfg["burn_subtitles"])
         ttk.Checkbutton(row3, text="燒錄字幕",
@@ -326,7 +326,7 @@ class ReviewWindow(tk.Toplevel):
         self.shorts_loudnorm_var = tk.BooleanVar(value=shorts_cfg["loudnorm"])
         ttk.Checkbutton(row3, text="響度正規化",
                        variable=self.shorts_loudnorm_var).pack(side="left")
-        shorts_btn = tk.Button(
+        shorts_btn = ttk.Button(
             row3, text="輸出直式短片（選取段落）",
             command=self._on_export_shorts, state="disabled")
         shorts_btn.pack(side="left", padx=(8, 3))
@@ -336,59 +336,59 @@ class ReviewWindow(tk.Toplevel):
         thumbs_cfg = resolve_thumbnail_settings(self.config_data)
         row4 = ttk.Frame(exports)
         row4.pack(fill="x", pady=(4, 0))
-        tk.Label(row4, text="封面候選:").pack(side="left")
-        tk.Label(row4, text="張數").pack(side="left", padx=(6, 2))
+        ttk.Label(row4, text="封面候選:").pack(side="left")
+        ttk.Label(row4, text="張數").pack(side="left", padx=(6, 2))
         self.thumb_count_var = tk.IntVar(value=thumbs_cfg["count"])
         tk.Spinbox(
             row4, from_=2, to=12, increment=1, width=4,
             textvariable=self.thumb_count_var).pack(side="left")
-        tk.Label(row4, text="最小間隔").pack(side="left", padx=(8, 2))
+        ttk.Label(row4, text="最小間隔").pack(side="left", padx=(8, 2))
         self.thumb_spacing_var = tk.DoubleVar(
             value=thumbs_cfg["min_spacing"])
         tk.Spinbox(
             row4, from_=1.0, to=120.0, increment=1.0, width=5,
             textvariable=self.thumb_spacing_var, format="%.0f",
         ).pack(side="left")
-        tk.Label(row4, text="秒").pack(side="left")
+        ttk.Label(row4, text="秒").pack(side="left")
         self.thumb_highlight_var = tk.BooleanVar(
             value=thumbs_cfg["prefer_highlights"])
         ttk.Checkbutton(
             row4, text="優先取精彩段落",
             variable=self.thumb_highlight_var).pack(side="left", padx=(8, 0))
-        thumbs_btn = tk.Button(
+        thumbs_btn = ttk.Button(
             row4, text="擷取封面候選圖",
             command=self._on_export_thumbnails, state="disabled")
         thumbs_btn.pack(side="left", padx=(8, 3))
         self.export_buttons.append(thumbs_btn)
-        tk.Label(row4, text="（自動挑清晰、有內容的畫面，輸出 PNG）",
-                 fg="#666666").pack(side="left")
+        ttk.Label(row4, text="（自動挑清晰、有內容的畫面，輸出 PNG）",
+                 foreground="#666666").pack(side="left")
 
         # 第五排：mid-roll 廣告插入點（放自然停頓處才容易被投放）。
         ad_cfg = resolve_adbreak_settings(self.config_data)
         row5 = ttk.Frame(exports)
         row5.pack(fill="x", pady=(4, 0))
-        tk.Label(row5, text="廣告插入點:").pack(side="left")
-        tk.Label(row5, text="最小間隔").pack(side="left", padx=(6, 2))
+        ttk.Label(row5, text="廣告插入點:").pack(side="left")
+        ttk.Label(row5, text="最小間隔").pack(side="left", padx=(6, 2))
         self.ad_spacing_var = tk.DoubleVar(
             value=ad_cfg["min_spacing_minutes"])
         tk.Spinbox(
             row5, from_=2.0, to=15.0, increment=0.5, width=5,
             textvariable=self.ad_spacing_var, format="%.1f",
         ).pack(side="left")
-        tk.Label(row5, text="分").pack(side="left")
-        tk.Label(row5, text="最多").pack(side="left", padx=(8, 2))
+        ttk.Label(row5, text="分").pack(side="left")
+        ttk.Label(row5, text="最多").pack(side="left", padx=(8, 2))
         self.ad_max_var = tk.IntVar(value=ad_cfg["max_breaks"])
         tk.Spinbox(
             row5, from_=1, to=20, increment=1, width=4,
             textvariable=self.ad_max_var).pack(side="left")
-        tk.Label(row5, text="個").pack(side="left")
-        ad_btn = tk.Button(
+        ttk.Label(row5, text="個").pack(side="left")
+        ad_btn = ttk.Button(
             row5, text="複製廣告插入點",
             command=self._on_copy_ad_breaks, state="disabled")
         ad_btn.pack(side="left", padx=(8, 3))
         self.export_buttons.append(ad_btn)
-        tk.Label(row5, text="（挑自然停頓處；YouTube 8 分鐘以上影片適用）",
-                 fg="#666666").pack(side="left")
+        ttk.Label(row5, text="（挑自然停頓處；YouTube 8 分鐘以上影片適用）",
+                 foreground="#666666").pack(side="left")
 
     # ==================================================================
     # 分析
