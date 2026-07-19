@@ -159,6 +159,21 @@ def probe_video_info(media_path: str) -> Optional[dict]:
     }
 
 
+# 兩段靜音／黑畫面間可忽略的最長空隙（秒）：小於此值視為同一段廢秒。
+_BRIDGE_GAP = 0.35
+
+
+def _bridge_spans(spans):
+    """合併間隔小於 _BRIDGE_GAP 的相鄰區段（輸入需已依起點排序）。"""
+    merged = []
+    for span in spans:
+        if merged and span[0] - merged[-1][1] <= _BRIDGE_GAP:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], span[1]))
+        else:
+            merged.append(tuple(span))
+    return merged
+
+
 def parse_dead_air(stderr: str, duration: float) -> dict:
     """
     解析 blackdetect＋silencedetect 的輸出，回傳頭尾廢秒資訊。
@@ -181,6 +196,11 @@ def parse_dead_air(stderr: str, duration: float) -> dict:
         silences.append((max(start, 0.0), duration))
     blacks = [(float(m.group(1)), float(m.group(2)))
               for m in _BLACK_RE.finditer(stderr or "")]
+    # 橋接短暫聲響：真實素材的廢秒中常夾著一瞬間的雜音（相機提示音、
+    # 椅子聲，實測 Big Buck Bunny 素材曾出現 0.1 秒的斷點），兩段靜音
+    # 之間的空隙夠短時視為同一段廢秒，避免嚴重低估開頭廢秒長度。
+    silences = _bridge_spans(sorted(silences))
+    blacks = _bridge_spans(sorted(blacks))
 
     def head_run(spans):
         return max((end for s, end in spans if s <= 0.1), default=0.0)
@@ -295,14 +315,14 @@ def run_video_check(
         findings.append(_finding(
             LEVEL_BAD, "位元率",
             f"{bitrate:.1f} Mbps，低於 YouTube 建議的 "
-            f"{recommended:.0f} Mbps（此解析度／更新率）",
+            f"{recommended:g} Mbps（此解析度／更新率）",
             "上傳後 YouTube 會再壓縮一次，來源位元率不足時畫面會明顯"
             "變糊（實務上常建議以建議值的 1.5 倍輸出留餘裕）；"
             "請提高輸出位元率後重新匯出。"))
     else:
         findings.append(_finding(
             LEVEL_GOOD, "位元率",
-            f"{bitrate:.1f} Mbps（建議值 {recommended:.0f} Mbps）"))
+            f"{bitrate:.1f} Mbps（建議值 {recommended:g} Mbps）"))
 
     # 4. 編碼格式。
     codec = (info["codec"] or "").lower()
