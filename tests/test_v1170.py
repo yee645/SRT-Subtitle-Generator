@@ -50,6 +50,27 @@ check("結尾無黑畫面", parsed["tail_black"] == 0.0)
 clean = videocheck.parse_dead_air("", 10.0)
 check("乾淨素材全零", all(v == 0.0 for v in clean.values()))
 
+# 廢秒中的短暫聲響（相機提示音等）要橋接，不可低估廢秒長度
+# （實測 Big Buck Bunny 素材曾因 0.1 秒斷點把 2.2 秒廢秒低估成 1.07 秒）。
+blip_sample = """
+[silencedetect @ 0x1] silence_start: 0
+[silencedetect @ 0x1] silence_end: 1.07 | silence_duration: 1.07
+[silencedetect @ 0x1] silence_start: 1.17
+[silencedetect @ 0x1] silence_end: 2.22 | silence_duration: 1.05
+"""
+bridged = videocheck.parse_dead_air(blip_sample, 8.0)
+check("短暫聲響橋接後廢秒完整", bridged["head_silence"] == 2.22,
+      str(bridged))
+# 空隙夠長（> 0.35 秒）就不是同一段廢秒，不可誤併
+long_gap = """
+[silencedetect @ 0x1] silence_start: 0
+[silencedetect @ 0x1] silence_end: 1.0 | silence_duration: 1.0
+[silencedetect @ 0x1] silence_start: 2.0
+[silencedetect @ 0x1] silence_end: 3.0 | silence_duration: 1.0
+"""
+apart = videocheck.parse_dead_air(long_gap, 8.0)
+check("長空隙不誤併", apart["head_silence"] == 1.0, str(apart))
+
 # ===== 4. 修剪建議 =====
 sug = videocheck.suggest_trim(
     {"head_silence": 2.1, "head_black": 1.8,
