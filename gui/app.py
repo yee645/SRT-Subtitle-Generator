@@ -49,6 +49,7 @@ from gui.replace_dialog import ReplaceDialog
 from gui.review_window import ReviewWindow
 from gui.scrollable import ScrollableFrame
 from gui.style_panel import StylePanel
+from gui.translate_dialog import TranslateDialog
 
 logger = logging.getLogger(__name__)
 
@@ -494,6 +495,8 @@ class SrtApp(tk.Tk):
                   command=self._on_clear_cues).pack(side="left", padx=2)
         ttk.Button(frame, text="尋找取代", width=10,
                   command=self._on_find_replace).pack(side="left", padx=2)
+        ttk.Button(frame, text="翻譯字幕", width=10,
+                  command=self._open_translate_dialog).pack(side="left", padx=2)
 
     def _build_export_section(self, parent):
         """匯出與燒錄區：多格式匯出與影片字幕燒錄。"""
@@ -741,6 +744,19 @@ class SrtApp(tk.Tk):
             existing.focus_set()
             return
         self._replace_dialog = ReplaceDialog(self)
+
+    def _open_translate_dialog(self):
+        """開啟字幕翻譯對話框：需先有字幕清單才能翻譯。"""
+        if not self.cues:
+            messagebox.showinfo("提示", "目前沒有字幕可翻譯，請先生成字幕。")
+            return
+
+        def on_done(new_cues):
+            self.cues = new_cues
+            self.apply_text_edits()
+            self.status_var.set("已套用翻譯結果。")
+
+        TranslateDialog(self, self.config_data, self.cues, on_done=on_done)
 
     def apply_text_edits(self):
         """字幕文字被批次修改後刷新清單與預覽（時間軸不變，不需重排序）。"""

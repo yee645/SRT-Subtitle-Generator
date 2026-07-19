@@ -173,6 +173,12 @@ DEFAULT_CONFIG = {
         "watermark_scale": 0.15,
         "watermark_margin": 24,
     },
+    # 字幕翻譯（雙語字幕）設定：金鑰沿用「轉寫設定」的 OpenAI API 金鑰。
+    "translate": {
+        "target_language": "en",  # 目標語言代碼（en/ja/ko/...）
+        "mode": "bilingual",      # bilingual＝原文+譯文上下行；replace＝僅譯文
+        "batch_size": 30,         # 每次 API 請求的句數
+    },
     # 其他狀態。
     "last_dir": "",               # 上次開啟檔案的目錄
 }
