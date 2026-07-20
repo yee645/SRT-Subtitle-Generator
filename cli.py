@@ -17,6 +17,7 @@
     python main.py --audiofix 影片.mp4            # 音訊修復版（降噪等，免轉錄）
     python main.py --branding 影片.mp4          # 套用已設定的片頭/片尾/浮水印
     python main.py --review --thumbnails 素材.mp4 # 審片＋精彩段落封面候選
+    python main.py --subs 影片.srt --burn 影片.mp4   # 既有字幕直接燒錄（免轉錄）
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
 """
@@ -37,8 +38,10 @@ from subtitle.branding import (apply_branding, resolve_branding_settings,
                                suggest_branding_output_path)
 from subtitle.errors import format_error_text
 from subtitle.ffmpeg_setup import ensure_ffmpeg_on_path
+from subtitle.importer import load_subtitle_file
 from subtitle.media import probe_duration
-from subtitle.pipeline import EXPORT_FORMATS, run_batch, unique_path
+from subtitle.pipeline import (EXPORT_FORMATS, enabled_export_formats,
+                               export_and_burn, run_batch, unique_path)
 from subtitle.publisher import build_publish_pack, resolve_publish_settings
 from subtitle.videocheck import (format_video_report, run_video_check)
 from subtitle.thumbnails import (generate_thumbnails,
@@ -105,6 +108,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--branding", action="store_true",
         help="品牌套版：套用 config.json 已設定的片頭／片尾／浮水印，"
              "輸出「檔名_套版」版本；未設定任何一項時單檔略過並提示。")
+    parser.add_argument(
+        "--subs", metavar="字幕檔",
+        help="使用既有字幕檔（.srt/.vtt）跳過語音辨識：搭配一個媒體檔，"
+             "依自動化輸出設定匯出其他格式並可 --burn 燒錄硬字幕。")
     return parser
 
 
@@ -144,7 +151,14 @@ def main(argv=None) -> int:
         percent = f"{int(ratio * 100):3d}% " if ratio is not None else "     "
         print(f"{percent}{message}", flush=True)
 
-    if args.review:
+    if args.subs:
+        if len(args.files) != 1:
+            raise SystemExit(
+                "--subs 需搭配「剛好一個」媒體檔（跳過語音辨識，"
+                "直接用既有字幕匯出／燒錄），目前給了 "
+                f"{len(args.files)} 個檔案。")
+        results = _run_subs_batch(args.files[0], args.subs, config, report)
+    elif args.review:
         results = _run_review_batch(
             args.files, config, report,
             with_audiocheck=args.audiocheck,
@@ -216,6 +230,39 @@ def _export_thumbnails(path: str, items, duration: float, config: dict,
             os.path.join(out_dir, f"{base}_封面{rank:02d}.png")),
         settings=resolve_thumbnail_settings(config))
     return [item["path"] for item in results]
+
+
+def _run_subs_batch(media_path: str, subs_path: str, config: dict,
+                    report) -> list:
+    """
+    --subs 模式：讀入既有字幕檔，跳過轉錄，直接沿用自動化匯出／燒錄設定。
+
+    回傳結構與 run_batch 相同（單一元素的清單），供 main() 的總結報告共用。
+    """
+    try:
+        if not os.path.exists(media_path):
+            raise FileNotFoundError(f"找不到檔案：{media_path}")
+        automation = config.get("automation", {})
+        if not enabled_export_formats(automation) \
+                and not automation.get("burn_video"):
+            raise ValueError("自動化輸出未勾選任何項目（匯出格式或燒錄影片）。")
+        report(f"正在讀取字幕檔：{os.path.basename(subs_path)}...")
+        loaded = load_subtitle_file(subs_path)
+        cues = loaded["cues"]
+        if loaded["skipped"]:
+            report(f"已略過 {loaded['skipped']} 段無法解析的字幕區塊。")
+        report(f"已讀入 {len(cues)} 句字幕（編碼：{loaded['encoding']}），"
+              "開始匯出／燒錄...")
+        exports, burned = export_and_burn(cues, media_path, config, report)
+        report("完成", 1.0)
+        return [{
+            "path": media_path, "ok": True, "error": None,
+            "result": {"cues": cues, "exports": exports, "burned": burned},
+        }]
+    except Exception as exc:  # 與其他批次模式一致：失敗時仍回傳同構結果。
+        report(f"失敗：{exc}", 1.0)
+        return [{"path": media_path, "ok": False, "result": None,
+                 "error": str(exc)}]
 
 
 def _run_tools_batch(files: list, config: dict, report,
