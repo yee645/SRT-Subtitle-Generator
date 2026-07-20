@@ -176,6 +176,15 @@ def describe_exception(exc: Union[BaseException, str]) -> FriendlyError:
                      "請複製下方技術細節回報。",
             details=text, kind=KIND_FFMPEG_FAILED)
 
+    if "無法解析字幕檔" in text:
+        return FriendlyError(
+            "無法解析匯入的字幕檔",
+            cause="檔案內容不是有效的 SRT／VTT 格式，或編碼特殊導致內容變成亂碼。",
+            solution="確認副檔名與內容相符（SRT 的時間軸格式為 "
+                     "00:00:01,000 --> 00:00:03,000）；若是從其他工具匯出的"
+                     "檔案，改用 UTF-8 編碼重新儲存後再試。",
+            details=text)
+
     return FriendlyError(
         "發生未預期的錯誤",
         cause="這不是一個已知的常見問題，可能與特定檔案或環境有關。",

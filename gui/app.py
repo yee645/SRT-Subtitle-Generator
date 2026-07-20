@@ -34,6 +34,7 @@ from updater import (APP_VERSION, check_for_update, cleanup_old_version,
 from subtitle.aligner import align_transcript
 from subtitle.burner import burn_subtitles, ffmpeg_available
 from subtitle.exporter import FORMAT_FILETYPES, export, format_srt_timestamp
+from subtitle.importer import load_subtitle_file
 from subtitle.pipeline import run_batch
 from subtitle.segmenter import build_cues_from_words
 from subtitle.textedit import apply_corrections
@@ -56,6 +57,13 @@ logger = logging.getLogger(__name__)
 # 支援的影音檔副檔名（檔案選擇器用）。
 MEDIA_FILETYPES = [
     ("影片與音訊檔", "*.mp4 *.mkv *.mov *.avi *.flv *.mp3 *.wav *.m4a *.aac *.ogg"),
+    ("所有檔案", "*.*"),
+]
+# 可匯入的字幕檔副檔名（匯入字幕按鈕用）。
+IMPORT_FILETYPES = [
+    ("字幕檔（SRT/VTT）", "*.srt *.vtt"),
+    ("SRT 字幕檔", "*.srt"),
+    ("WebVTT 字幕檔", "*.vtt"),
     ("所有檔案", "*.*"),
 ]
 # 模式識別字串。
@@ -497,6 +505,8 @@ class SrtApp(tk.Tk):
                   command=self._on_find_replace).pack(side="left", padx=2)
         ttk.Button(frame, text="翻譯字幕", width=10,
                   command=self._open_translate_dialog).pack(side="left", padx=2)
+        ttk.Button(frame, text="匯入字幕", width=10,
+                  command=self._import_subtitles).pack(side="left", padx=2)
 
     def _build_export_section(self, parent):
         """匯出與燒錄區：多格式匯出與影片字幕燒錄。"""
@@ -757,6 +767,44 @@ class SrtApp(tk.Tk):
             self.status_var.set("已套用翻譯結果。")
 
         TranslateDialog(self, self.config_data, self.cues, on_done=on_done)
+
+    def _import_subtitles(self):
+        """
+        匯入既有字幕檔（SRT/VTT）：接上既有的編修／樣式／翻譯／燒錄管線，
+
+        免去使用者只能開記事本手動改字幕檔的窘境（下載的 YouTube 自動字幕、
+        其他工具產出的字幕檔都能直接匯入沿用）。已有字幕清單時先確認是否
+        取代，避免誤蓋掉手上正在編輯的內容。
+        """
+        initial_dir = self.config_data.get("last_dir") or os.getcwd()
+        path = filedialog.askopenfilename(
+            title="選擇要匯入的字幕檔", initialdir=initial_dir,
+            filetypes=IMPORT_FILETYPES,
+        )
+        if not path:
+            return
+        if self.cues:
+            if not messagebox.askyesno(
+                    "確認匯入",
+                    f"匯入將取代目前的 {len(self.cues)} 句字幕，繼續？"):
+                return
+        try:
+            loaded = load_subtitle_file(path)
+        except Exception as exc:
+            show_friendly_error(self, "匯入失敗", exc)
+            return
+        self.cues = loaded["cues"]
+        self.config_data["last_dir"] = os.path.dirname(path)
+        self._save_config_silently()
+        self._populate_cue_list(self.cues)
+        self._update_export_state()
+        self._refresh_preview()
+        message = f"已匯入 {len(self.cues)} 句字幕"
+        if loaded["skipped"]:
+            message += f"（略過 {loaded['skipped']} 段無法解析、編碼 {loaded['encoding']}）"
+        else:
+            message += f"（編碼 {loaded['encoding']}）"
+        self.status_var.set(message)
 
     def apply_text_edits(self):
         """字幕文字被批次修改後刷新清單與預覽（時間軸不變，不需重排序）。"""

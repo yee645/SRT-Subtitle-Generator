@@ -149,18 +149,45 @@ def run_pipeline(
     if corrected and report:
         report(f"已自動修正 {corrected} 處慣性錯字", generate_high)
 
-    # 匯出勾選的字幕格式。
+    exports, burned = export_and_burn(
+        cues, media_path, config, _sub_report(report, generate_high, 1.0))
+
+    if report:
+        report("自動流程完成。", 1.0)
+    return {"cues": cues, "exports": exports, "burned": burned}
+
+
+def export_and_burn(
+    cues: list,
+    media_path: str,
+    config: dict,
+    report: Optional[ReportCallback] = None,
+) -> tuple:
+    """
+    把已經有的 cue 清單依 automation 設定匯出檔案並（可選）燒錄硬字幕。
+
+    抽出這段共用邏輯，讓「轉錄／文字稿對齊生成字幕」與「匯入既有字幕檔」
+    兩條路徑都能重用同一套匯出／燒錄行為，不必各寫一份。
+
+    回傳 (exports, burned)：exports 為匯出檔案路徑清單，burned 為燒錄輸出
+    路徑或 None（未勾選燒錄時）。report 收到的進度區間視為 [0, 1]。
+    """
+    automation = config.get("automation", {})
+    formats = enabled_export_formats(automation)
+    burn = bool(automation.get("burn_video"))
+
     out_dir = resolve_output_dir(media_path, automation)
     os.makedirs(out_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(media_path))[0]
     style = config.get("subtitle_style", {})
     exports = []
+    export_high = 0.45 if burn else 0.98
     for ext in formats:
         target = unique_path(os.path.join(out_dir, base + ext))
         export(cues, target, style=style)
         exports.append(target)
         if report:
-            report(f"已匯出 {os.path.basename(target)}", generate_high + 0.02)
+            report(f"已匯出 {os.path.basename(target)}", export_high)
 
     # 燒錄硬字幕影片（可依設定同步做響度正規化）。
     burned = None
@@ -175,13 +202,10 @@ def run_pipeline(
             cues=cues,
             output_path=burned,
             style=style,
-            progress_cb=_burn_report(_sub_report(report, 0.55, 1.0)),
+            progress_cb=_burn_report(_sub_report(report, 0.5, 1.0)),
             loudnorm_target=loudnorm_target,
         )
-
-    if report:
-        report("自動流程完成。", 1.0)
-    return {"cues": cues, "exports": exports, "burned": burned}
+    return exports, burned
 
 
 def _burn_report(report: Optional[ReportCallback]):
