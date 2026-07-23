@@ -44,6 +44,7 @@ from gui.branding_dialog import BrandingDialog
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
 from gui.cue_editor import CueEditDialog
+from gui.jumpcut_dialog import JumpCutDialog
 from gui.music_dialog import MusicDuckingDialog
 from gui.preview_panel import PreviewPanel
 from gui.replace_dialog import ReplaceDialog
@@ -543,6 +544,11 @@ class SrtApp(tk.Tk):
             command=self._on_burn, state="disabled",
         )
         self.burn_btn.pack(side="left", padx=(8, 2))
+        self.jumpcut_btn = ttk.Button(
+            frame, text="自動跳剪停頓", width=13,
+            command=self._open_jumpcut_dialog, state="disabled",
+        )
+        self.jumpcut_btn.pack(side="left", padx=2)
 
     def _build_preview_section(self, parent):
         """即時字幕預覽。"""
@@ -822,6 +828,21 @@ class SrtApp(tk.Tk):
 
         SubtitleCheckDialog(self, self.config_data, self.cues,
                             on_fixed=on_fixed)
+
+    def _open_jumpcut_dialog(self):
+        """開啟自動跳剪：依目前字幕找出句間停頓，一次剪掉整支影片的冷場。"""
+        if not self.cues:
+            messagebox.showinfo("提示", "目前沒有字幕，請先生成或匯入字幕。")
+            return
+        files = self._selected_files()
+        media_path = files[0] if files else ""
+
+        def on_done(new_cues):
+            self.cues = new_cues
+            self.apply_text_edits()
+
+        JumpCutDialog(self, self.config_data, self.cues,
+                     media_path=media_path, on_done=on_done)
 
     def apply_text_edits(self):
         """字幕文字被批次修改後刷新清單與預覽（時間軸不變，不需重排序）。"""
@@ -1376,7 +1397,8 @@ class SrtApp(tk.Tk):
         """依目前是否有字幕，啟用或停用匯出 / 燒錄按鈕。"""
         state = "normal" if self.cues else "disabled"
         for btn in (self.export_btn_srt, self.export_btn_vtt,
-                    self.export_btn_ass, self.export_btn_txt, self.burn_btn):
+                    self.export_btn_ass, self.export_btn_txt, self.burn_btn,
+                    self.jumpcut_btn):
             btn.configure(state=state)
 
     def _default_export_name(self, ext):

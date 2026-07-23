@@ -13,7 +13,7 @@ def check(name, cond, extra=""):
     if not cond:
         failures.append(name)
 
-from subtitle import adbreaks, audiofix, errors
+from subtitle import adbreaks, audiofix, errors, media
 from subtitle.publisher import build_publish_pack
 
 # =====================================================================
@@ -139,9 +139,12 @@ empty = audiofix.build_audiofix_filter(
 check("全關回空字串", empty == "")
 
 # ===== 8. 影像串流偵測與輸出命名 =====
+# has_video_stream 現在共用 media.py 的實作（與 has_audio_stream 同一處），
+# 內部呼叫的 ffprobe_available／subprocess.run 要對 media 模組本身替身，
+# 對 audiofix.ffprobe_available 替身不會生效（僅改到 audiofix 自己的名稱綁定）。
 orig_run = audiofix.subprocess.run
-orig_probe_avail = audiofix.ffprobe_available
-audiofix.ffprobe_available = lambda: True
+orig_probe_avail = media.ffprobe_available
+media.ffprobe_available = lambda: True
 audiofix.subprocess.run = lambda cmd, **k: types.SimpleNamespace(
     returncode=0, stdout=b"video\n", stderr=b"")
 check("有影像串流判定", audiofix.has_video_stream("v.mp4") is True)
@@ -154,11 +157,11 @@ audiofix.subprocess.run = lambda cmd, **k: types.SimpleNamespace(
     returncode=0, stdout=b"video\n", stderr=b"")
 check("影片輸出保留副檔名",
       audiofix.suggest_output_path("影片.mkv") == "影片_修復.mkv")
-audiofix.ffprobe_available = lambda: False
+media.ffprobe_available = lambda: False
 check("無 ffprobe 保守視為有影像",
       audiofix.has_video_stream("x.mp4") is True)
 audiofix.subprocess.run = orig_run
-audiofix.ffprobe_available = orig_probe_avail
+media.ffprobe_available = orig_probe_avail
 
 # ===== 9. 命令組裝 =====
 cmd = audiofix._fix_command("in.mp4", "out.mp4", "afftdn=nr=12", True)

@@ -25,7 +25,8 @@ from typing import Callable, Optional
 from .audio import (DEFAULT_TARGET_LUFS, build_loudnorm_filter,
                     measure_loudness)
 from .burner import _stream_progress, ffmpeg_available
-from .media import ffprobe_available, has_audio_stream, probe_duration
+from .media import (ffprobe_available, has_audio_stream, has_video_stream,
+                    probe_duration)
 
 # 使用者可調參數（config["audiofix"]）。
 DEFAULT_AUDIOFIX = {
@@ -81,28 +82,6 @@ def build_audiofix_filter(settings: dict, measured: Optional[dict] = None,
     if settings.get("loudnorm"):
         parts.append(build_loudnorm_filter(measured, target_lufs))
     return ",".join(parts)
-
-
-def has_video_stream(media_path: str) -> bool:
-    """檢查媒體檔是否含影像串流（純音訊檔輸出改走 .m4a）。"""
-    if not ffprobe_available():
-        # 無 ffprobe 時保守假設有影像（-map 0:v? 容忍實際沒有）。
-        return True
-    try:
-        completed = subprocess.run(
-            [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=codec_type",
-                "-of", "csv=p=0",
-                media_path,
-            ],
-            capture_output=True, timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return True
-    return bool((completed.stdout or b"").decode(
-        "utf-8", errors="ignore").strip())
 
 
 def suggest_output_path(input_path: str) -> str:
