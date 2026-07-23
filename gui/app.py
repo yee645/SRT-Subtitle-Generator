@@ -50,6 +50,7 @@ from gui.replace_dialog import ReplaceDialog
 from gui.review_window import ReviewWindow
 from gui.scrollable import ScrollableFrame
 from gui.style_panel import StylePanel
+from gui.subtitle_check_dialog import SubtitleCheckDialog
 from gui.translate_dialog import TranslateDialog
 
 logger = logging.getLogger(__name__)
@@ -507,6 +508,9 @@ class SrtApp(tk.Tk):
                   command=self._open_translate_dialog).pack(side="left", padx=2)
         ttk.Button(frame, text="匯入字幕", width=10,
                   command=self._import_subtitles).pack(side="left", padx=2)
+        ttk.Button(frame, text="字幕健檢", width=10,
+                  command=self._open_subtitle_check_dialog).pack(
+            side="left", padx=2)
 
     def _build_export_section(self, parent):
         """匯出與燒錄區：多格式匯出與影片字幕燒錄。"""
@@ -805,6 +809,19 @@ class SrtApp(tk.Tk):
         else:
             message += f"（編碼 {loaded['encoding']}）"
         self.status_var.set(message)
+
+    def _open_subtitle_check_dialog(self):
+        """開啟字幕健檢：檢查目前清單的閱讀速度（CPS）、顯示時間與行數。"""
+        if not self.cues:
+            messagebox.showinfo("提示", "目前沒有字幕可健檢，請先生成或匯入字幕。")
+            return
+
+        def on_fixed(new_cues):
+            self.cues = new_cues
+            self.apply_text_edits()
+
+        SubtitleCheckDialog(self, self.config_data, self.cues,
+                            on_fixed=on_fixed)
 
     def apply_text_edits(self):
         """字幕文字被批次修改後刷新清單與預覽（時間軸不變，不需重排序）。"""

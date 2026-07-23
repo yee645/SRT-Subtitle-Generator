@@ -18,6 +18,7 @@
     python main.py --branding 影片.mp4          # 套用已設定的片頭/片尾/浮水印
     python main.py --review --thumbnails 素材.mp4 # 審片＋精彩段落封面候選
     python main.py --subs 影片.srt --burn 影片.mp4   # 既有字幕直接燒錄（免轉錄）
+    python main.py --subcheck 影片.mp4            # 字幕健檢（閱讀速度/行數，可與其他模式併用）
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
 """
@@ -43,6 +44,8 @@ from subtitle.media import probe_duration
 from subtitle.pipeline import (EXPORT_FORMATS, enabled_export_formats,
                                export_and_burn, run_batch, unique_path)
 from subtitle.publisher import build_publish_pack, resolve_publish_settings
+from subtitle.subtitlecheck import (analyze_cues, format_subtitle_report,
+                                    resolve_subcheck_settings)
 from subtitle.videocheck import (format_video_report, run_video_check)
 from subtitle.thumbnails import (generate_thumbnails,
                                  resolve_thumbnail_settings)
@@ -112,6 +115,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--subs", metavar="字幕檔",
         help="使用既有字幕檔（.srt/.vtt）跳過語音辨識：搭配一個媒體檔，"
              "依自動化輸出設定匯出其他格式並可 --burn 燒錄硬字幕。")
+    parser.add_argument(
+        "--subcheck", action="store_true",
+        help="字幕健檢：檢查產生（或 --subs 匯入）的字幕閱讀速度（CPS）、"
+             "顯示時間與行數，輸出「檔名_字幕健檢.txt」報告；可與一般"
+             "轉錄／對齊模式或 --subs 併用（--review 等不產生字幕的"
+             "模式無效果）。")
     return parser
 
 
@@ -177,6 +186,20 @@ def main(argv=None) -> int:
         results = run_batch(
             args.files, config, mode=args.mode, report=report)
 
+    if args.subcheck:
+        automation = config.get("automation", {})
+        out_dir_override = (automation.get("output_dir") or "").strip()
+        for item in results:
+            cues = (item.get("result") or {}).get("cues") if item["ok"] else None
+            if not cues:
+                continue
+            out_dir = out_dir_override or os.path.dirname(
+                os.path.abspath(item["path"]))
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(item["path"]))[0]
+            check_path = _export_subcheck(cues, config, out_dir, base)
+            item["result"]["exports"].append(check_path)
+
     # 總結報告。
     lines = []
     failed = 0
@@ -215,6 +238,17 @@ def _export_audiocheck(path: str, config: dict, out_dir: str,
     result = run_audio_check(path, config)
     text = format_report(result, os.path.basename(path))
     check_path = unique_path(os.path.join(out_dir, f"{base}_音訊健檢.txt"))
+    with open(check_path, "w", encoding="utf-8") as fp:
+        fp.write(text)
+    print(text, flush=True)
+    return check_path
+
+
+def _export_subcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
+    """對字幕清單跑閱讀速度／行數健檢並輸出報告文字檔，回傳報告路徑。"""
+    result = analyze_cues(cues, resolve_subcheck_settings(config))
+    text = format_subtitle_report(result)
+    check_path = unique_path(os.path.join(out_dir, f"{base}_字幕健檢.txt"))
     with open(check_path, "w", encoding="utf-8") as fp:
         fp.write(text)
     print(text, flush=True)
