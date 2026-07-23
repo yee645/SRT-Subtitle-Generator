@@ -19,6 +19,7 @@
     python main.py --review --thumbnails 素材.mp4 # 審片＋精彩段落封面候選
     python main.py --subs 影片.srt --burn 影片.mp4   # 既有字幕直接燒錄（免轉錄）
     python main.py --subcheck 影片.mp4            # 字幕健檢（閱讀速度/行數，可與其他模式併用）
+    python main.py --jumpcut 影片.mp4             # 自動跳剪：剪掉句間停頓，字幕同步對齊
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
 """
@@ -38,8 +39,12 @@ from subtitle.branding import (apply_branding, resolve_branding_settings,
                                suggest_output_path as
                                suggest_branding_output_path)
 from subtitle.errors import format_error_text
+from subtitle.exporter import export
 from subtitle.ffmpeg_setup import ensure_ffmpeg_on_path
 from subtitle.importer import load_subtitle_file
+from subtitle.jumpcut import (apply_jumpcut, format_jumpcut_report,
+                              resolve_jumpcut_settings, suggest_output_path
+                              as suggest_jumpcut_output_path)
 from subtitle.media import probe_duration
 from subtitle.pipeline import (EXPORT_FORMATS, enabled_export_formats,
                                export_and_burn, run_batch, unique_path)
@@ -121,6 +126,14 @@ def build_parser() -> argparse.ArgumentParser:
              "顯示時間與行數，輸出「檔名_字幕健檢.txt」報告；可與一般"
              "轉錄／對齊模式或 --subs 併用（--review 等不產生字幕的"
              "模式無效果）。")
+    parser.add_argument(
+        "--jumpcut", action="store_true",
+        help="自動跳剪：依產生（或 --subs 匯入）的字幕找出句間過長停頓，"
+             "一次剪掉整支影片的停頓並輸出「檔名_跳剪.mp4」，同步匯出"
+             "時間軸已對齊的字幕「檔名_跳剪.ext」；門檻依 config.json 的"
+             "jumpcut 設定。可與一般轉錄／對齊模式或 --subs 併用"
+             "（--review 等不產生字幕的模式無效果）；注意 --burn 燒錄的"
+             "仍是原始（未跳剪）影片，兩者不會自動串接。")
     return parser
 
 
@@ -185,6 +198,25 @@ def main(argv=None) -> int:
     else:
         results = run_batch(
             args.files, config, mode=args.mode, report=report)
+
+    if args.jumpcut:
+        automation = config.get("automation", {})
+        out_dir_override = (automation.get("output_dir") or "").strip()
+        formats = enabled_export_formats(automation)
+        for item in results:
+            cues = (item.get("result") or {}).get("cues") if item["ok"] else None
+            if not cues:
+                continue
+            out_dir = out_dir_override or os.path.dirname(
+                os.path.abspath(item["path"]))
+            os.makedirs(out_dir, exist_ok=True)
+            try:
+                new_paths = _export_jumpcut(
+                    item["path"], cues, config, out_dir, formats, report)
+            except (RuntimeError, ValueError, FileNotFoundError) as exc:
+                report(f"{os.path.basename(item['path'])}：跳剪略過（{exc}）")
+                continue
+            item["result"]["exports"].extend(new_paths)
 
     if args.subcheck:
         automation = config.get("automation", {})
@@ -253,6 +285,29 @@ def _export_subcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
         fp.write(text)
     print(text, flush=True)
     return check_path
+
+
+def _export_jumpcut(path: str, cues: list, config: dict, out_dir: str,
+                    formats: list, report) -> list:
+    """
+    對單檔跑自動跳剪：輸出跳剪版影片＋時間軸已對齊的字幕，回傳輸出路徑清單。
+
+    找不到可跳剪的停頓（節奏已經很緊湊）或觸發安全防呆時皆拋出例外，
+    由呼叫端決定如何回報（單檔失敗不中斷整批）。
+    """
+    base = os.path.splitext(os.path.basename(path))[0]
+    video_out = unique_path(os.path.join(
+        out_dir, os.path.basename(suggest_jumpcut_output_path(path))))
+    report(f"{os.path.basename(path)}：正在偵測停頓並跳剪...")
+    result = apply_jumpcut(path, cues, video_out,
+                           settings=resolve_jumpcut_settings(config))
+    report(format_jumpcut_report(result))
+    outputs = [video_out]
+    for ext in (formats or [".srt"]):
+        target = unique_path(os.path.join(out_dir, f"{base}_跳剪{ext}"))
+        export(result["cues"], target, style=config.get("subtitle_style"))
+        outputs.append(target)
+    return outputs
 
 
 def _export_thumbnails(path: str, items, duration: float, config: dict,
