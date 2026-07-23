@@ -179,6 +179,13 @@ DEFAULT_CONFIG = {
         "mode": "bilingual",      # bilingual＝原文+譯文上下行；replace＝僅譯文
         "batch_size": 30,         # 每次 API 請求的句數
     },
+    # 字幕健檢門檻（閱讀速度 CPS、顯示時間、行數與行長）。
+    "subtitlecheck": {
+        "cps_limit": 17.0,          # 每秒字元數超過此值標記「閱讀過快」
+        "min_duration": 0.8,        # 顯示秒數低於此值標記「顯示過短」
+        "max_lines": 2,             # 超過此行數標記「行數過多」
+        "max_chars_per_line": 21,   # 單行字元數超過此值標記「單行過長」
+    },
     # 其他狀態。
     "last_dir": "",               # 上次開啟檔案的目錄
 }
