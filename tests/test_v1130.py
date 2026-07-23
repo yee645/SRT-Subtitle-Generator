@@ -208,11 +208,13 @@ with tempfile.TemporaryDirectory() as tmp:
     orig_popen = audiofix.subprocess.Popen
     orig_dur = audiofix.probe_duration
     orig_hv = audiofix.has_video_stream
+    orig_ha = audiofix.has_audio_stream
     orig_measure = audiofix.measure_loudness
     audiofix.subprocess.Popen = (
         lambda cmd, **k: captured.update(cmd=cmd) or FakeProc())
     audiofix.probe_duration = lambda p: 30.0
     audiofix.has_video_stream = lambda p: True
+    audiofix.has_audio_stream = lambda p: True
     audiofix.measure_loudness = lambda p, **k: {
         "input_i": "-20.0", "input_tp": "-4.0", "input_lra": "8.0",
         "input_thresh": "-30.0", "target_offset": "0.1"}
@@ -232,6 +234,7 @@ with tempfile.TemporaryDirectory() as tmp:
     audiofix.subprocess.Popen = orig_popen
     audiofix.probe_duration = orig_dur
     audiofix.has_video_stream = orig_hv
+    audiofix.has_audio_stream = orig_ha
     audiofix.measure_loudness = orig_measure
 audiofix.ffmpeg_available = orig_avail
 
