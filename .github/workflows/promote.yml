@@ -24,12 +24,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Release.yml（建置 exe＋建立 pre-release）與本流程各自由不同的
+          # push 觸發，可能幾乎同時執行；若 release 尚未建立就直接略過，
+          # 之後不會再重試。改為輪詢等待最多 5 分鐘，避免這種競速漏轉正。
           promoted=0
           while IFS= read -r tag || [ -n "$tag" ]; do
             tag=$(echo "$tag" | tr -d '[:space:]')
             case "$tag" in ""|\#*) continue ;; esac
-            state=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
-              --json isPrerelease -q .isPrerelease 2>/dev/null || echo "missing")
+            state="missing"
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              state=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+                --json isPrerelease -q .isPrerelease 2>/dev/null || echo "missing")
+              [ "$state" = "missing" ] || break
+              echo "$tag 尚未建立 release，等待中...（第 $attempt 次）"
+              sleep 30
+            done
             if [ "$state" = "true" ]; then
               gh release edit "$tag" --repo "$GITHUB_REPOSITORY" \
                 --prerelease=false --latest
