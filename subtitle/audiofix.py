@@ -25,7 +25,7 @@ from typing import Callable, Optional
 from .audio import (DEFAULT_TARGET_LUFS, build_loudnorm_filter,
                     measure_loudness)
 from .burner import _stream_progress, ffmpeg_available
-from .media import ffprobe_available, probe_duration
+from .media import ffprobe_available, has_audio_stream, probe_duration
 
 # 使用者可調參數（config["audiofix"]）。
 DEFAULT_AUDIOFIX = {
@@ -163,6 +163,8 @@ def fix_audio(
     audio_filter = build_audiofix_filter(settings, measured, target_lufs)
     if not audio_filter:
         raise ValueError("請至少勾選一個修復項目（降噪、去低頻或響度正規化）。")
+    if not has_audio_stream(input_path):
+        raise ValueError("此檔案沒有音訊軌，無法進行音訊修復。")
 
     has_video = has_video_stream(input_path)
     duration = probe_duration(input_path)
