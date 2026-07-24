@@ -176,6 +176,64 @@ def suggest_output_path(input_path: str) -> str:
     return f"{base}_跳剪{ext or '.mp4'}"
 
 
+def cut_media_segments(
+    media_path: str,
+    keep_segments: list,
+    output_path: str,
+    progress_cb: Optional[Callable[[float, str], None]] = None,
+    label: str = "剪輯",
+) -> float:
+    """
+    依「要保留的片段」清單實際執行 ffmpeg trim+concat 裁切，回傳剪後秒數。
+
+    純粹的低階裁切引擎：只負責「怎麼把這些片段接起來輸出」，不含
+    「怎麼決定要保留哪些片段」的判斷——跳剪（找停頓）與去重複片段
+    （找相似句）共用這一段，各自只需準備好 keep_segments 即可。
+    """
+    if len(keep_segments) > MAX_SEGMENTS:
+        raise ValueError(
+            f"要保留的片段過多（{len(keep_segments)} 段，可能是門檻設定"
+            "導致誤判），請調整設定後再試。")
+
+    has_video = has_video_stream(media_path)
+    has_audio = has_audio_stream(media_path)
+    if not has_video and not has_audio:
+        raise ValueError("此檔案沒有影像也沒有音訊軌，無法剪輯。")
+
+    kept_seconds = sum(end - start for start, end in keep_segments)
+    filter_complex, maps = _build_filter_complex(
+        keep_segments, has_video, has_audio)
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-i", media_path,
+        "-filter_complex", filter_complex,
+        *maps,
+    ]
+    if has_video:
+        command += ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
+    if has_audio:
+        command += ["-c:a", "aac", "-b:a", "192k"]
+    command += ["-progress", "pipe:1", output_path]
+
+    if progress_cb:
+        progress_cb(0.02, f"正在{label}...")
+    try:
+        process = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="ignore",
+        )
+    except OSError as exc:
+        raise RuntimeError(f"無法啟動 ffmpeg：{exc}") from exc
+    _stream_progress(process, kept_seconds, progress_cb, label=label)
+    ret = process.wait()
+    if ret != 0:
+        stderr = (process.stderr.read() if process.stderr else "") or ""
+        raise RuntimeError(f"影片剪輯失敗（{label}）：{stderr[-400:]}")
+    if progress_cb:
+        progress_cb(1.0, f"{label}完成")
+    return kept_seconds
+
+
 def apply_jumpcut(
     media_path: str,
     cues: list,
@@ -211,61 +269,25 @@ def apply_jumpcut(
         raise ValueError(
             "偵測到的停頓緩衝後皆不夠格跳剪（可調低「緩衝秒數」或降低"
             "「最短停頓秒數」門檻再試）。")
-    if len(keep_segments) > MAX_SEGMENTS:
-        raise ValueError(
-            f"偵測到的停頓片段過多（{len(keep_segments)} 段，可能是門檻設"
-            "太低導致誤判），請調高「最短停頓秒數」後再試。")
 
-    kept_seconds = sum(end - start for start, end in keep_segments)
-    removed_seconds = duration - kept_seconds
+    kept_seconds_est = sum(end - start for start, end in keep_segments)
+    removed_seconds = duration - kept_seconds_est
     if duration > 0 and removed_seconds / duration > settings["max_cut_ratio"]:
         raise ValueError(
             f"偵測到的停頓總長達 {removed_seconds:.1f} 秒（超過影片長度的 "
             f"{settings['max_cut_ratio'] * 100:.0f}%，可能是誤判），已停止"
             "跳剪；請提高「最短停頓秒數」門檻後再試。")
 
-    has_video = has_video_stream(media_path)
-    has_audio = has_audio_stream(media_path)
-    if not has_video and not has_audio:
-        raise ValueError("此檔案沒有影像也沒有音訊軌，無法跳剪。")
-
-    filter_complex, maps = _build_filter_complex(
-        keep_segments, has_video, has_audio)
-    command = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-i", media_path,
-        "-filter_complex", filter_complex,
-        *maps,
-    ]
-    if has_video:
-        command += ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
-    if has_audio:
-        command += ["-c:a", "aac", "-b:a", "192k"]
-    command += ["-progress", "pipe:1", output_path]
-
-    if progress_cb:
-        progress_cb(0.02, f"正在跳剪 {len(cut_gaps)} 處停頓...")
-    try:
-        process = subprocess.Popen(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", errors="ignore",
-        )
-    except OSError as exc:
-        raise RuntimeError(f"無法啟動 ffmpeg：{exc}") from exc
-    _stream_progress(process, kept_seconds, progress_cb, label="跳剪")
-    ret = process.wait()
-    if ret != 0:
-        stderr = (process.stderr.read() if process.stderr else "") or ""
-        raise RuntimeError(f"影片跳剪失敗：{stderr[-400:]}")
-    if progress_cb:
-        progress_cb(1.0, "跳剪完成")
+    kept_seconds = cut_media_segments(
+        media_path, keep_segments, output_path, progress_cb,
+        label=f"跳剪 {cut_count} 處停頓")
 
     new_cues = remap_cues(cues, keep_segments)
     return {
         "output": output_path,
         "cues": new_cues,
         "cut_count": cut_count,
-        "removed_seconds": round(removed_seconds, 2),
+        "removed_seconds": round(duration - kept_seconds, 2),
         "kept_seconds": round(kept_seconds, 2),
         "original_seconds": round(duration, 2),
     }
