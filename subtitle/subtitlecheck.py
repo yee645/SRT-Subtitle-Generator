@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-字幕健檢：檢查閱讀速度（CPS）、顯示時間、行數與行長，抓出「觀眾來不及看完」的字幕。
+字幕健檢：檢查閱讀速度（CPS）、顯示時間、行數行長與時間軸重疊。
 
 調研引用 Netflix（成人內容 CPS 上限 20、兒童內容 17）、BBC（建議 15 以下）
 等業界字幕 QC 規範——CPS（每秒字元數）超標是字幕檔案審核最常被打回的原因。
@@ -11,9 +11,17 @@
 - 匯入既有字幕檔（v1.19.0）：檔案品質不明，完全沒做過把關
 - 手動新增或編輯字幕：使用者自行輸入，沒有斷句規則保護
 
+v1.23.0 起額外檢查**時間軸重疊**：調研顯示「字幕時間重疊」與「格式錯誤」
+是 YouTube 等平台字幕檔案上傳失敗最常見的原因之一。生成字幕（模式一／
+模式二）內建的正規化流程本就保證輸出不重疊（v1.14.1 修復），但匯入既有
+字幕檔與手動編輯完全沒有這層保護——匯入檔案品質不明、手動編輯對話框
+也未曾檢查使用者輸入的起訖時間是否與相鄰句子衝突。
+
 本模組掃描「目前的字幕清單」（不論來源），標出過快、過短、行數過多、
-單行過長的字幕；並提供「一鍵延長」：利用與下一句之間的空檔延長顯示
-秒數（不改動文字內容、不與下一句重疊），空檔不足時保留原樣不強行硬改。
+單行過長、時間軸重疊的字幕；並提供「一鍵延長」（利用空檔延長顯示秒數）
+與「一鍵修復重疊」（截短較早一句、必要時將較晚一句整段順延，邏輯與
+segmenter 既有的正規化策略一致）：兩者皆只調整時間軸，不改動或刪除
+任何文字內容。
 
 零 GUI 依賴，供字幕健檢對話框與 CLI 共用。
 """
@@ -40,6 +48,12 @@ _MAX_CHARS_RANGE = (10, 60)
 
 # 一鍵延長時，與下一句之間至少保留的間隔秒數（避免延長到緊貼下一句）。
 _EXTEND_GAP = 0.08
+
+# 判定「時間軸重疊」的容許誤差（秒）：極小的浮點數誤差不算重疊。
+_OVERLAP_TOLERANCE = 0.01
+# 修復重疊時，無法單靠截短消除（起始時間相同或反序）時，較早一句
+# 保留的最短長度（秒）。
+_OVERLAP_MIN_DURATION = 0.05
 
 _LEVEL_ICONS = {LEVEL_GOOD: "✔", LEVEL_WARN: "⚠", LEVEL_BAD: "✘"}
 
@@ -83,17 +97,48 @@ def compute_cps(text: str, duration: float) -> float:
     return _display_char_count(text) / duration
 
 
+def find_overlaps(cues: list) -> list:
+    """
+    找出字幕清單中前後時間軸重疊的句子（依開始時間排序後比對相鄰句）。
+
+    回傳的 issue 對應「較早」的那一句；index 為原始清單中的索引
+    （非排序後的順序），供 GUI／報告對照原始清單使用。
+    """
+    if len(cues) < 2:
+        return []
+    order = sorted(range(len(cues)), key=lambda i: cues[i].get("start", 0.0))
+    issues = []
+    for a, b in zip(order, order[1:]):
+        cue_a, cue_b = cues[a], cues[b]
+        overlap = cue_a.get("end", 0.0) - cue_b.get("start", 0.0)
+        if overlap > _OVERLAP_TOLERANCE:
+            issues.append({
+                "index": a, "start": cue_a.get("start", 0.0),
+                "end": cue_a.get("end", 0.0),
+                "level": LEVEL_BAD,
+                "title": "字幕重疊",
+                "detail": f"第 {a + 1} 句與第 {b + 1} 句時間重疊 "
+                          f"{overlap:.2f} 秒",
+                "advice": "時間軸重疊常導致 YouTube 等平台匯入失敗或播放"
+                         "異常；可用「一鍵修復重疊」自動修正（截短較早的"
+                         "一句，必要時將較晚一句整段順延）。",
+            })
+    return issues
+
+
 def analyze_cues(cues: list, settings: Optional[dict] = None) -> dict:
     """
     掃描字幕清單，回傳 {"issues": [...], "counts": {...}, "total": N}。
 
     issues 每筆含 index（清單索引，0 起算）、start、end、level、title、
     detail、advice；同一句可能同時觸發多個檢查項目，各自成一筆。
-    空文字的字幕（如純空白佔位）不列入檢查。
+    空文字的字幕（如純空白佔位）不列入檢查（時間軸重疊檢查除外，因為
+    重疊是結構性問題，與文字內容無關）。
     """
     settings = settings or resolve_subcheck_settings()
-    issues = []
-    counts = {"cps": 0, "duration": 0, "lines": 0, "line_length": 0}
+    issues = list(find_overlaps(cues))
+    counts = {"cps": 0, "duration": 0, "lines": 0, "line_length": 0,
+             "overlap": len(issues)}
     for index, cue in enumerate(cues):
         text = (cue.get("text") or "").strip()
         if not text:
@@ -200,4 +245,36 @@ def fix_cue_durations(cues: list, settings: Optional[dict] = None) -> tuple:
         if target_end > end + 1e-6:
             cue["end"] = target_end
             fixed += 1
+    return new_cues, fixed
+
+
+def fix_overlaps(cues: list) -> tuple:
+    """
+    一鍵修復重疊：依開始時間排序後掃過相鄰句，消除時間軸重疊。
+
+    策略與 segmenter 既有的正規化邏輯一致——不重疊優先：
+    - 能靠截短「較早一句」的結束時間消除重疊時，只截短較早一句。
+    - 兩句開始時間相同或反序、截短無法消除重疊時，較早一句改保留
+      極短長度（_OVERLAP_MIN_DURATION），較晚一句整段順延（保留原本
+      時長不變），避免把整支重疊硬壓成看不見的零長度。
+
+    只調整時間軸，不改動或刪除任何文字內容；輸入的 cues 不會被修改。
+    回傳 (新 cues 複本, 實際修復次數)。
+    """
+    new_cues = [dict(cue) for cue in cues]
+    order = sorted(range(len(new_cues)),
+                  key=lambda i: new_cues[i].get("start", 0.0))
+    fixed = 0
+    for a, b in zip(order, order[1:]):
+        cue_a, cue_b = new_cues[a], new_cues[b]
+        if cue_a["end"] - cue_b["start"] <= _OVERLAP_TOLERANCE:
+            continue
+        if cue_b["start"] - cue_a["start"] >= _OVERLAP_MIN_DURATION:
+            cue_a["end"] = cue_b["start"]
+        else:
+            shift = (cue_a["start"] + _OVERLAP_MIN_DURATION) - cue_b["start"]
+            cue_a["end"] = cue_a["start"] + _OVERLAP_MIN_DURATION
+            cue_b["start"] += shift
+            cue_b["end"] += shift
+        fixed += 1
     return new_cues, fixed
