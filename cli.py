@@ -18,7 +18,7 @@
     python main.py --branding 影片.mp4          # 套用已設定的片頭/片尾/浮水印
     python main.py --review --thumbnails 素材.mp4 # 審片＋精彩段落封面候選
     python main.py --subs 影片.srt --burn 影片.mp4   # 既有字幕直接燒錄（免轉錄）
-    python main.py --subcheck 影片.mp4            # 字幕健檢（閱讀速度/行數，可與其他模式併用）
+    python main.py --subcheck 影片.mp4            # 字幕健檢（閱讀速度/行數/時間軸重疊，可與其他模式併用）
     python main.py --jumpcut 影片.mp4             # 自動跳剪：剪掉句間停頓，字幕同步對齊
     python main.py --retakes 影片.mp4             # 重複片段偵測：輸出候選清單（不自動剪）
     python main.py --retakes --retakes-cut 影片.mp4  # 偵測後直接剪掉全部候選重複片段
@@ -130,7 +130,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--subcheck", action="store_true",
         help="字幕健檢：檢查產生（或 --subs 匯入）的字幕閱讀速度（CPS）、"
-             "顯示時間與行數，輸出「檔名_字幕健檢.txt」報告；可與一般"
+             "顯示時間、行數與時間軸重疊，輸出「檔名_字幕健檢.txt」報告"
+             "（僅列出問題，修復請於 GUI 字幕健檢對話框操作）；可與一般"
              "轉錄／對齊模式或 --subs 併用（--review 等不產生字幕的"
              "模式無效果）。")
     parser.add_argument(

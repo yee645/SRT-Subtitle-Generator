@@ -14,7 +14,7 @@ from tkinter import messagebox, ttk
 
 from config import save_config
 from subtitle.subtitlecheck import (analyze_cues, fix_cue_durations,
-                                    format_subtitle_report,
+                                    fix_overlaps, format_subtitle_report,
                                     resolve_subcheck_settings)
 
 
@@ -93,6 +93,10 @@ class SubtitleCheckDialog(tk.Toplevel):
         self.fix_btn = ttk.Button(buttons, text="一鍵延長過快字幕",
                                   state="disabled", command=self._on_fix)
         self.fix_btn.pack(side="left", padx=(6, 0))
+        self.fix_overlap_btn = ttk.Button(
+            buttons, text="一鍵修復重疊", state="disabled",
+            command=self._on_fix_overlap)
+        self.fix_overlap_btn.pack(side="left", padx=(6, 0))
         self.copy_btn = ttk.Button(buttons, text="複製報告", state="disabled",
                                    command=self._on_copy)
         self.copy_btn.pack(side="left", padx=(6, 0))
@@ -132,6 +136,9 @@ class SubtitleCheckDialog(tk.Toplevel):
         fixable = any(i["title"] in ("閱讀速度過快", "顯示時間過短")
                      for i in issues)
         self.fix_btn.configure(state="normal" if fixable else "disabled")
+        overlap_fixable = any(i["title"] == "字幕重疊" for i in issues)
+        self.fix_overlap_btn.configure(
+            state="normal" if overlap_fixable else "disabled")
         if issues:
             self.status_var.set(f"健檢完成，發現 {len(issues)} 項問題，結果如下。")
         else:
@@ -150,6 +157,18 @@ class SubtitleCheckDialog(tk.Toplevel):
         if self.on_fixed:
             self.on_fixed(new_cues)
         self.status_var.set(f"已延長 {fixed} 句字幕的顯示時間，重新健檢中...")
+        self._on_run()
+
+    def _on_fix_overlap(self):
+        new_cues, fixed = fix_overlaps(self.cues)
+        if fixed == 0:
+            messagebox.showinfo("提示", "沒有偵測到時間軸重疊的句子。",
+                               parent=self)
+            return
+        self.cues = new_cues
+        if self.on_fixed:
+            self.on_fixed(new_cues)
+        self.status_var.set(f"已修復 {fixed} 處時間軸重疊，重新健檢中...")
         self._on_run()
 
     def _on_copy(self):
