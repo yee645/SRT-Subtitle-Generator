@@ -45,7 +45,7 @@ _ISSUE_URL = "https://github.com/yee645/SRT-Subtitle-Generator/issues"
 _FFMPEG_RUN_FAILURES = (
     "ffmpeg 燒錄失敗", "ffmpeg 粗剪失敗", "響度正規化失敗", "背景音樂混音失敗",
     "短片輸出失敗", "畫面擷取失敗", "音訊修復失敗", "無法啟動 ffmpeg",
-    "品牌套版失敗", "影片修剪失敗", "影片剪輯失敗",
+    "品牌套版失敗", "影片修剪失敗", "影片剪輯失敗", "影片音量調整失敗",
 )
 
 

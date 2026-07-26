@@ -22,6 +22,8 @@
     python main.py --jumpcut 影片.mp4             # 自動跳剪：剪掉句間停頓，字幕同步對齊
     python main.py --retakes 影片.mp4             # 重複片段偵測：輸出候選清單（不自動剪）
     python main.py --retakes --retakes-cut 影片.mp4  # 偵測後直接剪掉全部候選重複片段
+    python main.py --volumecheck 影片.mp4         # 分段音量一致性分析（免轉錄）
+    python main.py --volumefix 影片.mp4           # 一鍵拉平音量落差過大的段落（免轉錄）
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
 """
@@ -59,6 +61,12 @@ from subtitle.publisher import build_publish_pack, resolve_publish_settings
 from subtitle.subtitlecheck import (analyze_cues, format_subtitle_report,
                                     resolve_subcheck_settings)
 from subtitle.videocheck import (format_video_report, run_video_check)
+from subtitle.volumeconsistency import (analyze_volume_consistency,
+                                        fix_volume_consistency,
+                                        format_volume_consistency_report,
+                                        resolve_volume_consistency_settings,
+                                        suggest_output_path as
+                                        suggest_volume_output_path)
 from subtitle.thumbnails import (generate_thumbnails,
                                  resolve_thumbnail_settings)
 from subtitle.review import (analyze, build_chapters, collect_highlights,
@@ -123,6 +131,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--branding", action="store_true",
         help="品牌套版：套用 config.json 已設定的片頭／片尾／浮水印，"
              "輸出「檔名_套版」版本；未設定任何一項時單檔略過並提示。")
+    parser.add_argument(
+        "--volumecheck", action="store_true",
+        help="分段音量一致性分析：把影片切成固定長度分段逐段量測響度，"
+             "找出與整體中位數落差過大（忽大忽小）的段落，輸出"
+             "「檔名_音量一致性.txt」報告；可與 --audiocheck 併用。")
+    parser.add_argument(
+        "--volumefix", action="store_true",
+        help="一鍵拉平音量：對音量落差過大的段落套用增益調整到接近整體"
+             "中位數響度，其餘段落不動，輸出「檔名_音量平衡」版本"
+             "（畫面原樣複製，僅音軌重新編碼）；沒有偵測到落差時單檔"
+             "略過並提示。")
     parser.add_argument(
         "--subs", metavar="字幕檔",
         help="使用既有字幕檔（.srt/.vtt）跳過語音辨識：搭配一個媒體檔，"
@@ -206,7 +225,8 @@ def main(argv=None) -> int:
             with_audiocheck=args.audiocheck,
             with_thumbnails=args.thumbnails)
     elif (args.audiocheck or args.thumbnails or args.audiofix
-            or args.branding or args.videocheck):
+            or args.branding or args.videocheck or args.volumecheck
+            or args.volumefix):
         # 免轉錄的輕量工具模式：健檢、封面候選、音訊修復與品牌套版都只需 ffmpeg。
         results = _run_tools_batch(
             args.files, config, report,
@@ -214,7 +234,9 @@ def main(argv=None) -> int:
             do_thumbnails=args.thumbnails,
             do_audiofix=args.audiofix,
             do_branding=args.branding,
-            do_videocheck=args.videocheck)
+            do_videocheck=args.videocheck,
+            do_volumecheck=args.volumecheck,
+            do_volumefix=args.volumefix)
     else:
         results = run_batch(
             args.files, config, mode=args.mode, report=report)
@@ -434,7 +456,9 @@ def _run_tools_batch(files: list, config: dict, report,
                      do_thumbnails: bool = False,
                      do_audiofix: bool = False,
                      do_branding: bool = False,
-                     do_videocheck: bool = False) -> list:
+                     do_videocheck: bool = False,
+                     do_volumecheck: bool = False,
+                     do_volumefix: bool = False) -> list:
     """輕量工具批次（免轉錄）：音訊健檢與封面候選，回傳與 run_batch 同構的結果。"""
     automation = config.get("automation", {})
     results = []
@@ -476,6 +500,30 @@ def _run_tools_batch(files: list, config: dict, report,
                 fix_audio(path, fix_out,
                           settings=resolve_audiofix_settings(config))
                 exports.append(fix_out)
+            if do_volumecheck or do_volumefix:
+                report(f"{prefix}分析分段音量一致性中...")
+                vol_result = analyze_volume_consistency(
+                    path, resolve_volume_consistency_settings(config))
+                if do_volumecheck:
+                    vol_text = format_volume_consistency_report(vol_result)
+                    vol_path = unique_path(os.path.join(
+                        out_dir, f"{base}_音量一致性.txt"))
+                    with open(vol_path, "w", encoding="utf-8") as fp:
+                        fp.write(vol_text)
+                    print(vol_text, flush=True)
+                    exports.append(vol_path)
+                if do_volumefix:
+                    if vol_result.get("issues"):
+                        report(f"{prefix}正在拉平 "
+                              f"{len(vol_result['issues'])} 段音量落差...")
+                        vol_out = unique_path(os.path.join(
+                            out_dir, os.path.basename(
+                                suggest_volume_output_path(path))))
+                        fix_volume_consistency(path, vol_result, vol_out)
+                        exports.append(vol_out)
+                    else:
+                        report(f"{prefix}未偵測到音量落差過大的段落，"
+                              "略過音量拉平。")
             if do_branding:
                 branding_settings = resolve_branding_settings(config)
                 if (branding_settings["intro_path"]

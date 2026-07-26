@@ -198,6 +198,11 @@ DEFAULT_CONFIG = {
         "max_gap_seconds": 25.0,       # 只比對此秒數內的句子
         "pad": 0.2,                    # 剪掉片段前後各多剪一點（含吸氣停頓）
     },
+    # 分段音量一致性分析：抓出「忽大忽小」的段落並一鍵拉平。
+    "volumeconsistency": {
+        "segment_seconds": 20.0,  # 分段長度（秒），每段獨立量測響度
+        "deviation_lu": 3.0,      # 與整體中位數響度相差超過此值（LU）標記
+    },
     # 其他狀態。
     "last_dir": "",               # 上次開啟檔案的目錄
 }
