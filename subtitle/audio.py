@@ -54,9 +54,14 @@ def clamp_target(value, fallback: float = DEFAULT_TARGET_LUFS) -> float:
     return max(MIN_TARGET_LUFS, min(value, MAX_TARGET_LUFS))
 
 
-def measure_loudness(media_path: str, timeout: int = 600) -> Optional[dict]:
+def measure_loudness(media_path: str, start: float = 0.0,
+                     duration: Optional[float] = None,
+                     timeout: int = 600) -> Optional[dict]:
     """
     第一階段：量測音訊實際響度。
+
+    start／duration 省略時量測整個檔案；指定時只量測該時間範圍內的音訊
+    （供分段音量一致性分析逐段量測使用，同一支影片不必整段重新解碼）。
 
     回傳 loudnorm 輸出的量測 dict（input_i / input_tp / input_lra /
     input_thresh / target_offset）；ffmpeg 不可用或量測失敗時回傳 None，
@@ -64,9 +69,13 @@ def measure_loudness(media_path: str, timeout: int = 600) -> Optional[dict]:
     """
     if not ffmpeg_available():
         return None
-    command = [
-        "ffmpeg", "-hide_banner", "-nostats",
-        "-i", media_path,
+    command = ["ffmpeg", "-hide_banner", "-nostats"]
+    if start > 0:
+        command += ["-ss", f"{start:.3f}"]
+    command += ["-i", media_path]
+    if duration is not None:
+        command += ["-t", f"{duration:.3f}"]
+    command += [
         "-vn",
         "-af",
         (f"loudnorm=I={DEFAULT_TARGET_LUFS}:TP={_TARGET_TRUE_PEAK}:"
