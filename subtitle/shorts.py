@@ -12,6 +12,13 @@ Reels／TikTok 前最繁瑣的重剪工作。本模組以 ffmpeg 一鍵完成：
 
 可選擇把該段字幕一併燒錄（沿用字幕視覺樣式，時間軸自動平移），
 以及輸出時做響度正規化。輸出解析度預設 1080x1920。
+
+**字幕安全區（safe zone）**：一般字幕樣式的垂直位置是針對橫式（16:9）
+畫面調整的，直接套用到直式短片畫布上，很容易落在 TikTok／Reels／
+Shorts 平台介面固定佔用的區域裡——底部的帳號名稱、文案、配樂資訊與
+按鈕列，以及頂端可能的置頂留言或標題覆蓋層，都會擋住字幕。啟用安全區
+後，燒錄短片字幕時會把垂直位置夾限在安全範圍內（不影響一般橫式字幕
+樣式本身），並縮減左右邊界避開右側常見的互動按鈕欄。
 """
 
 from __future__ import annotations
@@ -38,7 +45,23 @@ DEFAULT_SETTINGS = {
     "focus_x": 0.5,           # 裁切版式的水平焦點：0 最左、0.5 置中、1 最右
     "burn_subtitles": True,   # 是否把該段字幕燒錄進短片
     "loudnorm": False,        # 是否同時做響度正規化
+    "safe_zone_enabled": True,   # 是否啟用字幕安全區（避開平台介面遮擋）
+    "safe_zone_top": 0.06,       # 頂端保留比例（避開置頂留言／標題覆蓋層）
+    "safe_zone_bottom": 0.22,    # 底部保留比例（避開帳號／文案／按鈕列）
+    "safe_zone_side": 0.05,      # 左右保留比例（避開右側互動按鈕欄）
 }
+
+_SAFE_ZONE_TOP_RANGE = (0.0, 0.20)
+_SAFE_ZONE_BOTTOM_RANGE = (0.10, 0.35)
+_SAFE_ZONE_SIDE_RANGE = (0.0, 0.15)
+
+
+def _clamp_fraction(value, low, high, fallback) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(low, min(parsed, high))
 
 
 def resolve_shorts_settings(config: Optional[dict] = None) -> dict:
@@ -57,7 +80,33 @@ def resolve_shorts_settings(config: Optional[dict] = None) -> dict:
         "focus_x": max(0.0, min(focus, 1.0)),
         "burn_subtitles": bool(raw.get("burn_subtitles", True)),
         "loudnorm": bool(raw.get("loudnorm", False)),
+        "safe_zone_enabled": bool(raw.get("safe_zone_enabled", True)),
+        "safe_zone_top": _clamp_fraction(
+            raw.get("safe_zone_top", 0.06), *_SAFE_ZONE_TOP_RANGE, 0.06),
+        "safe_zone_bottom": _clamp_fraction(
+            raw.get("safe_zone_bottom", 0.22), *_SAFE_ZONE_BOTTOM_RANGE, 0.22),
+        "safe_zone_side": _clamp_fraction(
+            raw.get("safe_zone_side", 0.05), *_SAFE_ZONE_SIDE_RANGE, 0.05),
     }
+
+
+def apply_safe_zone(style: Optional[dict], enabled: bool,
+                    safe_top: float, safe_bottom: float) -> Optional[dict]:
+    """
+    依安全字幕範圍夾限字幕垂直位置，其餘樣式（字體、顏色…）維持不變。
+
+    只在字幕會落入平台介面保留區時才調整，其餘情況原樣回傳（同一個
+    style dict，不做無謂複製），確保一般橫式字幕燒錄的行為完全不受影響。
+    """
+    if not enabled or not style:
+        return style
+    position_y = float(style.get("position_y", 0.88))
+    clamped = max(safe_top, min(position_y, 1.0 - safe_bottom))
+    if clamped == position_y:
+        return style
+    adjusted = dict(style)
+    adjusted["position_y"] = clamped
+    return adjusted
 
 
 def shift_cues(cues, clip_start: float, clip_end: float) -> list:
@@ -120,6 +169,10 @@ def cut_vertical_clip(
     cues: Optional[list] = None,
     resolution: tuple = DEFAULT_RESOLUTION,
     loudnorm_target: Optional[float] = None,
+    safe_zone_enabled: bool = False,
+    safe_zone_top: float = 0.0,
+    safe_zone_bottom: float = 0.0,
+    safe_zone_side: float = 0.0,
     progress_cb: Optional[Callable[[float, str], None]] = None,
 ) -> str:
     """
@@ -135,6 +188,8 @@ def cut_vertical_clip(
         cues: 該片段的字幕（來源影片絕對時間，內部自動平移裁齊）。
         resolution: 輸出解析度，預設 (1080, 1920)。
         loudnorm_target: 設定時同步做響度正規化（單階段動態模式）。
+        safe_zone_enabled/top/bottom/side: 字幕安全區設定（見模組文件），
+            預設關閉以維持既有呼叫端行為不變。
         progress_cb: (ratio, message) 進度回呼。
     回傳：輸出檔路徑。
     """
@@ -155,9 +210,14 @@ def cut_vertical_clip(
             out_dir = os.path.dirname(os.path.abspath(output_path)) or os.getcwd()
             fd, temp_subtitle = tempfile.mkstemp(suffix=".ass", dir=out_dir)
             os.close(fd)
+            effective_style = apply_safe_zone(
+                style, safe_zone_enabled, safe_zone_top, safe_zone_bottom)
+            margin_lr = (round(out_w * safe_zone_side)
+                        if safe_zone_enabled and safe_zone_side > 0 else None)
             with open(temp_subtitle, "w", encoding="utf-8") as fp:
-                fp.write(cues_to_ass(clip_cues, style,
-                                     resolution=(out_w, out_h)))
+                fp.write(cues_to_ass(clip_cues, effective_style,
+                                     resolution=(out_w, out_h),
+                                     margin_lr=margin_lr))
             subtitle_filter = f",ass='{_escape_subtitle_path(temp_subtitle)}'"
 
         if mode == "blur":
