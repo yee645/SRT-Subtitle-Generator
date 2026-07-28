@@ -162,6 +162,12 @@ DEFAULT_CONFIG = {
         "focus_x": 0.5,           # 裁切版式水平焦點：0 最左、0.5 置中、1 最右
         "burn_subtitles": True,   # 短片是否燒錄字幕
         "loudnorm": False,        # 短片輸出時做響度正規化
+        # 字幕安全區：避開 TikTok／Reels／Shorts 平台介面（帳號、文案、
+        # 按鈕列等）固定佔用的區域，只影響直式短片燒錄字幕的位置。
+        "safe_zone_enabled": True,
+        "safe_zone_top": 0.06,
+        "safe_zone_bottom": 0.22,
+        "safe_zone_side": 0.05,
     },
     # 品牌套版設定（片頭／片尾接續、浮水印疊加）。
     "branding": {

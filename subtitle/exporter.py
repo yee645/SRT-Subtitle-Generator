@@ -233,8 +233,14 @@ def _ass_alignment(position_y: float) -> int:
 
 
 def cues_to_ass(cues: Iterable[Mapping], style: Mapping | None = None,
-                resolution: tuple[int, int] = (1920, 1080)) -> str:
-    """把 cue 清單組成 ASS 文字（內含 Style 與 Events）。"""
+                resolution: tuple[int, int] = (1920, 1080),
+                margin_lr: int | None = None) -> str:
+    """
+    把 cue 清單組成 ASS 文字（內含 Style 與 Events）。
+
+    margin_lr 省略時沿用固定 20px 左右邊界；直式短片的安全字幕範圍
+    （避開平台介面）需要依畫面寬度換算成比例邊界時可指定覆蓋。
+    """
     style = style or {}
     font_family = style.get("font_family", "Microsoft JhengHei")
     font_size = max(int(style.get("font_size", 26)), 1)
@@ -244,6 +250,7 @@ def cues_to_ass(cues: Iterable[Mapping], style: Mapping | None = None,
     align = _ass_alignment(float(style.get("position_y", 0.88)))
     play_x, play_y = resolution
     margin_v = max(int(play_y * (1.0 - float(style.get("position_y", 0.88)))), 10)
+    margin_side = 20 if margin_lr is None else max(int(margin_lr), 0)
 
     header = (
         "[Script Info]\n"
@@ -259,14 +266,14 @@ def cues_to_ass(cues: Iterable[Mapping], style: Mapping | None = None,
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         "Style: Default,{font},{size},{primary},&H000000FF,{outline},"
-        "&H00000000,0,0,0,0,100,100,0,0,1,{stroke},0,{align},20,20,{mv},1\n\n"
+        "&H00000000,0,0,0,0,100,100,0,0,1,{stroke},0,{align},{ml},{mr},{mv},1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
         "MarginV, Effect, Text\n"
     ).format(
         px=play_x, py=play_y, font=font_family, size=font_size,
         primary=primary, outline=outline, stroke=stroke_width,
-        align=align, mv=margin_v,
+        align=align, mv=margin_v, ml=margin_side, mr=margin_side,
     )
 
     # 重點字上色：樣式啟用且有詞清單時，於 ASS 文字內嵌色彩標籤。

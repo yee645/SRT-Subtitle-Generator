@@ -332,6 +332,36 @@ class ReviewWindow(tk.Toplevel):
         shorts_btn.pack(side="left", padx=(8, 3))
         self.export_buttons.append(shorts_btn)
 
+        # 第三排之二：字幕安全區（避開 TikTok／Reels／Shorts 平台介面遮擋）。
+        row3b = ttk.Frame(exports)
+        row3b.pack(fill="x", pady=(2, 0))
+        self.shorts_safezone_var = tk.BooleanVar(
+            value=shorts_cfg["safe_zone_enabled"])
+        ttk.Checkbutton(
+            row3b, text="字幕安全區（避開帳號/文案/按鈕列）",
+            variable=self.shorts_safezone_var).pack(side="left")
+        ttk.Label(row3b, text="頂端保留%").pack(side="left", padx=(8, 2))
+        self.shorts_safezone_top_var = tk.DoubleVar(
+            value=round(shorts_cfg["safe_zone_top"] * 100, 1))
+        tk.Spinbox(
+            row3b, from_=0, to=20, increment=1, width=4,
+            textvariable=self.shorts_safezone_top_var,
+        ).pack(side="left")
+        ttk.Label(row3b, text="底部保留%").pack(side="left", padx=(8, 2))
+        self.shorts_safezone_bottom_var = tk.DoubleVar(
+            value=round(shorts_cfg["safe_zone_bottom"] * 100, 1))
+        tk.Spinbox(
+            row3b, from_=10, to=35, increment=1, width=4,
+            textvariable=self.shorts_safezone_bottom_var,
+        ).pack(side="left")
+        ttk.Label(row3b, text="左右保留%").pack(side="left", padx=(8, 2))
+        self.shorts_safezone_side_var = tk.DoubleVar(
+            value=round(shorts_cfg["safe_zone_side"] * 100, 1))
+        tk.Spinbox(
+            row3b, from_=0, to=15, increment=1, width=4,
+            textvariable=self.shorts_safezone_side_var,
+        ).pack(side="left")
+
         # 第四排：封面候選圖擷取（精彩高峰＋畫面清晰度自動評分）。
         thumbs_cfg = resolve_thumbnail_settings(self.config_data)
         row4 = ttk.Frame(exports)
@@ -744,12 +774,23 @@ class ReviewWindow(tk.Toplevel):
             focus = float(self.shorts_focus_var.get())
         except (tk.TclError, ValueError):
             focus = 0.5
+
+        def _pct(var, fallback):
+            try:
+                return float(var.get()) / 100.0
+            except (tk.TclError, ValueError):
+                return fallback
+
         current.update({
             "mode": "blur" if self.shorts_mode_var.get() == "模糊背景"
                     else "crop",
             "focus_x": focus,
             "burn_subtitles": bool(self.shorts_subs_var.get()),
             "loudnorm": bool(self.shorts_loudnorm_var.get()),
+            "safe_zone_enabled": bool(self.shorts_safezone_var.get()),
+            "safe_zone_top": _pct(self.shorts_safezone_top_var, 0.06),
+            "safe_zone_bottom": _pct(self.shorts_safezone_bottom_var, 0.22),
+            "safe_zone_side": _pct(self.shorts_safezone_side_var, 0.05),
         })
         self.config_data["shorts"] = current
         try:
@@ -820,6 +861,10 @@ class ReviewWindow(tk.Toplevel):
                     mode=settings["mode"], focus_x=settings["focus_x"],
                     style=style, cues=job["cues"],
                     loudnorm_target=loudnorm_target,
+                    safe_zone_enabled=settings["safe_zone_enabled"],
+                    safe_zone_top=settings["safe_zone_top"],
+                    safe_zone_bottom=settings["safe_zone_bottom"],
+                    safe_zone_side=settings["safe_zone_side"],
                     progress_cb=report)
                 outputs.append(output)
             self.result_queue.put(("shorts_done", outputs))
