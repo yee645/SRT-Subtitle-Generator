@@ -10,7 +10,11 @@ YouTube 重新壓縮成一片糊（YouTube 對每支影片都會再壓一次，�
 本模組兩件事都免轉錄、純 ffmpeg／ffprobe：
 
 - 影片健檢：解析度、畫面更新率、位元率（對照 YouTube 官方建議值，
-  可調寬嚴倍率）、編碼格式，以及開頭／結尾的靜音與黑畫面廢秒偵測
+  可調寬嚴倍率）、編碼格式，開頭／結尾的靜音與黑畫面廢秒偵測，以及
+  全片的**凍結畫面偵測**——SD 卡寫入卡頓、相機緩衝區問題等錄製瑕疵
+  常造成「聲音仍在播放、畫面卻卡住不動」數秒，這種問題不是黑畫面
+  也不是靜音，既有的頭尾廢秒偵測抓不到，往往上傳後才被觀眾留言
+  抓包，本模組用 ffmpeg 的 freezedetect 濾鏡掃描全片抓出來
 - 一鍵去頭尾：依偵測結果（可手動微調）重新輸出修剪版
 
 核心邏輯零 GUI 依賴，供健檢視窗與 CLI 共用。
@@ -34,12 +38,16 @@ DEFAULT_VIDEOCHECK = {
     "head_max_seconds": 1.0,   # 開頭廢秒超過此長度即提醒修剪
     "tail_max_seconds": 1.5,   # 結尾廢秒超過此長度即提醒修剪
     "trim_pad": 0.25,          # 修剪時保留的緩衝秒數（避免切得太貼）
+    "freeze_min_seconds": 1.0, # 畫面卡住超過此長度即判定為凍結畫面
 }
 _MARGIN_RANGE = (0.5, 2.0)
 _DEAD_AIR_DB_RANGE = (-70.0, -25.0)
 _HEAD_MAX_RANGE = (0.3, 10.0)
 _TAIL_MAX_RANGE = (0.3, 10.0)
 _PAD_RANGE = (0.0, 2.0)
+_FREEZE_MIN_RANGE = (0.5, 5.0)
+# 全片列出的凍結畫面上限，避免極端素材（如整段畫面卡死）洗版報告。
+_MAX_FREEZE_FINDINGS = 5
 
 # YouTube 官方建議上傳位元率（SDR，Mbps）：(最小高度, 30fps 建議, 60fps 建議)。
 # 高度取「至少達到」判定（1440 以上算 2K、2160 以上算 4K）。
@@ -61,6 +69,8 @@ _BLACK_RE = re.compile(
     r"black_start:(\d+(?:\.\d+)?)\s+black_end:(\d+(?:\.\d+)?)")
 _SILENCE_START_RE = re.compile(r"silence_start:\s*(-?\d+(?:\.\d+)?)")
 _SILENCE_END_RE = re.compile(r"silence_end:\s*(\d+(?:\.\d+)?)")
+_FREEZE_START_RE = re.compile(r"freeze_start:\s*(\d+(?:\.\d+)?)")
+_FREEZE_END_RE = re.compile(r"freeze_end:\s*(\d+(?:\.\d+)?)")
 
 
 def _clamp_float(value, low, high, fallback):
@@ -92,6 +102,9 @@ def resolve_videocheck_settings(config: Optional[dict] = None) -> dict:
             DEFAULT_VIDEOCHECK["tail_max_seconds"]),
         "trim_pad": _clamp_float(raw.get("trim_pad"), *_PAD_RANGE,
                                  DEFAULT_VIDEOCHECK["trim_pad"]),
+        "freeze_min_seconds": _clamp_float(
+            raw.get("freeze_min_seconds"), *_FREEZE_MIN_RANGE,
+            DEFAULT_VIDEOCHECK["freeze_min_seconds"]),
     }
 
 
@@ -176,10 +189,12 @@ def _bridge_spans(spans):
 
 def parse_dead_air(stderr: str, duration: float) -> dict:
     """
-    解析 blackdetect＋silencedetect 的輸出，回傳頭尾廢秒資訊。
+    解析 blackdetect＋silencedetect＋freezedetect 的輸出，回傳頭尾廢秒與
+    全片凍結畫面資訊。
 
     head_silence／head_black：從 0 秒起算的連續無聲／黑畫面長度；
-    tail_silence／tail_black：貼著結尾的連續無聲／黑畫面長度。
+    tail_silence／tail_black：貼著結尾的連續無聲／黑畫面長度；
+    freezes：全片凍結畫面區段清單 [{"start","end","duration"}...]。
     """
     silences = []
     start = None
@@ -212,23 +227,45 @@ def parse_dead_air(stderr: str, duration: float) -> dict:
                 best = max(best, duration - s)
         return best
 
+    freezes = []
+    freeze_start = None
+    for line in (stderr or "").splitlines():
+        match = _FREEZE_START_RE.search(line)
+        if match:
+            freeze_start = float(match.group(1))
+            continue
+        match = _FREEZE_END_RE.search(line)
+        if match and freeze_start is not None:
+            freeze_end = float(match.group(1))
+            freezes.append({"start": freeze_start, "end": freeze_end,
+                            "duration": freeze_end - freeze_start})
+            freeze_start = None
+    if freeze_start is not None:  # 凍結一路延伸到檔案結尾。
+        freezes.append({"start": freeze_start, "end": duration,
+                        "duration": duration - freeze_start})
+
     return {
         "head_silence": head_run(silences),
         "head_black": head_run(blacks),
         "tail_silence": tail_run(silences),
         "tail_black": tail_run(blacks),
+        "freezes": freezes,
     }
 
 
 def detect_dead_air(media_path: str, settings: Optional[dict] = None,
                     timeout: int = 600) -> dict:
-    """實際掃描頭尾廢秒（單次 ffmpeg 同時跑 blackdetect＋silencedetect）。"""
+    """
+    單次 ffmpeg 同時跑 blackdetect＋silencedetect＋freezedetect，
+    掃出頭尾廢秒與全片凍結畫面（三者共用同一次全片解碼，避免重複解碼）。
+    """
     settings = settings or resolve_videocheck_settings()
     duration = probe_duration(media_path)
     command = [
         "ffmpeg", "-hide_banner", "-nostats",
         "-i", media_path,
-        "-vf", "blackdetect=d=0.3:pic_th=0.97",
+        "-vf", ("blackdetect=d=0.3:pic_th=0.97,"
+                f"freezedetect=n=0.001:d={settings['freeze_min_seconds']:.2f}"),
         "-af", f"silencedetect=n={settings['dead_air_db']:.0f}dB:d=0.4",
         "-f", "null", "-",
     ]
@@ -238,7 +275,7 @@ def detect_dead_air(media_path: str, settings: Optional[dict] = None,
     except (OSError, subprocess.SubprocessError):
         return {"head_silence": 0.0, "head_black": 0.0,
                 "tail_silence": 0.0, "tail_black": 0.0,
-                "duration": duration}
+                "freezes": [], "duration": duration}
     stderr = (completed.stderr or b"").decode("utf-8", errors="ignore")
     result = parse_dead_air(stderr, duration)
     result["duration"] = duration
@@ -360,6 +397,23 @@ def run_video_check(
     else:
         findings.append(_finding(LEVEL_GOOD, "結尾廢秒",
                                  f"{tail:.1f} 秒，正常"))
+
+    # 6. 全片凍結畫面（錄製瑕疵：畫面卡住不動、聲音仍在播放）。
+    freezes = dead_air.get("freezes") or []
+    if freezes:
+        for freeze in freezes[:_MAX_FREEZE_FINDINGS]:
+            findings.append(_finding(
+                LEVEL_WARN, "凍結畫面",
+                f"{freeze['start']:.1f}～{freeze['end']:.1f} 秒"
+                f"（約 {freeze['duration']:.1f} 秒畫面卡住不動）",
+                "常見於 SD 卡寫入卡頓、相機緩衝區不足等錄製瑕疵；"
+                "請檢查來源素材該時間點，需要時改用原始檔重新剪輯匯出。"))
+        if len(freezes) > _MAX_FREEZE_FINDINGS:
+            findings.append(_finding(
+                LEVEL_WARN, "凍結畫面",
+                f"另有 {len(freezes) - _MAX_FREEZE_FINDINGS} 段未列出"))
+    else:
+        findings.append(_finding(LEVEL_GOOD, "凍結畫面", "沒有偵測到明顯凍結"))
 
     if progress_cb:
         progress_cb(0.6, "影片畫質健檢完成。")

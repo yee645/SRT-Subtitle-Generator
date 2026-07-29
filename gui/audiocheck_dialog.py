@@ -136,6 +136,13 @@ class AudioCheckDialog(tk.Toplevel):
         tk.Spinbox(row3, from_=0.3, to=10.0, increment=0.1, width=7,
                    textvariable=self.head_max_var, format="%.1f").pack(
             side="left", padx=(2, 2))
+        ttk.Label(row3, text="秒").pack(side="left", padx=(0, 14))
+        ttk.Label(row3, text="凍結判定秒數:").pack(side="left")
+        self.freeze_min_var = tk.DoubleVar(
+            value=vc_settings["freeze_min_seconds"])
+        tk.Spinbox(row3, from_=0.5, to=5.0, increment=0.1, width=7,
+                   textvariable=self.freeze_min_var, format="%.1f").pack(
+            side="left", padx=(2, 2))
         ttk.Label(row3, text="秒").pack(side="left")
         # 分段音量一致性門檻（分段長度、與整體中位數響度的容許落差）。
         volc_settings = resolve_volume_consistency_settings(config_data)
@@ -309,6 +316,7 @@ class AudioCheckDialog(tk.Toplevel):
         merged_vc.update({
             "bitrate_margin": safe(self.bitrate_margin_var, 1.0),
             "head_max_seconds": safe(self.head_max_var, 1.0),
+            "freeze_min_seconds": safe(self.freeze_min_var, 1.0),
         })
         self.config_data["videocheck"] = merged_vc
         self.config_data["volumeconsistency"] = {
