@@ -139,6 +139,7 @@ DEFAULT_CONFIG = {
         "head_max_seconds": 1.0,   # 開頭廢秒超過此長度即提醒修剪
         "tail_max_seconds": 1.5,   # 結尾廢秒超過此長度即提醒修剪
         "trim_pad": 0.25,          # 修剪保留的緩衝秒數
+        "freeze_min_seconds": 1.0, # 畫面卡住超過此長度即判定為凍結畫面
     },
     # 音訊修復設定（健檢視窗的一鍵修復）。
     "audiofix": {

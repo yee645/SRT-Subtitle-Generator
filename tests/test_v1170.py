@@ -48,7 +48,8 @@ check("結尾靜音延伸到檔尾", abs(parsed["tail_silence"] - 1.5) < 1e-9,
 check("結尾無黑畫面", parsed["tail_black"] == 0.0)
 # 無廢秒素材
 clean = videocheck.parse_dead_air("", 10.0)
-check("乾淨素材全零", all(v == 0.0 for v in clean.values()))
+check("乾淨素材全零", all(v == 0.0 for k, v in clean.items() if k != "freezes"))
+check("乾淨素材無凍結畫面（v1.26.0 起）", clean.get("freezes") == [])
 
 # 廢秒中的短暫聲響（相機提示音等）要橋接，不可低估廢秒長度
 # （實測 Big Buck Bunny 素材曾因 0.1 秒斷點把 2.2 秒廢秒低估成 1.07 秒）。
