@@ -170,6 +170,14 @@ DEFAULT_CONFIG = {
         "safe_zone_bottom": 0.22,
         "safe_zone_side": 0.05,
     },
+    # 音訊轉視覺化影片設定（讓純音訊素材也能接上字幕燒錄等既有管線）。
+    "audiovis": {
+        "mode": "waveform",       # waveform＝波形；spectrum＝頻譜
+        "color": "#3fa9f5",       # 波形顏色（僅 waveform 模式生效）
+        "width": 1920,
+        "height": 1080,
+        "background_image": "",  # 留空輸出純黑底全畫面視覺化
+    },
     # 品牌套版設定（片頭／片尾接續、浮水印疊加）。
     "branding": {
         "intro_path": "",

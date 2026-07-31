@@ -24,6 +24,7 @@
     python main.py --retakes --retakes-cut 影片.mp4  # 偵測後直接剪掉全部候選重複片段
     python main.py --volumecheck 影片.mp4         # 分段音量一致性分析（免轉錄）
     python main.py --volumefix 影片.mp4           # 一鍵拉平音量落差過大的段落（免轉錄）
+    python main.py --audiovis 節目.mp3            # 音訊轉波形／頻譜視覺化影片
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
 """
@@ -39,6 +40,9 @@ from subtitle.adbreaks import resolve_adbreak_settings, suggest_ad_breaks
 from subtitle.audiocheck import format_report, run_audio_check
 from subtitle.audiofix import (fix_audio, resolve_audiofix_settings,
                                suggest_output_path)
+from subtitle.audiovis import (render_audio_video, resolve_audiovis_settings,
+                               suggest_output_path as
+                               suggest_audiovis_output_path)
 from subtitle.branding import (apply_branding, resolve_branding_settings,
                                suggest_output_path as
                                suggest_branding_output_path)
@@ -143,6 +147,13 @@ def build_parser() -> argparse.ArgumentParser:
              "（畫面原樣複製，僅音軌重新編碼）；沒有偵測到落差時單檔"
              "略過並提示。")
     parser.add_argument(
+        "--audiovis", action="store_true",
+        help="音訊轉視覺化影片：把純音訊檔（podcast／錄音訪談等）轉成附"
+             "波形或頻譜視覺化的 mp4，輸出「檔名_視覺化影片.mp4」；樣式"
+             "（波形/頻譜、顏色、解析度、背景圖）依 config.json 的 "
+             "audiovis 設定。輸出檔可直接當作來源接上轉錄／字幕燒錄等"
+             "既有流程。")
+    parser.add_argument(
         "--subs", metavar="字幕檔",
         help="使用既有字幕檔（.srt/.vtt）跳過語音辨識：搭配一個媒體檔，"
              "依自動化輸出設定匯出其他格式並可 --burn 燒錄硬字幕。")
@@ -226,7 +237,7 @@ def main(argv=None) -> int:
             with_thumbnails=args.thumbnails)
     elif (args.audiocheck or args.thumbnails or args.audiofix
             or args.branding or args.videocheck or args.volumecheck
-            or args.volumefix):
+            or args.volumefix or args.audiovis):
         # 免轉錄的輕量工具模式：健檢、封面候選、音訊修復與品牌套版都只需 ffmpeg。
         results = _run_tools_batch(
             args.files, config, report,
@@ -236,7 +247,8 @@ def main(argv=None) -> int:
             do_branding=args.branding,
             do_videocheck=args.videocheck,
             do_volumecheck=args.volumecheck,
-            do_volumefix=args.volumefix)
+            do_volumefix=args.volumefix,
+            do_audiovis=args.audiovis)
     else:
         results = run_batch(
             args.files, config, mode=args.mode, report=report)
@@ -458,7 +470,8 @@ def _run_tools_batch(files: list, config: dict, report,
                      do_branding: bool = False,
                      do_videocheck: bool = False,
                      do_volumecheck: bool = False,
-                     do_volumefix: bool = False) -> list:
+                     do_volumefix: bool = False,
+                     do_audiovis: bool = False) -> list:
     """輕量工具批次（免轉錄）：音訊健檢與封面候選，回傳與 run_batch 同構的結果。"""
     automation = config.get("automation", {})
     results = []
@@ -537,6 +550,15 @@ def _run_tools_batch(files: list, config: dict, report,
                     exports.append(brand_out)
                 else:
                     report(f"{prefix}尚未設定片頭／片尾／浮水印，略過品牌套版。")
+            if do_audiovis:
+                report(f"{prefix}正在產生視覺化影片...")
+                vis_out = unique_path(os.path.join(
+                    out_dir, os.path.basename(
+                        suggest_audiovis_output_path(path))))
+                render_audio_video(
+                    path, vis_out,
+                    settings=resolve_audiovis_settings(config))
+                exports.append(vis_out)
             report(f"{prefix}完成", (index + 1) / total)
             results.append({
                 "path": path, "ok": True, "error": None,
