@@ -40,6 +40,7 @@ from subtitle.segmenter import build_cues_from_words
 from subtitle.textedit import apply_corrections
 from subtitle.transcriber import transcribe
 from gui.audiocheck_dialog import AudioCheckDialog
+from gui.audiovis_dialog import AudioVisDialog
 from gui.branding_dialog import BrandingDialog
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
@@ -195,6 +196,10 @@ class SrtApp(tk.Tk):
         ttk.Button(
             toolbar, text="品牌套版", width=14,
             command=self._open_branding_dialog,
+        ).pack(side="right", padx=(0, 8))
+        ttk.Button(
+            toolbar, text="音訊轉影片", width=14,
+            command=self._open_audiovis_dialog,
         ).pack(side="right", padx=(0, 8))
         ttk.Label(
             toolbar, text=f"v{APP_VERSION}", foreground="#888888",
@@ -658,6 +663,12 @@ class SrtApp(tk.Tk):
         files = self._selected_files()
         media_path = files[0] if files and os.path.exists(files[0]) else ""
         BrandingDialog(self, self.config_data, media_path)
+
+    def _open_audiovis_dialog(self):
+        """開啟音訊轉影片：以第一個選取檔案為預設音訊（可留空自行選擇）。"""
+        files = self._selected_files()
+        media_path = files[0] if files and os.path.exists(files[0]) else ""
+        AudioVisDialog(self, self.config_data, media_path)
 
     def _on_style_change(self, style):
         """樣式面板變動時：更新設定、即時存檔、重繪預覽。"""
