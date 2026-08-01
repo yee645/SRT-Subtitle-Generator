@@ -141,6 +141,13 @@ DEFAULT_CONFIG = {
         "trim_pad": 0.25,          # 修剪保留的緩衝秒數
         "freeze_min_seconds": 1.0, # 畫面卡住超過此長度即判定為凍結畫面
     },
+    # 畫面曝光與色偏健檢設定。
+    "colorcheck": {
+        "sample_count": 6,       # 全片均勻取樣張數
+        "dark_luma": 60.0,       # 平均亮度低於此值視為曝光不足（0~255）
+        "bright_luma": 200.0,    # 平均亮度高於此值視為過曝（0~255）
+        "cast_threshold": 10.0,  # U/V 偏離中性 128 超過此值視為明顯色偏
+    },
     # 音訊修復設定（健檢視窗的一鍵修復）。
     "audiofix": {
         "denoise": True,            # FFT 頻譜降噪（afftdn）
