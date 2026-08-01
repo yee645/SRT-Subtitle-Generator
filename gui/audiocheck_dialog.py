@@ -22,6 +22,8 @@ from subtitle.audiocheck import (format_report, resolve_audiocheck_settings,
 from subtitle.audiofix import (fix_audio, resolve_audiofix_settings,
                                suggest_output_path)
 from subtitle.burner import ffmpeg_available
+from subtitle.colorcheck import (analyze_color, format_color_report,
+                                 resolve_colorcheck_settings)
 from subtitle.pipeline import unique_path
 from subtitle.videocheck import (format_video_report,
                                  resolve_videocheck_settings,
@@ -49,8 +51,8 @@ class AudioCheckDialog(tk.Toplevel):
     def __init__(self, master, config_data, media_path=""):
         super().__init__(master)
         self.title("上片前健檢：音訊＋影片畫質、一鍵去頭尾、音量一致性")
-        self.geometry("680x900")
-        self.minsize(620, 720)
+        self.geometry("680x930")
+        self.minsize(620, 750)
         self.transient(master)
 
         self.config_data = config_data
@@ -162,6 +164,28 @@ class AudioCheckDialog(tk.Toplevel):
                    textvariable=self.vol_deviation_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row4, text="LU").pack(side="left")
+        # 畫面曝光與色偏門檻。
+        cc_settings = resolve_colorcheck_settings(config_data)
+        row5 = ttk.Frame(options)
+        row5.pack(fill="x", pady=2)
+        ttk.Label(row5, text="過暗門檻:").pack(side="left")
+        self.dark_luma_var = tk.DoubleVar(value=cc_settings["dark_luma"])
+        tk.Spinbox(row5, from_=20, to=100, increment=5, width=7,
+                   textvariable=self.dark_luma_var, format="%.0f").pack(
+            side="left", padx=(2, 2))
+        ttk.Label(row5, text="過曝門檻:").pack(side="left", padx=(12, 0))
+        self.bright_luma_var = tk.DoubleVar(value=cc_settings["bright_luma"])
+        tk.Spinbox(row5, from_=160, to=240, increment=5, width=7,
+                   textvariable=self.bright_luma_var, format="%.0f").pack(
+            side="left", padx=(2, 2))
+        ttk.Label(row5, text="色偏門檻:").pack(side="left", padx=(12, 0))
+        self.color_cast_var = tk.DoubleVar(
+            value=cc_settings["cast_threshold"])
+        tk.Spinbox(row5, from_=5, to=25, increment=1, width=7,
+                   textvariable=self.color_cast_var, format="%.0f").pack(
+            side="left", padx=(2, 2))
+        ttk.Label(row5, text="（0~255 亮度值）", foreground="#666666").pack(
+            side="left")
 
         self.status_var = tk.StringVar(
             value="選好素材後按「開始健檢」，掃描不會改動原始檔案。")
@@ -323,6 +347,11 @@ class AudioCheckDialog(tk.Toplevel):
             "segment_seconds": safe(self.vol_segment_var, 20.0),
             "deviation_lu": safe(self.vol_deviation_var, 3.0),
         }
+        self.config_data["colorcheck"] = {
+            "dark_luma": safe(self.dark_luma_var, 60.0),
+            "bright_luma": safe(self.bright_luma_var, 200.0),
+            "cast_threshold": safe(self.color_cast_var, 10.0),
+        }
         try:
             save_config(self.config_data)
         except OSError:
@@ -440,6 +469,15 @@ class AudioCheckDialog(tk.Toplevel):
                 text = f"{text}\n\n{video_text}"
             trim = suggest_trim(video_result.get("dead_air"),
                                 resolve_videocheck_settings(config))
+            # 畫面曝光與色偏：純音訊檔（無影像串流）自動略過此段落。
+            report(0.78, "正在分析畫面曝光與色調...")
+            try:
+                color_result = analyze_color(
+                    media_path, resolve_colorcheck_settings(config))
+                color_text = format_color_report(color_result)
+                text = f"{text}\n\n{color_text}"
+            except ValueError:
+                pass  # 無影像串流，略過此段落。
             # 分段音量一致性：抓出「忽大忽小」的段落（獨立於整體響度健檢）。
             # 無音訊軌（純畫面素材）時優雅略過，不中斷整體健檢流程。
             report(0.85, "正在分析分段音量一致性...")

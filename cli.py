@@ -25,6 +25,7 @@
     python main.py --volumecheck 影片.mp4         # 分段音量一致性分析（免轉錄）
     python main.py --volumefix 影片.mp4           # 一鍵拉平音量落差過大的段落（免轉錄）
     python main.py --audiovis 節目.mp3            # 音訊轉波形／頻譜視覺化影片
+    python main.py --colorcheck 影片.mp4          # 畫面曝光與色偏健檢（免轉錄）
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
 """
@@ -46,6 +47,8 @@ from subtitle.audiovis import (render_audio_video, resolve_audiovis_settings,
 from subtitle.branding import (apply_branding, resolve_branding_settings,
                                suggest_output_path as
                                suggest_branding_output_path)
+from subtitle.colorcheck import (analyze_color, format_color_report,
+                                 resolve_colorcheck_settings)
 from subtitle.errors import format_error_text
 from subtitle.exporter import export
 from subtitle.ffmpeg_setup import ensure_ffmpeg_on_path
@@ -147,6 +150,11 @@ def build_parser() -> argparse.ArgumentParser:
              "（畫面原樣複製，僅音軌重新編碼）；沒有偵測到落差時單檔"
              "略過並提示。")
     parser.add_argument(
+        "--colorcheck", action="store_true",
+        help="畫面曝光與色偏健檢：全片均勻取樣，偵測曝光不足／過曝與明顯"
+             "色偏（白平衡問題），輸出「檔名_色彩健檢.txt」報告（僅列出"
+             "建議，不自動校色）；可與 --audiocheck／--videocheck 併用。")
+    parser.add_argument(
         "--audiovis", action="store_true",
         help="音訊轉視覺化影片：把純音訊檔（podcast／錄音訪談等）轉成附"
              "波形或頻譜視覺化的 mp4，輸出「檔名_視覺化影片.mp4」；樣式"
@@ -237,7 +245,7 @@ def main(argv=None) -> int:
             with_thumbnails=args.thumbnails)
     elif (args.audiocheck or args.thumbnails or args.audiofix
             or args.branding or args.videocheck or args.volumecheck
-            or args.volumefix or args.audiovis):
+            or args.volumefix or args.audiovis or args.colorcheck):
         # 免轉錄的輕量工具模式：健檢、封面候選、音訊修復與品牌套版都只需 ffmpeg。
         results = _run_tools_batch(
             args.files, config, report,
@@ -248,7 +256,8 @@ def main(argv=None) -> int:
             do_videocheck=args.videocheck,
             do_volumecheck=args.volumecheck,
             do_volumefix=args.volumefix,
-            do_audiovis=args.audiovis)
+            do_audiovis=args.audiovis,
+            do_colorcheck=args.colorcheck)
     else:
         results = run_batch(
             args.files, config, mode=args.mode, report=report)
@@ -471,7 +480,8 @@ def _run_tools_batch(files: list, config: dict, report,
                      do_videocheck: bool = False,
                      do_volumecheck: bool = False,
                      do_volumefix: bool = False,
-                     do_audiovis: bool = False) -> list:
+                     do_audiovis: bool = False,
+                     do_colorcheck: bool = False) -> list:
     """輕量工具批次（免轉錄）：音訊健檢與封面候選，回傳與 run_batch 同構的結果。"""
     automation = config.get("automation", {})
     results = []
@@ -502,6 +512,20 @@ def _run_tools_batch(files: list, config: dict, report,
                     exports.append(vc_path)
                 else:
                     report(f"{prefix}無影像串流，略過影片健檢。")
+            if do_colorcheck:
+                report(f"{prefix}分析畫面曝光與色調中...")
+                try:
+                    color_result = analyze_color(
+                        path, resolve_colorcheck_settings(config))
+                    color_text = format_color_report(color_result)
+                    color_path = unique_path(os.path.join(
+                        out_dir, f"{base}_色彩健檢.txt"))
+                    with open(color_path, "w", encoding="utf-8") as fp:
+                        fp.write(color_text)
+                    print(color_text, flush=True)
+                    exports.append(color_path)
+                except ValueError:
+                    report(f"{prefix}無影像串流，略過色彩健檢。")
             if do_thumbnails:
                 report(f"{prefix}擷取封面候選中（整片均勻取樣）...")
                 exports.extend(_export_thumbnails(
