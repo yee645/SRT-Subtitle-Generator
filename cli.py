@@ -26,6 +26,7 @@
     python main.py --volumefix 影片.mp4           # 一鍵拉平音量落差過大的段落（免轉錄）
     python main.py --audiovis 節目.mp3            # 音訊轉波形／頻譜視覺化影片
     python main.py --colorcheck 影片.mp4          # 畫面曝光與色偏健檢（免轉錄）
+    python main.py --adcheck 影片.mp4             # 廣告友善度自查（黃標風險預檢）
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
 """
@@ -38,6 +39,8 @@ import sys
 
 from config import load_config
 from subtitle.adbreaks import resolve_adbreak_settings, suggest_ad_breaks
+from subtitle.adfriendly import (format_adfriendly_report,
+                                 resolve_adfriendly_settings, scan_cues)
 from subtitle.audiocheck import format_report, run_audio_check
 from subtitle.audiofix import (fix_audio, resolve_audiofix_settings,
                                suggest_output_path)
@@ -172,6 +175,14 @@ def build_parser() -> argparse.ArgumentParser:
              "（僅列出問題，修復請於 GUI 字幕健檢對話框操作）；可與一般"
              "轉錄／對齊模式或 --subs 併用（--review 等不產生字幕的"
              "模式無效果）。")
+    parser.add_argument(
+        "--adcheck", action="store_true",
+        help="廣告友善度自查（黃標風險預檢）：掃描產生（或 --subs 匯入）的"
+             "字幕，找出可能觸發 YouTube 廣告友善度審查的用詞，並以時間窗"
+             "叢集分析標出「短時間內風險詞密集」的高風險段落，輸出"
+             "「檔名_廣告友善度.txt」；詞表可於 config.json 的 adfriendly "
+             "增補（extra_terms）與排除誤判（ignore_terms）。僅供自查，"
+             "不自動改動內容。可與一般轉錄／對齊模式或 --subs 併用。")
     parser.add_argument(
         "--jumpcut", action="store_true",
         help="自動跳剪：依產生（或 --subs 匯入）的字幕找出句間過長停頓，"
@@ -327,6 +338,20 @@ def main(argv=None) -> int:
             check_path = _export_subcheck(cues, config, out_dir, base)
             item["result"]["exports"].append(check_path)
 
+    if args.adcheck:
+        automation = config.get("automation", {})
+        out_dir_override = (automation.get("output_dir") or "").strip()
+        for item in results:
+            cues = (item.get("result") or {}).get("cues") if item["ok"] else None
+            if not cues:
+                continue
+            out_dir = out_dir_override or os.path.dirname(
+                os.path.abspath(item["path"]))
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(item["path"]))[0]
+            item["result"]["exports"].append(
+                _export_adcheck(cues, config, out_dir, base))
+
     # 總結報告。
     lines = []
     failed = 0
@@ -376,6 +401,17 @@ def _export_subcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
     result = analyze_cues(cues, resolve_subcheck_settings(config))
     text = format_subtitle_report(result)
     check_path = unique_path(os.path.join(out_dir, f"{base}_字幕健檢.txt"))
+    with open(check_path, "w", encoding="utf-8") as fp:
+        fp.write(text)
+    print(text, flush=True)
+    return check_path
+
+
+def _export_adcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
+    """對字幕清單跑廣告友善度自查並輸出報告文字檔，回傳報告路徑。"""
+    result = scan_cues(cues, resolve_adfriendly_settings(config))
+    text = format_adfriendly_report(result)
+    check_path = unique_path(os.path.join(out_dir, f"{base}_廣告友善度.txt"))
     with open(check_path, "w", encoding="utf-8") as fp:
         fp.write(text)
     print(text, flush=True)
