@@ -14,32 +14,47 @@ v1.29.0 起同一份報告額外涵蓋**廣告友善度自查**：掃描逐字�
 真正該處理的高風險段落。此段落僅供自查，不會改動任何內容。
 """
 
+import logging
+import os
+import queue
+import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 from config import save_config
+from gui.error_dialog import show_friendly_error
 from subtitle.adfriendly import (format_adfriendly_report,
                                  resolve_adfriendly_settings, scan_cues)
+from subtitle.burner import ffmpeg_available
+from subtitle.subsync import (analyze_sync, apply_sync_correction,
+                              format_sync_report, resolve_subsync_settings)
 from subtitle.subtitlecheck import (analyze_cues, fix_cue_durations,
                                     fix_overlaps, format_subtitle_report,
                                     resolve_subcheck_settings)
+
+logger = logging.getLogger(__name__)
 
 
 class SubtitleCheckDialog(tk.Toplevel):
     """字幕健檢視窗：掃描目前字幕清單並可一鍵延長過快／過短的句子。"""
 
-    def __init__(self, master, config_data, cues, on_fixed=None):
+    def __init__(self, master, config_data, cues, on_fixed=None,
+                 media_path=""):
         super().__init__(master)
-        self.title("字幕健檢：閱讀速度、行數與廣告友善度")
-        self.geometry("680x700")
-        self.minsize(620, 600)
+        self.title("字幕健檢：閱讀速度、行數、廣告友善度與語音同步")
+        self.geometry("700x740")
+        self.minsize(640, 620)
         self.transient(master)
 
         self.config_data = config_data
         self.cues = cues
         self.on_fixed = on_fixed
+        self.media_path = media_path
         self.last_result = None
         self.last_ad_result = None
+        self.last_sync_result = None
+        self.is_syncing = False
+        self.result_queue = queue.Queue()
 
         settings = resolve_subcheck_settings(config_data)
         body = ttk.Frame(self, padding=12)
@@ -159,9 +174,26 @@ class SubtitleCheckDialog(tk.Toplevel):
         self.copy_btn = ttk.Button(buttons, text="複製報告", state="disabled",
                                    command=self._on_copy)
         self.copy_btn.pack(side="left", padx=(6, 0))
-        ttk.Button(buttons, text="關閉", command=self.destroy).pack(
+        ttk.Button(buttons, text="關閉", command=self._on_close).pack(
             side="right")
 
+        # 語音同步檢查需要讀媒體檔（跑一次 ffmpeg），與純文字檢查分開一列。
+        sync_row = ttk.Frame(body)
+        sync_row.pack(fill="x", pady=(6, 0))
+        self.sync_btn = ttk.Button(
+            sync_row, text="檢查與語音同步", command=self._on_sync_check)
+        self.sync_btn.pack(side="left")
+        self.sync_fix_btn = ttk.Button(
+            sync_row, text="一鍵校正同步", state="disabled",
+            command=self._on_sync_fix)
+        self.sync_fix_btn.pack(side="left", padx=(6, 0))
+        ttk.Label(
+            sync_row, foreground="#666666",
+            text="（掃描素材實際語音，抓出整體偏移或幀率漂移）").pack(
+            side="left", padx=(8, 0))
+
+        self._poll_job = self.after(120, self._poll_queue)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._on_run()
 
     def _collect_settings(self):
@@ -247,6 +279,99 @@ class SubtitleCheckDialog(tk.Toplevel):
             self.on_fixed(new_cues)
         self.status_var.set(f"已修復 {fixed} 處時間軸重疊，重新健檢中...")
         self._on_run()
+
+    # ------------------------------------------------------------------
+    # 字幕與語音同步（需讀媒體檔，於背景執行緒跑 ffmpeg）
+    # ------------------------------------------------------------------
+    def _on_sync_check(self):
+        if self.is_syncing:
+            return
+        if not self.media_path or not os.path.exists(self.media_path):
+            messagebox.showinfo(
+                "提示", "請先在主視窗選好對應的影片／音訊素材，"
+                       "同步檢查需要讀取實際語音。", parent=self)
+            return
+        if not ffmpeg_available():
+            show_friendly_error(
+                self, "同步檢查需要 ffmpeg",
+                RuntimeError("找不到 ffmpeg，請先安裝並加入系統 PATH。"))
+            return
+        self._set_syncing(True)
+        self.status_var.set("正在掃描素材語音區間並比對字幕時間軸...")
+        threading.Thread(target=self._sync_worker, daemon=True).start()
+
+    def _sync_worker(self):
+        try:
+            result = analyze_sync(
+                self.media_path, self.cues,
+                resolve_subsync_settings(self.config_data))
+            self.result_queue.put(("sync_done", result))
+        except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
+            logger.exception("字幕同步檢查失敗")
+            self.result_queue.put(("sync_error", exc))
+
+    def _poll_queue(self):
+        try:
+            while True:
+                kind, payload = self.result_queue.get_nowait()
+                if kind == "sync_done":
+                    self._set_syncing(False)
+                    self.last_sync_result = payload
+                    self._append_sync_report(payload)
+                elif kind == "sync_error":
+                    self._set_syncing(False)
+                    self.status_var.set("同步檢查失敗。")
+                    show_friendly_error(self, "字幕同步檢查失敗", payload)
+        except queue.Empty:
+            pass
+        self._poll_job = self.after(120, self._poll_queue)
+
+    def _append_sync_report(self, result):
+        text = self.report.get("1.0", "end").rstrip()
+        # 重複檢查時取代舊的同步段落，避免報告越接越長。
+        marker = "===== 字幕與語音同步檢查 ====="
+        if marker in text:
+            text = text.split(marker)[0].rstrip()
+        self.report.configure(state="normal")
+        self.report.delete("1.0", "end")
+        self.report.insert("1.0", f"{text}\n\n{format_sync_report(result)}",
+                           "report")
+        self.report.configure(state="disabled")
+        self.report.see("end")
+        fixable = result.get("kind") in ("offset", "drift")
+        self.sync_fix_btn.configure(state="normal" if fixable else "disabled")
+        if fixable:
+            self.status_var.set(
+                "同步檢查完成：偵測到字幕與語音不同步，可按「一鍵校正同步」。")
+        elif result.get("kind") == "unreliable":
+            self.status_var.set("同步檢查完成：無法可靠判定，詳見報告。")
+        else:
+            self.status_var.set("同步檢查完成：字幕與語音同步正常。")
+
+    def _on_sync_fix(self):
+        result = self.last_sync_result
+        if not result or result.get("kind") not in ("offset", "drift"):
+            messagebox.showinfo("提示", "請先按「檢查與語音同步」。", parent=self)
+            return
+        new_cues = apply_sync_correction(
+            self.cues, result["scale"], result["offset"])
+        self.cues = new_cues
+        if self.on_fixed:
+            self.on_fixed(new_cues)
+        self.sync_fix_btn.configure(state="disabled")
+        self.last_sync_result = None
+        self.status_var.set("已套用同步校正，重新健檢中...")
+        self._on_run()
+
+    def _set_syncing(self, syncing):
+        self.is_syncing = syncing
+        state = "disabled" if syncing else "normal"
+        self.sync_btn.configure(state=state)
+
+    def _on_close(self):
+        if getattr(self, "_poll_job", None):
+            self.after_cancel(self._poll_job)
+        self.destroy()
 
     def _on_copy(self):
         text = self.report.get("1.0", "end").strip()

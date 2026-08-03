@@ -843,8 +843,10 @@ class SrtApp(tk.Tk):
             self.cues = new_cues
             self.apply_text_edits()
 
+        files = self._selected_files()
+        media_path = files[0] if files and os.path.exists(files[0]) else ""
         SubtitleCheckDialog(self, self.config_data, self.cues,
-                            on_fixed=on_fixed)
+                            on_fixed=on_fixed, media_path=media_path)
 
     def _open_jumpcut_dialog(self):
         """開啟自動跳剪：依目前字幕找出句間停頓，一次剪掉整支影片的冷場。"""

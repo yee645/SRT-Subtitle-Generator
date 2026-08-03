@@ -27,6 +27,7 @@
     python main.py --audiovis 節目.mp3            # 音訊轉波形／頻譜視覺化影片
     python main.py --colorcheck 影片.mp4          # 畫面曝光與色偏健檢（免轉錄）
     python main.py --adcheck 影片.mp4             # 廣告友善度自查（黃標風險預檢）
+    python main.py --subs 舊字幕.srt --synccheck 影片.mp4  # 字幕與語音同步檢查
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
 """
@@ -68,6 +69,8 @@ from subtitle.media import probe_duration
 from subtitle.pipeline import (EXPORT_FORMATS, enabled_export_formats,
                                export_and_burn, run_batch, unique_path)
 from subtitle.publisher import build_publish_pack, resolve_publish_settings
+from subtitle.subsync import (analyze_sync, apply_sync_correction,
+                              format_sync_report, resolve_subsync_settings)
 from subtitle.subtitlecheck import (analyze_cues, format_subtitle_report,
                                     resolve_subcheck_settings)
 from subtitle.videocheck import (format_video_report, run_video_check)
@@ -175,6 +178,17 @@ def build_parser() -> argparse.ArgumentParser:
              "（僅列出問題，修復請於 GUI 字幕健檢對話框操作）；可與一般"
              "轉錄／對齊模式或 --subs 併用（--review 等不產生字幕的"
              "模式無效果）。")
+    parser.add_argument(
+        "--synccheck", action="store_true",
+        help="字幕與語音同步檢查：掃出素材實際語音區間，檢查字幕是否對得上，"
+             "並自動算出建議的線性校正（同時涵蓋整體偏移與幀率漂移），"
+             "輸出「檔名_同步檢查.txt」。特別適合搭配 --subs 匯入的既有"
+             "字幕檔使用。")
+    parser.add_argument(
+        "--syncfix", action="store_true",
+        help="搭配 --synccheck 使用：偵測到不同步時直接套用建議校正，另存"
+             "「檔名_同步校正.ext」字幕（只調整時間軸、不改動文字內容，"
+             "原始字幕檔不受影響）；判定為同步正常或無法可靠判定時略過。")
     parser.add_argument(
         "--adcheck", action="store_true",
         help="廣告友善度自查（黃標風險預檢）：掃描產生（或 --subs 匯入）的"
@@ -338,6 +352,26 @@ def main(argv=None) -> int:
             check_path = _export_subcheck(cues, config, out_dir, base)
             item["result"]["exports"].append(check_path)
 
+    if args.synccheck:
+        automation = config.get("automation", {})
+        out_dir_override = (automation.get("output_dir") or "").strip()
+        formats = enabled_export_formats(automation)
+        for item in results:
+            cues = (item.get("result") or {}).get("cues") if item["ok"] else None
+            if not cues:
+                continue
+            out_dir = out_dir_override or os.path.dirname(
+                os.path.abspath(item["path"]))
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(item["path"]))[0]
+            try:
+                item["result"]["exports"].extend(_export_synccheck(
+                    item["path"], cues, config, out_dir, base,
+                    formats, args.syncfix))
+            except (RuntimeError, ValueError, FileNotFoundError) as exc:
+                report(f"{os.path.basename(item['path'])}："
+                      f"同步檢查略過（{exc}）")
+
     if args.adcheck:
         automation = config.get("automation", {})
         out_dir_override = (automation.get("output_dir") or "").strip()
@@ -405,6 +439,31 @@ def _export_subcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
         fp.write(text)
     print(text, flush=True)
     return check_path
+
+
+def _export_synccheck(media_path: str, cues: list, config: dict, out_dir: str,
+                      base: str, formats: list, do_fix: bool) -> list:
+    """
+    對單檔跑字幕與語音同步檢查，輸出報告；do_fix 時另存校正後的字幕。
+
+    回傳輸出路徑清單。無音訊軌等無法檢查的情況由呼叫端攔截例外處理。
+    """
+    result = analyze_sync(media_path, cues, resolve_subsync_settings(config))
+    text = format_sync_report(result)
+    report_path = unique_path(os.path.join(out_dir, f"{base}_同步檢查.txt"))
+    with open(report_path, "w", encoding="utf-8") as fp:
+        fp.write(text)
+    print(text, flush=True)
+    exports = [report_path]
+
+    if do_fix and result["kind"] in ("offset", "drift"):
+        fixed = apply_sync_correction(cues, result["scale"], result["offset"])
+        style = config.get("subtitle_style", {})
+        for ext in formats or [".srt"]:
+            out_path = unique_path(os.path.join(out_dir, f"{base}_同步校正{ext}"))
+            export(fixed, out_path, style)
+            exports.append(out_path)
+    return exports
 
 
 def _export_adcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
