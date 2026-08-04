@@ -186,6 +186,16 @@ def describe_exception(exc: Union[BaseException, str]) -> FriendlyError:
                      "檔案，改用 UTF-8 編碼重新儲存後再試。",
             details=text)
 
+    if "系列一致性檢查需要至少" in text:
+        return FriendlyError(
+            "系列一致性檢查需要多個檔案",
+            cause="這項檢查比對的是「多支影片彼此之間」是否一致，"
+                  "只給一個檔案沒有可比較的基準。",
+            solution="請一次選取同系列的多支影片（主視窗可按住 Ctrl／Shift "
+                     "複選）再執行；若想檢查單一支影片本身合不合格，"
+                     "請改用「上片前健檢」。",
+            details=text)
+
     return FriendlyError(
         "發生未預期的錯誤",
         cause="這不是一個已知的常見問題，可能與特定檔案或環境有關。",
