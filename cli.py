@@ -69,6 +69,8 @@ from subtitle.media import probe_duration
 from subtitle.pipeline import (EXPORT_FORMATS, enabled_export_formats,
                                export_and_burn, run_batch, unique_path)
 from subtitle.publisher import build_publish_pack, resolve_publish_settings
+from subtitle.seriescheck import (analyze_series, format_series_report,
+                                  resolve_seriescheck_settings)
 from subtitle.subsync import (analyze_sync, apply_sync_correction,
                               format_sync_report, resolve_subsync_settings)
 from subtitle.subtitlecheck import (analyze_cues, format_subtitle_report,
@@ -179,6 +181,13 @@ def build_parser() -> argparse.ArgumentParser:
              "轉錄／對齊模式或 --subs 併用（--review 等不產生字幕的"
              "模式無效果）。")
     parser.add_argument(
+        "--seriescheck", action="store_true",
+        help="系列一致性檢查：比對一次給定的多支影片「彼此之間」的響度、"
+             "解析度、更新率、編碼與畫面亮度／色調是否一致（以整批中位數"
+             "為基準，抓出偏離整批的那幾支），輸出「系列一致性檢查.txt」。"
+             "與單支影片是否合格的健檢（--audiocheck 等）是不同的問題；"
+             "需一次給至少 2 個檔案。")
+    parser.add_argument(
         "--synccheck", action="store_true",
         help="字幕與語音同步檢查：掃出素材實際語音區間，檢查字幕是否對得上，"
              "並自動算出建議的線性校正（同時涵蓋整體偏移與幀率漂移），"
@@ -256,7 +265,11 @@ def main(argv=None) -> int:
         percent = f"{int(ratio * 100):3d}% " if ratio is not None else "     "
         print(f"{percent}{message}", flush=True)
 
-    if args.subs:
+    if args.seriescheck:
+        # 系列一致性是「整批比一批」，產出單一份跨檔報告，
+        # 與其他逐檔處理的模式結構不同，因此獨立成一個分支。
+        results = _run_seriescheck(args.files, config, report)
+    elif args.subs:
         if len(args.files) != 1:
             raise SystemExit(
                 "--subs 需搭配「剛好一個」媒體檔（跳過語音辨識，"
@@ -439,6 +452,37 @@ def _export_subcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
         fp.write(text)
     print(text, flush=True)
     return check_path
+
+
+def _run_seriescheck(files: list, config: dict, report) -> list:
+    """
+    系列一致性檢查：整批比一批，產出單一份跨檔報告。
+
+    回傳與其他批次模式同構的結果清單（單一項目代表整批），供總結報告
+    統一列印。
+    """
+    def progress(ratio, message):
+        report(message, ratio)
+
+    label = f"系列一致性檢查（{len(files)} 支影片）"
+    try:
+        result = analyze_series(files, config, progress_cb=progress)
+        text = format_series_report(result)
+        print(text, flush=True)
+        automation = config.get("automation", {})
+        out_dir = (automation.get("output_dir") or "").strip() \
+            or os.path.dirname(os.path.abspath(files[0]))
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = unique_path(os.path.join(out_dir, "系列一致性檢查.txt"))
+        with open(out_path, "w", encoding="utf-8") as fp:
+            fp.write(text)
+        return [{"path": label, "ok": True, "error": None,
+                 "result": {"exports": [out_path], "burned": None,
+                            "cues": []}}]
+    except Exception as exc:
+        report(f"失敗：{exc}", 1.0)
+        return [{"path": label, "ok": False, "result": None,
+                 "error": str(exc)}]
 
 
 def _export_synccheck(media_path: str, cues: list, config: dict, out_dir: str,

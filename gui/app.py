@@ -52,6 +52,7 @@ from gui.preview_panel import PreviewPanel
 from gui.replace_dialog import ReplaceDialog
 from gui.review_window import ReviewWindow
 from gui.scrollable import ScrollableFrame
+from gui.series_dialog import SeriesCheckDialog
 from gui.style_panel import StylePanel
 from gui.subtitle_check_dialog import SubtitleCheckDialog
 from gui.translate_dialog import TranslateDialog
@@ -83,7 +84,9 @@ class SrtApp(tk.Tk):
         super().__init__()
         self.title(f"SRT 自動字幕生成與編輯工具 v{APP_VERSION}")
         self.geometry("1400x800")
-        self.minsize(900, 560)
+        # 最小寬度需容納得下功能按鈕列（實測需 968px），否則視窗縮到最小時
+        # 最右邊的按鈕會被裁掉。
+        self.minsize(980, 560)
 
         # 載入設定檔，達成記憶功能。
         self.config_data = load_config()
@@ -172,7 +175,13 @@ class SrtApp(tk.Tk):
         self._build_style_section(right)
 
     def _build_toolbar(self):
-        """頂部工具列：主題切換按鈕與版本資訊。"""
+        """
+        頂部工具列：標題／版本一列，功能按鈕另起一列。
+
+        功能按鈕已累積到六個，全部與標題擠在同一列時，視窗稍窄就會把
+        標題與版本號整個推出畫面、最左邊的按鈕也被切掉。分成兩列後，
+        按鈕列所需寬度大幅下降，之後再增加按鈕也還有餘裕。
+        """
         toolbar = ttk.Frame(self, padding=(10, 6))
         toolbar.pack(fill="x")
         current_theme = self.config_data.get("theme", "light")
@@ -181,26 +190,6 @@ class SrtApp(tk.Tk):
             toolbar, text=label, width=14, command=self._toggle_theme,
         )
         self.theme_btn.pack(side="right")
-        ttk.Button(
-            toolbar, text="審片助手（找片段）", width=18,
-            command=self._open_review_window,
-        ).pack(side="right", padx=(0, 8))
-        ttk.Button(
-            toolbar, text="配樂助手（自動閃避）", width=18,
-            command=self._open_music_dialog,
-        ).pack(side="right", padx=(0, 8))
-        ttk.Button(
-            toolbar, text="上片前健檢", width=12,
-            command=self._open_audiocheck_dialog,
-        ).pack(side="right", padx=(0, 8))
-        ttk.Button(
-            toolbar, text="品牌套版", width=14,
-            command=self._open_branding_dialog,
-        ).pack(side="right", padx=(0, 8))
-        ttk.Button(
-            toolbar, text="音訊轉影片", width=14,
-            command=self._open_audiovis_dialog,
-        ).pack(side="right", padx=(0, 8))
         ttk.Label(
             toolbar, text=f"v{APP_VERSION}", foreground="#888888",
         ).pack(side="right", padx=(0, 10))
@@ -208,6 +197,20 @@ class SrtApp(tk.Tk):
             toolbar, text="SRT 自動字幕生成與編輯工具",
             font=("Microsoft JhengHei", 11, "bold"),
         ).pack(side="left")
+
+        # 功能按鈕列：由左往右排，視窗變窄時最右邊先被裁掉，
+        # 標題與版本號不會被擠出畫面。
+        tools = ttk.Frame(self, padding=(10, 0))
+        tools.pack(fill="x", pady=(0, 6))
+        for text, width, command in (
+                ("審片助手（找片段）", 18, self._open_review_window),
+                ("配樂助手（自動閃避）", 18, self._open_music_dialog),
+                ("上片前健檢", 12, self._open_audiocheck_dialog),
+                ("品牌套版", 12, self._open_branding_dialog),
+                ("音訊轉影片", 12, self._open_audiovis_dialog),
+                ("系列一致性", 12, self._open_series_dialog)):
+            ttk.Button(tools, text=text, width=width, command=command).pack(
+                side="left", padx=(0, 8))
         ttk.Separator(self, orient="horizontal").pack(fill="x")
 
     def _build_mode_section(self, parent):
@@ -663,6 +666,11 @@ class SrtApp(tk.Tk):
         files = self._selected_files()
         media_path = files[0] if files and os.path.exists(files[0]) else ""
         BrandingDialog(self, self.config_data, media_path)
+
+    def _open_series_dialog(self):
+        """開啟系列一致性：帶入目前選取的多個檔案（可於對話框內再增減）。"""
+        files = [p for p in self._selected_files() if os.path.exists(p)]
+        SeriesCheckDialog(self, self.config_data, files)
 
     def _open_audiovis_dialog(self):
         """開啟音訊轉影片：以第一個選取檔案為預設音訊（可留空自行選擇）。"""

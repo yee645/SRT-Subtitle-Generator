@@ -208,6 +208,12 @@ DEFAULT_CONFIG = {
         "max_lines": 2,             # 超過此行數標記「行數過多」
         "max_chars_per_line": 21,   # 單行字元數超過此值標記「單行過長」
     },
+    # 系列一致性檢查：比對同一批影片彼此之間是否一致（相對整批中位數）。
+    "seriescheck": {
+        "loudness_tolerance": 2.0,  # 與整批中位數響度差超過此值（LU）標記
+        "luma_tolerance": 25.0,     # 平均亮度差超過此值（0~255）標記
+        "cast_tolerance": 8.0,      # 色調偏離整批中位數超過此值標記
+    },
     # 字幕與語音同步檢查：抓出整體偏移或幀率漂移，可一鍵線性校正。
     "subsync": {
         "silence_db": -35.0,   # 低於此音量視為無聲（dB）
