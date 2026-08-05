@@ -65,6 +65,10 @@ from subtitle.retakes import (apply_retake_removal, find_retakes,
                               format_retakes_report, resolve_retake_settings,
                               suggest_output_path as
                               suggest_retakes_output_path)
+from subtitle.chaptercheck import (fix_chapters, format_chapter_report,
+                                   format_chapters_text, parse_chapters,
+                                   resolve_chaptercheck_settings,
+                                   validate_chapters)
 from subtitle.media import probe_duration
 from subtitle.pipeline import (EXPORT_FORMATS, enabled_export_formats,
                                export_and_burn, run_batch, unique_path)
@@ -181,6 +185,20 @@ def build_parser() -> argparse.ArgumentParser:
              "轉錄／對齊模式或 --subs 併用（--review 等不產生字幕的"
              "模式無效果）。")
     parser.add_argument(
+        "--chaptercheck", metavar="章節檔",
+        help="YouTube 章節健檢：讀入一個純文字檔（每行「時間戳 空白 標題」，"
+             "可直接是從說明欄複製回來的內容），檢查是否符合 YouTube 顯示"
+             "章節的規則（首章 0:00、至少 3 章、每章至少 10 秒、時間戳格式），"
+             "輸出「檔名_章節健檢.txt」。章節不合規時 YouTube 只會靜默不顯示、"
+             "不給任何錯誤訊息，這個檢查就是要把原因指出來。需搭配一個媒體檔"
+             "以取得影片長度（才能檢查最後一章）。")
+    parser.add_argument(
+        "--chapterfix", action="store_true",
+        help="搭配 --chaptercheck 使用：把能安全修正的問題直接改好（排序、"
+             "移除重複時間、首章補成 0:00、過短章節併入前一章），另存"
+             "「檔名_章節修正.txt」可直接貼回說明欄；原始檔不受影響。"
+             "章節數不足時不會憑空捏造章節，只會如實回報。")
+    parser.add_argument(
         "--seriescheck", action="store_true",
         help="系列一致性檢查：比對一次給定的多支影片「彼此之間」的響度、"
              "解析度、更新率、編碼與畫面亮度／色調是否一致（以整批中位數"
@@ -265,7 +283,18 @@ def main(argv=None) -> int:
         percent = f"{int(ratio * 100):3d}% " if ratio is not None else "     "
         print(f"{percent}{message}", flush=True)
 
-    if args.seriescheck:
+    if args.chaptercheck:
+        # 章節健檢的輸入是「一份章節文字」而非媒體內容，媒體檔只用來取得
+        # 影片長度，因此與其他逐檔處理的模式結構不同，獨立成一個分支。
+        if len(args.files) != 1:
+            raise SystemExit(
+                "--chaptercheck 需搭配「剛好一個」媒體檔（用來取得影片長度，"
+                "才能檢查最後一章的長度），目前給了 "
+                f"{len(args.files)} 個檔案。")
+        results = _run_chaptercheck(
+            args.files[0], args.chaptercheck, config, report,
+            do_fix=args.chapterfix)
+    elif args.seriescheck:
         # 系列一致性是「整批比一批」，產出單一份跨檔報告，
         # 與其他逐檔處理的模式結構不同，因此獨立成一個分支。
         results = _run_seriescheck(args.files, config, report)
@@ -452,6 +481,65 @@ def _export_subcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
         fp.write(text)
     print(text, flush=True)
     return check_path
+
+
+def _run_chaptercheck(media_path: str, chapter_path: str, config: dict,
+                      report, do_fix: bool = False) -> list:
+    """
+    YouTube 章節健檢：檢查一份章節文字是否符合章節顯示規則。
+
+    回傳與其他批次模式同構的結果清單，供總結報告統一列印。
+    """
+    label = f"章節健檢（{os.path.basename(chapter_path)}）"
+    try:
+        report("讀取章節文字…", 0.0)
+        with open(chapter_path, "r", encoding="utf-8") as fp:
+            raw = fp.read()
+        settings = resolve_chaptercheck_settings(config)
+        chapters, errors = parse_chapters(raw)
+
+        report("取得影片長度…", 0.3)
+        try:
+            duration = probe_duration(media_path)
+        except Exception:
+            # 取不到長度不該讓整個健檢失敗，只是最後一章無法判斷長度。
+            duration = None
+
+        report("檢查章節規則…", 0.6)
+        result = validate_chapters(chapters, duration, settings, errors)
+        text = format_chapter_report(result, chapters=chapters)
+        print(text, flush=True)
+
+        automation = config.get("automation", {})
+        out_dir = (automation.get("output_dir") or "").strip() \
+            or os.path.dirname(os.path.abspath(chapter_path))
+        os.makedirs(out_dir, exist_ok=True)
+        base = os.path.splitext(os.path.basename(chapter_path))[0]
+        out_path = unique_path(os.path.join(out_dir, f"{base}_章節健檢.txt"))
+        with open(out_path, "w", encoding="utf-8") as fp:
+            fp.write(text)
+        exports = [out_path]
+
+        if do_fix and not result["ok"]:
+            fixed, changes = fix_chapters(chapters, duration, settings,
+                                          parse_errors=errors)
+            after = validate_chapters(fixed, duration, settings)
+            fixed_text = format_chapters_text(fixed)
+            fix_path = unique_path(
+                os.path.join(out_dir, f"{base}_章節修正.txt"))
+            with open(fix_path, "w", encoding="utf-8") as fp:
+                fp.write(fixed_text + ("\n" if fixed_text else ""))
+            exports.append(fix_path)
+            print(format_chapter_report(after, chapters=fixed,
+                                        changes=changes), flush=True)
+
+        report("完成", 1.0)
+        return [{"path": label, "ok": True, "error": None,
+                 "result": {"exports": exports, "burned": None, "cues": []}}]
+    except Exception as exc:
+        report(f"失敗：{exc}", 1.0)
+        return [{"path": label, "ok": False, "result": None,
+                 "error": str(exc)}]
 
 
 def _run_seriescheck(files: list, config: dict, report) -> list:

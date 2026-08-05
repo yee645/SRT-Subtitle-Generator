@@ -42,6 +42,7 @@ from subtitle.transcriber import transcribe
 from gui.audiocheck_dialog import AudioCheckDialog
 from gui.audiovis_dialog import AudioVisDialog
 from gui.branding_dialog import BrandingDialog
+from gui.chapter_dialog import ChapterCheckDialog
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
 from gui.cue_editor import CueEditDialog
@@ -75,6 +76,8 @@ IMPORT_FILETYPES = [
 MODE_TRANSCRIBE = "transcribe"
 MODE_ALIGN = "align"
 MODE_MANUAL = "manual"
+# 工具列每一列最多放幾個功能按鈕（超過就換行，避免被視窗寬度切掉）。
+_TOOLS_PER_ROW = 4
 
 
 class SrtApp(tk.Tk):
@@ -176,11 +179,11 @@ class SrtApp(tk.Tk):
 
     def _build_toolbar(self):
         """
-        頂部工具列：標題／版本一列，功能按鈕另起一列。
+        頂部工具列：標題／版本一列，功能按鈕另起一列並自動換行。
 
-        功能按鈕已累積到六個，全部與標題擠在同一列時，視窗稍窄就會把
-        標題與版本號整個推出畫面、最左邊的按鈕也被切掉。分成兩列後，
-        按鈕列所需寬度大幅下降，之後再增加按鈕也還有餘裕。
+        功能按鈕已累積到七個，全部排成一列需要 1108px、超過視窗最小寬度，
+        最右邊的按鈕會被切掉。改成每列最多 _TOOLS_PER_ROW 個、滿了就換行，
+        所需寬度固定在一列的量，日後再加按鈕也不必跟著調大視窗。
         """
         toolbar = ttk.Frame(self, padding=(10, 6))
         toolbar.pack(fill="x")
@@ -198,19 +201,20 @@ class SrtApp(tk.Tk):
             font=("Microsoft JhengHei", 11, "bold"),
         ).pack(side="left")
 
-        # 功能按鈕列：由左往右排，視窗變窄時最右邊先被裁掉，
-        # 標題與版本號不會被擠出畫面。
+        # 功能按鈕區：以 grid 排列並自動換行，靠左對齊。
         tools = ttk.Frame(self, padding=(10, 0))
         tools.pack(fill="x", pady=(0, 6))
-        for text, width, command in (
+        for index, (text, width, command) in enumerate((
                 ("審片助手（找片段）", 18, self._open_review_window),
                 ("配樂助手（自動閃避）", 18, self._open_music_dialog),
                 ("上片前健檢", 12, self._open_audiocheck_dialog),
                 ("品牌套版", 12, self._open_branding_dialog),
                 ("音訊轉影片", 12, self._open_audiovis_dialog),
-                ("系列一致性", 12, self._open_series_dialog)):
-            ttk.Button(tools, text=text, width=width, command=command).pack(
-                side="left", padx=(0, 8))
+                ("系列一致性", 12, self._open_series_dialog),
+                ("章節健檢", 12, self._open_chapter_dialog))):
+            ttk.Button(tools, text=text, width=width, command=command).grid(
+                row=index // _TOOLS_PER_ROW, column=index % _TOOLS_PER_ROW,
+                sticky="w", padx=(0, 8), pady=(0, 4))
         ttk.Separator(self, orient="horizontal").pack(fill="x")
 
     def _build_mode_section(self, parent):
@@ -671,6 +675,17 @@ class SrtApp(tk.Tk):
         """開啟系列一致性：帶入目前選取的多個檔案（可於對話框內再增減）。"""
         files = [p for p in self._selected_files() if os.path.exists(p)]
         SeriesCheckDialog(self, self.config_data, files)
+
+    def _open_chapter_dialog(self):
+        """
+        開啟 YouTube 章節健檢：貼上章節文字即可檢查。
+
+        影片檔為選填（有的話才能檢查最後一章長度），因此即使沒有選檔案
+        也能開啟——最常見的情境正是「手上只有一份貼不出來的章節文字」。
+        """
+        files = [p for p in self._selected_files() if os.path.exists(p)]
+        ChapterCheckDialog(self, self.config_data,
+                           media_path=files[0] if files else None)
 
     def _open_audiovis_dialog(self):
         """開啟音訊轉影片：以第一個選取檔案為預設音訊（可留空自行選擇）。"""

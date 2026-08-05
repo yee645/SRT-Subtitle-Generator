@@ -24,6 +24,9 @@ from subtitle.adbreaks import (MIDROLL_MIN_SECONDS, format_ad_breaks,
                                resolve_adbreak_settings, suggest_ad_breaks)
 from subtitle.audio import DEFAULT_TARGET_LUFS
 from subtitle.burner import ffmpeg_available
+from subtitle.chaptercheck import (LEVEL_BAD, fix_chapters, format_timestamp,
+                                   resolve_chaptercheck_settings,
+                                   validate_chapters)
 from subtitle.exporter import export as export_subtitle
 from subtitle.media import probe_duration
 from subtitle.pipeline import resolve_output_dir, unique_path
@@ -37,7 +40,7 @@ from subtitle.review import (CATEGORY_COLORS, CATEGORY_LABELS,
                              analyze, build_chapters, build_review_cues,
                              categorize, compute_loudness, cut_rough_video,
                              export_csv, export_edl, export_html_report,
-                             export_youtube_chapters, resolve_settings,
+                             resolve_settings,
                              search_segments, summarize)
 from subtitle.transcriber import transcribe
 
@@ -1046,14 +1049,51 @@ class ReviewWindow(tk.Toplevel):
         if not self.items:
             return
         settings = self._collect_review_settings()
-        text = export_youtube_chapters(
+        chapters = build_chapters(
             self.items,
             min_chapter_seconds=settings["chapter_min_seconds"],
             break_gap=settings["silence_gap"])
-        if not text:
+        if not chapters:
             messagebox.showinfo(
                 "沒有內容", "目前沒有保留中的講話段落。", parent=self)
             return
+
+        # 直接複製草稿是不夠的：章節不符 YouTube 規則時，貼上去只會靜靜地
+        # 不顯示，使用者無從得知原因。這裡在複製前先擋一次。
+        check = resolve_chaptercheck_settings(self.config_data)
+        result = validate_chapters(chapters, self.media_duration, check)
+        if not result["ok"]:
+            problems = "\n".join(
+                f"・{f['title']}：{f['detail']}"
+                for f in result["findings"] if f["level"] == LEVEL_BAD)
+            fixed, changes = fix_chapters(chapters, self.media_duration, check)
+            after = validate_chapters(fixed, self.media_duration, check)
+            if after["ok"]:
+                use_fixed = messagebox.askyesno(
+                    "章節不符 YouTube 規則",
+                    f"這份草稿貼到說明欄後 YouTube 不會顯示章節：\n\n"
+                    f"{problems}\n\n"
+                    "可以自動修正成符合規則的版本：\n"
+                    + "\n".join(f"・{c}" for c in changes)
+                    + "\n\n要複製修正後的版本嗎？"
+                      "（選「否」則複製原始草稿）",
+                    parent=self)
+                if use_fixed:
+                    chapters = fixed
+            else:
+                # 段落數本來就不夠，補格式也救不回來——只能如實告知。
+                messagebox.showwarning(
+                    "章節不符 YouTube 規則",
+                    f"這份草稿貼到說明欄後 YouTube 不會顯示章節：\n\n"
+                    f"{problems}\n\n"
+                    "這不是格式問題、無法自動修正。請調高「靜音間隔」或"
+                    "調低「章節最短秒數」讓素材切出更多段落，"
+                    "或這支影片就不使用章節功能。\n\n"
+                    "仍會把目前的草稿複製到剪貼簿。",
+                    parent=self)
+
+        text = "\n".join(f"{format_timestamp(c['start'])} {c['title']}"
+                         for c in chapters)
         self.clipboard_clear()
         self.clipboard_append(text)
         self.status_var.set("YouTube 章節草稿已複製到剪貼簿，可直接貼上說明欄。")
