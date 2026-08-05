@@ -208,6 +208,12 @@ DEFAULT_CONFIG = {
         "max_lines": 2,             # 超過此行數標記「行數過多」
         "max_chars_per_line": 21,   # 單行字元數超過此值標記「單行過長」
     },
+    # YouTube 章節健檢：章節不符規則時 YouTube 會靜默不顯示，這裡先擋下來。
+    # 預設值即 YouTube 目前的規則，做成可調是為了因應規則變動或其他平台。
+    "chaptercheck": {
+        "min_chapter_seconds": 10.0,  # 每章最短長度（YouTube 規定 10 秒）
+        "min_chapter_count": 3,       # 最少章節數（YouTube 規定 3 章）
+    },
     # 系列一致性檢查：比對同一批影片彼此之間是否一致（相對整批中位數）。
     "seriescheck": {
         "loudness_tolerance": 2.0,  # 與整批中位數響度差超過此值（LU）標記
