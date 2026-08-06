@@ -208,6 +208,14 @@ DEFAULT_CONFIG = {
         "max_lines": 2,             # 超過此行數標記「行數過多」
         "max_chars_per_line": 21,   # 單行字元數超過此值標記「單行過長」
     },
+    # 開場健檢：開頭十幾秒決定觀眾要不要看下去，檢查多久才進正題。
+    "hookcheck": {
+        "target_seconds": 15.0,        # 幾秒內要進正題（業界建議 15 秒）
+        "max_greeting_seconds": 5.0,   # 打招呼與自我介紹容許佔用的長度
+        "max_head_silence": 1.5,       # 開頭乾等幾秒就算太久才開口
+        "extra_filler_terms": "",      # 使用者自訂補充的開場套語
+        "ignore_terms": "",            # 排除誤判詞（頻道特色用語）
+    },
     # YouTube 章節健檢：章節不符規則時 YouTube 會靜默不顯示，這裡先擋下來。
     # 預設值即 YouTube 目前的規則，做成可調是為了因應規則變動或其他平台。
     "chaptercheck": {

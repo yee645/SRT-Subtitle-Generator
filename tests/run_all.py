@@ -20,7 +20,7 @@ TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
          "test_v1210.py", "test_v1220.py", "test_v1230.py", "test_v1240.py",
          "test_v1250.py", "test_v1260.py", "test_v1270.py", "test_v1280.py",
          "test_v1290.py", "test_v1300.py", "test_v1310.py",
-         "test_v1320.py"]
+         "test_v1320.py", "test_v1330.py"]
 
 
 def main() -> int:

@@ -12,6 +12,10 @@ CPS（每秒字元數）超標是字幕檔案審核最常被打回的原因（Ne
 v1.29.0 起同一份報告額外涵蓋**廣告友善度自查**：掃描逐字稿找出
 可能觸發 YouTube 廣告友善度審查（黃標）的用詞，並以時間窗叢集分析標出
 真正該處理的高風險段落。此段落僅供自查，不會改動任何內容。
+
+v1.33.0 起再加上**開場健檢**：檢查影片開頭多久才進正題、有沒有冗長的
+打招呼與自我介紹、有沒有一開場就要訂閱。開頭十幾秒決定觀眾要不要看
+下去，而這些正是流失的主因。同樣只報告不改動內容。
 """
 
 import logging
@@ -26,6 +30,8 @@ from gui.error_dialog import show_friendly_error
 from subtitle.adfriendly import (format_adfriendly_report,
                                  resolve_adfriendly_settings, scan_cues)
 from subtitle.burner import ffmpeg_available
+from subtitle.hookcheck import (analyze_hook, format_hook_report,
+                                resolve_hookcheck_settings)
 from subtitle.subsync import (analyze_sync, apply_sync_correction,
                               format_sync_report, resolve_subsync_settings)
 from subtitle.subtitlecheck import (analyze_cues, fix_cue_durations,
@@ -41,9 +47,11 @@ class SubtitleCheckDialog(tk.Toplevel):
     def __init__(self, master, config_data, cues, on_fixed=None,
                  media_path=""):
         super().__init__(master)
-        self.title("字幕健檢：閱讀速度、行數、廣告友善度與語音同步")
-        self.geometry("700x740")
-        self.minsize(640, 620)
+        self.title("字幕健檢：閱讀速度、行數、廣告友善度、開場與語音同步")
+        # 三組設定區（判定門檻／廣告友善度／開場健檢）加起來就佔掉約 400px，
+        # 視窗高度需一併放大，否則下方的報告區會被擠到只剩幾行。
+        self.geometry("720x860")
+        self.minsize(660, 740)
         self.transient(master)
 
         self.config_data = config_data
@@ -52,6 +60,7 @@ class SubtitleCheckDialog(tk.Toplevel):
         self.media_path = media_path
         self.last_result = None
         self.last_ad_result = None
+        self.last_hook_result = None
         self.last_sync_result = None
         self.is_syncing = False
         self.result_queue = queue.Queue()
@@ -140,6 +149,56 @@ class SubtitleCheckDialog(tk.Toplevel):
                  "官方禁用詞清單，本檢查僅為依規範主題整理的自查工具。",
         ).pack(fill="x", pady=(2, 0))
 
+        # 開場健檢：開頭十幾秒決定觀眾走不走，門檻與排除詞依頻道風格可調。
+        hook_settings = resolve_hookcheck_settings(config_data)
+        hook_frame = ttk.LabelFrame(
+            body, text="開場健檢（僅提醒，不改動內容）", padding=(10, 6))
+        hook_frame.pack(fill="x", pady=(8, 0))
+        hook_row1 = ttk.Frame(hook_frame)
+        hook_row1.pack(fill="x", pady=2)
+        ttk.Label(hook_row1, text="幾秒內要進正題:").pack(side="left")
+        self.hook_target_var = tk.DoubleVar(
+            value=hook_settings["target_seconds"])
+        tk.Spinbox(hook_row1, from_=5, to=60, increment=1, width=5,
+                   textvariable=self.hook_target_var, format="%.0f").pack(
+            side="left", padx=(2, 2))
+        ttk.Label(hook_row1, text="秒").pack(side="left", padx=(0, 12))
+        ttk.Label(hook_row1, text="寒暄上限:").pack(side="left")
+        self.hook_greeting_var = tk.DoubleVar(
+            value=hook_settings["max_greeting_seconds"])
+        tk.Spinbox(hook_row1, from_=1, to=30, increment=1, width=5,
+                   textvariable=self.hook_greeting_var, format="%.0f").pack(
+            side="left", padx=(2, 2))
+        ttk.Label(hook_row1, text="秒").pack(side="left", padx=(0, 12))
+        ttk.Label(hook_row1, text="開頭乾等上限:").pack(side="left")
+        self.hook_silence_var = tk.DoubleVar(
+            value=hook_settings["max_head_silence"])
+        tk.Spinbox(hook_row1, from_=0, to=10, increment=0.5, width=5,
+                   textvariable=self.hook_silence_var, format="%.1f").pack(
+            side="left", padx=(2, 2))
+        ttk.Label(hook_row1, text="秒").pack(side="left")
+
+        hook_row2 = ttk.Frame(hook_frame)
+        hook_row2.pack(fill="x", pady=2)
+        ttk.Label(hook_row2, text="自訂套語:", width=11).pack(side="left")
+        self.hook_extra_var = tk.StringVar(
+            value=hook_settings["extra_filler_terms"])
+        ttk.Entry(hook_row2, textvariable=self.hook_extra_var).pack(
+            side="left", fill="x", expand=True, padx=(2, 0))
+        hook_row3 = ttk.Frame(hook_frame)
+        hook_row3.pack(fill="x", pady=2)
+        ttk.Label(hook_row3, text="排除誤判詞:", width=11).pack(side="left")
+        self.hook_ignore_var = tk.StringVar(value=hook_settings["ignore_terms"])
+        ttk.Entry(hook_row3, textvariable=self.hook_ignore_var).pack(
+            side="left", fill="x", expand=True, padx=(2, 0))
+        ttk.Label(
+            hook_frame, foreground="#666666", anchor="w", justify="left",
+            wraplength=600,
+            text="判斷依據是「扣掉開場套語後這句還剩多少實質內容」，"
+                 "所以「廢話不多說，今天要教大家…」會正確算成已進正題。"
+                 "頻道固定用語若被誤判，填入「排除誤判詞」即可。",
+        ).pack(fill="x", pady=(2, 0))
+
         self.status_var = tk.StringVar(
             value=f"共 {len(cues)} 句字幕，按「開始健檢」掃描閱讀速度與行數。")
         ttk.Label(body, textvariable=self.status_var,
@@ -215,6 +274,13 @@ class SubtitleCheckDialog(tk.Toplevel):
             "extra_terms": self.ad_extra_var.get().strip(),
             "ignore_terms": self.ad_ignore_var.get().strip(),
         }
+        self.config_data["hookcheck"] = {
+            "target_seconds": safe(self.hook_target_var, 15.0),
+            "max_greeting_seconds": safe(self.hook_greeting_var, 5.0),
+            "max_head_silence": safe(self.hook_silence_var, 1.5),
+            "extra_filler_terms": self.hook_extra_var.get().strip(),
+            "ignore_terms": self.hook_ignore_var.get().strip(),
+        }
         try:
             save_config(self.config_data)
         except OSError:
@@ -229,6 +295,11 @@ class SubtitleCheckDialog(tk.Toplevel):
         self.last_ad_result = scan_cues(
             self.cues, resolve_adfriendly_settings(self.config_data))
         text = f"{text}\n\n{format_adfriendly_report(self.last_ad_result)}"
+        # 開場健檢：同樣是純文字分析，與上面兩項共用一次「開始健檢」。
+        hook_settings = resolve_hookcheck_settings(self.config_data)
+        self.last_hook_result = analyze_hook(self.cues, hook_settings)
+        text = (f"{text}\n\n"
+                f"{format_hook_report(self.last_hook_result, hook_settings)}")
         self.report.configure(state="normal")
         self.report.delete("1.0", "end")
         self.report.insert("1.0", text, "report")
@@ -243,15 +314,25 @@ class SubtitleCheckDialog(tk.Toplevel):
             state="normal" if overlap_fixable else "disabled")
         clusters = len(self.last_ad_result.get("clusters") or [])
         ad_note = f"、廣告友善度高風險段落 {clusters} 處" if clusters else ""
+        hook_ok = self.last_hook_result.get("ok")
+        hook_note = "" if hook_ok else "、開場有拖累留存的問題"
         if issues:
             self.status_var.set(
-                f"健檢完成，發現 {len(issues)} 項字幕問題{ad_note}，結果如下。")
-        elif clusters:
+                f"健檢完成，發現 {len(issues)} 項字幕問題"
+                f"{ad_note}{hook_note}，結果如下。")
+        elif clusters or not hook_ok:
+            parts = []
+            if clusters:
+                parts.append(f"{clusters} 處廣告友善度高風險段落")
+            if not hook_ok:
+                point = self.last_hook_result.get("time_to_point")
+                parts.append("開場太久才進正題" if point else "開場無法判定")
             self.status_var.set(
-                f"健檢完成，字幕品質全數通過，但有 {clusters} 處"
-                "廣告友善度高風險段落，詳見報告。")
+                "健檢完成，字幕品質全數通過，但有" + "、".join(parts)
+                + "，詳見報告。")
         else:
-            self.status_var.set("健檢完成，字幕品質與廣告友善度皆通過。")
+            self.status_var.set(
+                "健檢完成，字幕品質、廣告友善度與開場皆通過。")
 
     def _on_fix(self):
         settings = self._collect_settings()
