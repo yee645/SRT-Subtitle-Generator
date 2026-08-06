@@ -27,6 +27,7 @@
     python main.py --audiovis 節目.mp3            # 音訊轉波形／頻譜視覺化影片
     python main.py --colorcheck 影片.mp4          # 畫面曝光與色偏健檢（免轉錄）
     python main.py --adcheck 影片.mp4             # 廣告友善度自查（黃標風險預檢）
+    python main.py --hookcheck 影片.mp4           # 開場健檢（多久才進正題）
     python main.py --subs 舊字幕.srt --synccheck 影片.mp4  # 字幕與語音同步檢查
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
@@ -69,6 +70,8 @@ from subtitle.chaptercheck import (fix_chapters, format_chapter_report,
                                    format_chapters_text, parse_chapters,
                                    resolve_chaptercheck_settings,
                                    validate_chapters)
+from subtitle.hookcheck import (analyze_hook, format_hook_report,
+                                resolve_hookcheck_settings)
 from subtitle.media import probe_duration
 from subtitle.pipeline import (EXPORT_FORMATS, enabled_export_formats,
                                export_and_burn, run_batch, unique_path)
@@ -224,6 +227,15 @@ def build_parser() -> argparse.ArgumentParser:
              "「檔名_廣告友善度.txt」；詞表可於 config.json 的 adfriendly "
              "增補（extra_terms）與排除誤判（ignore_terms）。僅供自查，"
              "不自動改動內容。可與一般轉錄／對齊模式或 --subs 併用。")
+    parser.add_argument(
+        "--hookcheck", action="store_true",
+        help="開場健檢：檢查影片開頭多久才進正題，抓出冗長的打招呼、自我介紹、"
+             "頻道宣傳、無關閒聊與「一開場就要訂閱」——這些是觀眾在開頭"
+             "幾秒內離開的主因。判斷依據是「扣掉開場套語後這句還剩多少"
+             "實質內容」，因此「廢話不多說，今天要教大家…」會正確算成已"
+             "進正題。輸出「檔名_開場健檢.txt」；套語可於 config.json 的"
+             " hookcheck 增補（extra_filler_terms）與排除誤判（ignore_terms）。"
+             "僅供自查，不自動改動內容。可與一般轉錄／對齊模式或 --subs 併用。")
     parser.add_argument(
         "--jumpcut", action="store_true",
         help="自動跳剪：依產生（或 --subs 匯入）的字幕找出句間過長停頓，"
@@ -428,6 +440,20 @@ def main(argv=None) -> int:
             item["result"]["exports"].append(
                 _export_adcheck(cues, config, out_dir, base))
 
+    if args.hookcheck:
+        automation = config.get("automation", {})
+        out_dir_override = (automation.get("output_dir") or "").strip()
+        for item in results:
+            cues = (item.get("result") or {}).get("cues") if item["ok"] else None
+            if not cues:
+                continue
+            out_dir = out_dir_override or os.path.dirname(
+                os.path.abspath(item["path"]))
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(item["path"]))[0]
+            item["result"]["exports"].append(
+                _export_hookcheck(cues, config, out_dir, base))
+
     # 總結報告。
     lines = []
     failed = 0
@@ -603,6 +629,19 @@ def _export_adcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
     result = scan_cues(cues, resolve_adfriendly_settings(config))
     text = format_adfriendly_report(result)
     check_path = unique_path(os.path.join(out_dir, f"{base}_廣告友善度.txt"))
+    with open(check_path, "w", encoding="utf-8") as fp:
+        fp.write(text)
+    print(text, flush=True)
+    return check_path
+
+
+def _export_hookcheck(cues: list, config: dict, out_dir: str,
+                      base: str) -> str:
+    """對字幕清單跑開場健檢並輸出報告文字檔，回傳報告路徑。"""
+    settings = resolve_hookcheck_settings(config)
+    result = analyze_hook(cues, settings)
+    text = format_hook_report(result, settings)
+    check_path = unique_path(os.path.join(out_dir, f"{base}_開場健檢.txt"))
     with open(check_path, "w", encoding="utf-8") as fp:
         fp.write(text)
     print(text, flush=True)
