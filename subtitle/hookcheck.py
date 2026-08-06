@@ -332,7 +332,9 @@ def analyze_hook(cues: list, settings: Optional[dict] = None) -> dict:
     elif time_to_point > target:
         findings.append(_finding(
             LEVEL_BAD, "進正題時間",
-            f"開場講了 {time_to_point:.0f} 秒才進正題"
+            # 用「過了」而非「講了」：開頭也可能是乾等沒聲音，
+            # 那時候並沒有在講話，說「講了 N 秒」會是錯的。
+            f"開場過了 {time_to_point:.0f} 秒才進正題"
             f"（建議 {target:.0f} 秒內）",
             f"觀眾多半在前十幾秒就決定要不要看下去。建議把開場壓到 "
             f"{target:.0f} 秒內，或直接從 {format_timestamp(suggested_start)} "
@@ -449,7 +451,7 @@ def format_hook_report(result: dict, settings: Optional[dict] = None) -> str:
     else:
         lines.append(
             f"結論：建議的開場起點為 {format_timestamp(suggested)}"
-            f"（{suggested:.0f} 秒）——在此之前都是開場套語。"
+            f"（{suggested:.0f} 秒）——在此之前沒有正題內容。"
             "可用「上片前健檢」的修剪功能或審片助手剪掉，"
             "但要不要保留仍由你決定。")
     return "\n".join(lines)
