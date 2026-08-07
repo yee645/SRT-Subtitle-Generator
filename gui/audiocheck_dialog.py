@@ -25,6 +25,8 @@ from subtitle.burner import ffmpeg_available
 from subtitle.colorcheck import (analyze_color, format_color_report,
                                  resolve_colorcheck_settings)
 from subtitle.pipeline import unique_path
+from subtitle.pacing import (analyze_pacing, format_pacing_report,
+                             resolve_pacing_settings)
 from subtitle.videocheck import (format_video_report,
                                  resolve_videocheck_settings,
                                  run_video_check, suggest_output_path
@@ -185,6 +187,25 @@ class AudioCheckDialog(tk.Toplevel):
                    textvariable=self.color_cast_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row5, text="（0~255 亮度值）", foreground="#666666").pack(
+            side="left")
+        # 剪輯節奏門檻：畫面太久沒變化會流失觀眾。
+        pc_settings = resolve_pacing_settings(config_data)
+        row6 = ttk.Frame(options)
+        row6.pack(fill="x", pady=2)
+        ttk.Label(row6, text="畫面不變上限:").pack(side="left")
+        self.pace_static_var = tk.DoubleVar(
+            value=pc_settings["max_static_seconds"])
+        tk.Spinbox(row6, from_=5, to=300, increment=5, width=7,
+                   textvariable=self.pace_static_var, format="%.0f").pack(
+            side="left", padx=(2, 2))
+        ttk.Label(row6, text="秒").pack(side="left", padx=(0, 14))
+        ttk.Label(row6, text="剪接偵測靈敏度:").pack(side="left")
+        self.pace_threshold_var = tk.DoubleVar(
+            value=pc_settings["scene_threshold"])
+        tk.Spinbox(row6, from_=0.05, to=0.90, increment=0.05, width=7,
+                   textvariable=self.pace_threshold_var, format="%.2f").pack(
+            side="left", padx=(2, 2))
+        ttk.Label(row6, text="（越小越敏感）", foreground="#666666").pack(
             side="left")
 
         self.status_var = tk.StringVar(
@@ -352,6 +373,10 @@ class AudioCheckDialog(tk.Toplevel):
             "bright_luma": safe(self.bright_luma_var, 200.0),
             "cast_threshold": safe(self.color_cast_var, 10.0),
         }
+        self.config_data["pacing"] = {
+            "scene_threshold": safe(self.pace_threshold_var, 0.30),
+            "max_static_seconds": safe(self.pace_static_var, 25.0),
+        }
         try:
             save_config(self.config_data)
         except OSError:
@@ -490,6 +515,16 @@ class AudioCheckDialog(tk.Toplevel):
                        f"{volume_text}")
             except ValueError:
                 pass  # 無音訊軌或素材過短，略過此段落。
+            # 剪輯節奏：畫面太久沒變化（與凍結畫面是相反的性質，兩者都要看）。
+            # 純音訊檔沒有畫面可分析，優雅略過。
+            report(0.93, "正在分析剪輯節奏（畫面變化密度）...")
+            try:
+                pacing_result = analyze_pacing(media_path, config)
+                if pacing_result.get("shots"):
+                    text = (f"{text}\n\n"
+                            f"{format_pacing_report(pacing_result, resolve_pacing_settings(config))}")
+            except (RuntimeError, ValueError):
+                pass  # 無影像串流或 ffmpeg 不可用，略過此段落。
             self.result_queue.put(("done", (text, trim, volume_result)))
         except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
             logger.exception("健檢失敗")

@@ -28,6 +28,7 @@
     python main.py --colorcheck 影片.mp4          # 畫面曝光與色偏健檢（免轉錄）
     python main.py --adcheck 影片.mp4             # 廣告友善度自查（黃標風險預檢）
     python main.py --hookcheck 影片.mp4           # 開場健檢（多久才進正題）
+    python main.py --pacecheck 影片.mp4           # 剪輯節奏健檢（畫面太久沒變化）
     python main.py --subs 舊字幕.srt --synccheck 影片.mp4  # 字幕與語音同步檢查
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
@@ -72,6 +73,8 @@ from subtitle.chaptercheck import (fix_chapters, format_chapter_report,
                                    validate_chapters)
 from subtitle.hookcheck import (analyze_hook, format_hook_report,
                                 resolve_hookcheck_settings)
+from subtitle.pacing import (analyze_pacing, format_pacing_report,
+                             resolve_pacing_settings)
 from subtitle.media import probe_duration
 from subtitle.pipeline import (EXPORT_FORMATS, enabled_export_formats,
                                export_and_burn, run_batch, unique_path)
@@ -228,6 +231,13 @@ def build_parser() -> argparse.ArgumentParser:
              "增補（extra_terms）與排除誤判（ignore_terms）。僅供自查，"
              "不自動改動內容。可與一般轉錄／對齊模式或 --subs 併用。")
     parser.add_argument(
+        "--pacecheck", action="store_true",
+        help="剪輯節奏健檢（免轉錄）：用畫面變化偵測把影片切成一個個鏡頭，"
+             "抓出「畫面太久沒有變化」的段落並建議 B-roll／推鏡的插入時間點。"
+             "與凍結畫面偵測是相反的性質——凍結看的是畫面完全靜止，"
+             "這裡看的是雖然有動、卻久久沒有換過鏡頭。輸出"
+             "「檔名_剪輯節奏.txt」；門檻可於 config.json 的 pacing 調整。")
+    parser.add_argument(
         "--hookcheck", action="store_true",
         help="開場健檢：檢查影片開頭多久才進正題，抓出冗長的打招呼、自我介紹、"
              "頻道宣傳、無關閒聊與「一開場就要訂閱」——這些是觀眾在開頭"
@@ -324,7 +334,7 @@ def main(argv=None) -> int:
             with_thumbnails=args.thumbnails)
     elif (args.audiocheck or args.thumbnails or args.audiofix
             or args.branding or args.videocheck or args.volumecheck
-            or args.volumefix or args.audiovis or args.colorcheck):
+            or args.volumefix or args.audiovis or args.colorcheck or args.pacecheck):
         # 免轉錄的輕量工具模式：健檢、封面候選、音訊修復與品牌套版都只需 ffmpeg。
         results = _run_tools_batch(
             args.files, config, report,
@@ -336,7 +346,8 @@ def main(argv=None) -> int:
             do_volumecheck=args.volumecheck,
             do_volumefix=args.volumefix,
             do_audiovis=args.audiovis,
-            do_colorcheck=args.colorcheck)
+            do_colorcheck=args.colorcheck,
+            do_pacecheck=args.pacecheck)
     else:
         results = run_batch(
             args.files, config, mode=args.mode, report=report)
@@ -747,7 +758,8 @@ def _run_tools_batch(files: list, config: dict, report,
                      do_volumecheck: bool = False,
                      do_volumefix: bool = False,
                      do_audiovis: bool = False,
-                     do_colorcheck: bool = False) -> list:
+                     do_colorcheck: bool = False,
+                     do_pacecheck: bool = False) -> list:
     """輕量工具批次（免轉錄）：音訊健檢與封面候選，回傳與 run_batch 同構的結果。"""
     automation = config.get("automation", {})
     results = []
@@ -778,6 +790,20 @@ def _run_tools_batch(files: list, config: dict, report,
                     exports.append(vc_path)
                 else:
                     report(f"{prefix}無影像串流，略過影片健檢。")
+            if do_pacecheck:
+                report(f"{prefix}分析剪輯節奏中...")
+                try:
+                    pace_result = analyze_pacing(path, config)
+                    pace_text = format_pacing_report(
+                        pace_result, resolve_pacing_settings(config))
+                    pace_path = unique_path(os.path.join(
+                        out_dir, f"{base}_剪輯節奏.txt"))
+                    with open(pace_path, "w", encoding="utf-8") as fp:
+                        fp.write(pace_text)
+                    print(pace_text, flush=True)
+                    exports.append(pace_path)
+                except ValueError as exc:
+                    report(f"{prefix}剪輯節奏健檢略過（{exc}）")
             if do_colorcheck:
                 report(f"{prefix}分析畫面曝光與色調中...")
                 try:
