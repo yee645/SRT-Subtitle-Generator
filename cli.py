@@ -29,6 +29,7 @@
     python main.py --adcheck 影片.mp4             # 廣告友善度自查（黃標風險預檢）
     python main.py --hookcheck 影片.mp4           # 開場健檢（多久才進正題）
     python main.py --pacecheck 影片.mp4           # 剪輯節奏健檢（畫面太久沒變化）
+    python main.py --thumbcheck 封面1.png 封面2.png # 封面健檢（手機上看不看得清）
     python main.py --subs 舊字幕.srt --synccheck 影片.mp4  # 字幕與語音同步檢查
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
@@ -75,6 +76,10 @@ from subtitle.hookcheck import (analyze_hook, format_hook_report,
                                 resolve_hookcheck_settings)
 from subtitle.pacing import (analyze_pacing, format_pacing_report,
                              resolve_pacing_settings)
+from subtitle.thumbcheck import (format_ranking_report,
+                                 format_thumb_report,
+                                 rank_thumbnails,
+                                 resolve_thumbcheck_settings)
 from subtitle.media import probe_duration
 from subtitle.pipeline import (EXPORT_FORMATS, enabled_export_formats,
                                export_and_burn, run_batch, unique_path)
@@ -231,6 +236,14 @@ def build_parser() -> argparse.ArgumentParser:
              "增補（extra_terms）與排除誤判（ignore_terms）。僅供自查，"
              "不自動改動內容。可與一般轉錄／對齊模式或 --subs 併用。")
     parser.add_argument(
+        "--thumbcheck", action="store_true",
+        help="封面健檢（免轉錄）：把要檢查的**封面圖片**直接當作位置參數傳入"
+             "（可一次給多張），檢查它們在手機尺寸下還看不看得清楚。"
+             "手機清單裡的縮圖只有約 200 像素寬，畫面太雜、對比太低、"
+             "灰濛濛都會讓人直接滑過去。給多張時依綜合分數排序並指出"
+             "該用哪一張，輸出「封面健檢.txt」；門檻可於 config.json 的"
+             " thumbcheck 調整。")
+    parser.add_argument(
         "--pacecheck", action="store_true",
         help="剪輯節奏健檢（免轉錄）：用畫面變化偵測把影片切成一個個鏡頭，"
              "抓出「畫面太久沒有變化」的段落並建議 B-roll／推鏡的插入時間點。"
@@ -305,7 +318,11 @@ def main(argv=None) -> int:
         percent = f"{int(ratio * 100):3d}% " if ratio is not None else "     "
         print(f"{percent}{message}", flush=True)
 
-    if args.chaptercheck:
+    if args.thumbcheck:
+        # 封面健檢的輸入是「圖片」而非影片內容，與其他逐檔處理的模式
+        # 結構不同，因此獨立成一個分支。
+        results = _run_thumbcheck(args.files, config, report)
+    elif args.chaptercheck:
         # 章節健檢的輸入是「一份章節文字」而非媒體內容，媒體檔只用來取得
         # 影片長度，因此與其他逐檔處理的模式結構不同，獨立成一個分支。
         if len(args.files) != 1:
@@ -518,6 +535,42 @@ def _export_subcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
         fp.write(text)
     print(text, flush=True)
     return check_path
+
+
+def _run_thumbcheck(files: list, config: dict, report) -> list:
+    """
+    封面健檢：檢查一或多張封面圖，多張時依分數排序。
+
+    回傳與其他批次模式同構的結果清單（單一項目代表整批），供總結報告
+    統一列印。
+    """
+    label = f"封面健檢（{len(files)} 張）"
+    try:
+        def progress(ratio, message):
+            report(message, ratio)
+
+        settings = resolve_thumbcheck_settings(config)
+        results = rank_thumbnails(files, config, progress_cb=progress)
+        parts = [format_thumb_report(r, settings) for r in results]
+        if len(results) > 1:
+            parts.append(format_ranking_report(results, settings))
+        text = "\n\n".join(parts)
+        print(text, flush=True)
+
+        automation = config.get("automation", {})
+        out_dir = (automation.get("output_dir") or "").strip() \
+            or os.path.dirname(os.path.abspath(files[0]))
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = unique_path(os.path.join(out_dir, "封面健檢.txt"))
+        with open(out_path, "w", encoding="utf-8") as fp:
+            fp.write(text)
+        return [{"path": label, "ok": True, "error": None,
+                 "result": {"exports": [out_path], "burned": None,
+                            "cues": []}}]
+    except Exception as exc:
+        report(f"失敗：{exc}", 1.0)
+        return [{"path": label, "ok": False, "result": None,
+                 "error": str(exc)}]
 
 
 def _run_chaptercheck(media_path: str, chapter_path: str, config: dict,

@@ -208,6 +208,14 @@ DEFAULT_CONFIG = {
         "max_lines": 2,             # 超過此行數標記「行數過多」
         "max_chars_per_line": 21,   # 單行字元數超過此值標記「單行過長」
     },
+    # 封面健檢：手機清單裡的縮圖只有約 200 像素寬，縮小後看不清就沒人點。
+    "thumbcheck": {
+        "mobile_width": 200,        # 手機列表縮圖寬度（實測約 200 像素）
+        "min_detail_keep": 0.35,    # 縮到手機尺寸後的細節保留率下限
+        "min_contrast": 40.0,       # 手機尺寸下的明暗落差下限
+        "min_saturation": 15.0,     # 平均飽和度下限
+        "max_file_mb": 2.0,         # 檔案大小上限（YouTube 上限 2MB）
+    },
     # 剪輯節奏健檢：畫面太久沒變化會流失觀眾（與凍結畫面是不同的問題）。
     "pacing": {
         "scene_threshold": 0.30,      # 畫面變化達此幅度視為一次剪接（0~1）

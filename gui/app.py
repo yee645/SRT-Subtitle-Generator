@@ -43,6 +43,7 @@ from gui.audiocheck_dialog import AudioCheckDialog
 from gui.audiovis_dialog import AudioVisDialog
 from gui.branding_dialog import BrandingDialog
 from gui.chapter_dialog import ChapterCheckDialog
+from gui.thumbcheck_dialog import ThumbCheckDialog
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
 from gui.cue_editor import CueEditDialog
@@ -211,7 +212,8 @@ class SrtApp(tk.Tk):
                 ("品牌套版", 12, self._open_branding_dialog),
                 ("音訊轉影片", 12, self._open_audiovis_dialog),
                 ("系列一致性", 12, self._open_series_dialog),
-                ("章節健檢", 12, self._open_chapter_dialog))):
+                ("章節健檢", 12, self._open_chapter_dialog),
+                ("封面健檢", 12, self._open_thumbcheck_dialog))):
             ttk.Button(tools, text=text, width=width, command=command).grid(
                 row=index // _TOOLS_PER_ROW, column=index % _TOOLS_PER_ROW,
                 sticky="w", padx=(0, 8), pady=(0, 4))
@@ -675,6 +677,19 @@ class SrtApp(tk.Tk):
         """開啟系列一致性：帶入目前選取的多個檔案（可於對話框內再增減）。"""
         files = [p for p in self._selected_files() if os.path.exists(p)]
         SeriesCheckDialog(self, self.config_data, files)
+
+    def _open_thumbcheck_dialog(self):
+        """
+        開啟封面健檢：帶入目前選取的圖片檔（可於對話框內再增減）。
+
+        主視窗的檔案欄通常放的是影片，因此只帶入副檔名看起來像圖片的，
+        避免把影片丟進去當封面檢查。
+        """
+        images = [p for p in self._selected_files()
+                  if os.path.exists(p)
+                  and os.path.splitext(p)[1].lower()
+                  in (".png", ".jpg", ".jpeg", ".webp", ".bmp")]
+        ThumbCheckDialog(self, self.config_data, images)
 
     def _open_chapter_dialog(self):
         """
