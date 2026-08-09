@@ -30,6 +30,7 @@
     python main.py --hookcheck 影片.mp4           # 開場健檢（多久才進正題）
     python main.py --pacecheck 影片.mp4           # 剪輯節奏健檢（畫面太久沒變化）
     python main.py --thumbcheck 封面1.png 封面2.png # 封面健檢（手機上看不看得清）
+    python main.py --publishcheck 發佈資訊.txt 影片.mp4  # 發佈資訊健檢（hashtag/長度上限）
     python main.py --subs 舊字幕.srt --synccheck 影片.mp4  # 字幕與語音同步檢查
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
@@ -80,6 +81,9 @@ from subtitle.thumbcheck import (format_ranking_report,
                                  format_thumb_report,
                                  rank_thumbnails,
                                  resolve_thumbcheck_settings)
+from subtitle.publishcheck import (analyze_publish,
+                                   format_publish_report,
+                                   resolve_publishcheck_settings)
 from subtitle.media import probe_duration
 from subtitle.pipeline import (EXPORT_FORMATS, enabled_export_formats,
                                export_and_burn, run_batch, unique_path)
@@ -236,6 +240,19 @@ def build_parser() -> argparse.ArgumentParser:
              "增補（extra_terms）與排除誤判（ignore_terms）。僅供自查，"
              "不自動改動內容。可與一般轉錄／對齊模式或 --subs 併用。")
     parser.add_argument(
+        "--publishcheck", metavar="發佈資訊檔",
+        help="發佈資訊健檢（免轉錄、免媒體）：讀入一個純文字檔，第一行為"
+             "標題、其餘為說明欄；檢查標題 100 字元、說明欄 5000「位元組」"
+             "（不是字數，中文一字佔 3 位元組）、hashtag 15 個上限與標籤"
+             "500 字元預算。hashtag 超過 15 個時 YouTube 會忽略全部而且"
+             "不給任何提示——這是最常見也最難自己發現的坑。輸出"
+             "「檔名_發佈健檢.txt」；門檻可於 config.json 的 publishcheck "
+             "調整。可搭配 --tags 一併檢查標籤欄位。")
+    parser.add_argument(
+        "--tags", metavar="標籤",
+        help="搭配 --publishcheck 使用：以逗號分隔的標籤字串，一併檢查是否"
+             "超過標籤欄位的總字元預算。")
+    parser.add_argument(
         "--thumbcheck", action="store_true",
         help="封面健檢（免轉錄）：把要檢查的**封面圖片**直接當作位置參數傳入"
              "（可一次給多張），檢查它們在手機尺寸下還看不看得清楚。"
@@ -318,7 +335,12 @@ def main(argv=None) -> int:
         percent = f"{int(ratio * 100):3d}% " if ratio is not None else "     "
         print(f"{percent}{message}", flush=True)
 
-    if args.thumbcheck:
+    if args.publishcheck:
+        # 發佈資訊健檢的輸入是「一份文字」而非媒體內容，與其他逐檔處理的
+        # 模式結構不同，因此獨立成一個分支。
+        results = _run_publishcheck(args.publishcheck, args.tags, config,
+                                    report)
+    elif args.thumbcheck:
         # 封面健檢的輸入是「圖片」而非影片內容，與其他逐檔處理的模式
         # 結構不同，因此獨立成一個分支。
         results = _run_thumbcheck(args.files, config, report)
@@ -535,6 +557,46 @@ def _export_subcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
         fp.write(text)
     print(text, flush=True)
     return check_path
+
+
+def _run_publishcheck(text_path: str, tags: str, config: dict,
+                      report) -> list:
+    """
+    發佈資訊健檢：第一行當標題、其餘當說明欄。
+
+    回傳與其他批次模式同構的結果清單，供總結報告統一列印。
+    """
+    label = f"發佈資訊健檢（{os.path.basename(text_path)}）"
+    try:
+        report("讀取發佈資訊…", 0.0)
+        with open(text_path, "r", encoding="utf-8") as fp:
+            raw = fp.read()
+        lines = raw.splitlines()
+        title = lines[0].strip() if lines else ""
+        description = "\n".join(lines[1:])
+
+        report("檢查各項上限…", 0.5)
+        settings = resolve_publishcheck_settings(config)
+        result = analyze_publish(title, description, tags or "", settings)
+        text = format_publish_report(result, settings)
+        print(text, flush=True)
+
+        automation = config.get("automation", {})
+        out_dir = (automation.get("output_dir") or "").strip() \
+            or os.path.dirname(os.path.abspath(text_path))
+        os.makedirs(out_dir, exist_ok=True)
+        base = os.path.splitext(os.path.basename(text_path))[0]
+        out_path = unique_path(os.path.join(out_dir, f"{base}_發佈健檢.txt"))
+        with open(out_path, "w", encoding="utf-8") as fp:
+            fp.write(text)
+        report("完成", 1.0)
+        return [{"path": label, "ok": True, "error": None,
+                 "result": {"exports": [out_path], "burned": None,
+                            "cues": []}}]
+    except Exception as exc:
+        report(f"失敗：{exc}", 1.0)
+        return [{"path": label, "ok": False, "result": None,
+                 "error": str(exc)}]
 
 
 def _run_thumbcheck(files: list, config: dict, report) -> list:

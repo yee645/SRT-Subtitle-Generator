@@ -44,6 +44,7 @@ from gui.audiovis_dialog import AudioVisDialog
 from gui.branding_dialog import BrandingDialog
 from gui.chapter_dialog import ChapterCheckDialog
 from gui.thumbcheck_dialog import ThumbCheckDialog
+from gui.publishcheck_dialog import PublishCheckDialog
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
 from gui.cue_editor import CueEditDialog
@@ -213,7 +214,8 @@ class SrtApp(tk.Tk):
                 ("音訊轉影片", 12, self._open_audiovis_dialog),
                 ("系列一致性", 12, self._open_series_dialog),
                 ("章節健檢", 12, self._open_chapter_dialog),
-                ("封面健檢", 12, self._open_thumbcheck_dialog))):
+                ("封面健檢", 12, self._open_thumbcheck_dialog),
+                ("發佈健檢", 12, self._open_publishcheck_dialog))):
             ttk.Button(tools, text=text, width=width, command=command).grid(
                 row=index // _TOOLS_PER_ROW, column=index % _TOOLS_PER_ROW,
                 sticky="w", padx=(0, 8), pady=(0, 4))
@@ -677,6 +679,15 @@ class SrtApp(tk.Tk):
         """開啟系列一致性：帶入目前選取的多個檔案（可於對話框內再增減）。"""
         files = [p for p in self._selected_files() if os.path.exists(p)]
         SeriesCheckDialog(self, self.config_data, files)
+
+    def _open_publishcheck_dialog(self):
+        """
+        開啟發佈資訊健檢：貼上標題／說明欄／標籤即可檢查。
+
+        與影片無關，因此不帶入任何檔案——最常見的情境正是「我自己寫的
+        說明欄，為什麼 hashtag 沒有作用」。
+        """
+        PublishCheckDialog(self, self.config_data)
 
     def _open_thumbcheck_dialog(self):
         """
