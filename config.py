@@ -208,6 +208,15 @@ DEFAULT_CONFIG = {
         "max_lines": 2,             # 超過此行數標記「行數過多」
         "max_chars_per_line": 21,   # 單行字元數超過此值標記「單行過長」
     },
+    # 發佈資訊健檢：標題／說明欄／hashtag／標籤的上限（hashtag 超量會靜默失效）。
+    "publishcheck": {
+        "title_limit": 100,             # 標題字元上限
+        "title_mobile_visible": 40,     # 行動裝置大致可見的標題長度
+        "description_byte_limit": 5000, # 說明欄上限（位元組，非字數）
+        "max_hashtags": 15,             # 超過此數 YouTube 忽略全部 hashtag
+        "recommended_hashtags": 5,      # 建議的 hashtag 數量上限
+        "tag_char_limit": 500,          # 標籤欄位的總字元預算
+    },
     # 封面健檢：手機清單裡的縮圖只有約 200 像素寬，縮小後看不清就沒人點。
     "thumbcheck": {
         "mobile_width": 200,        # 手機列表縮圖寬度（實測約 200 像素）
