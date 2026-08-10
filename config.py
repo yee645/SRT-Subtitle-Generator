@@ -208,6 +208,12 @@ DEFAULT_CONFIG = {
         "max_lines": 2,             # 超過此行數標記「行數過多」
         "max_chars_per_line": 21,   # 單行字元數超過此值標記「單行過長」
     },
+    # 字幕可讀性健檢：燒錄後的字幕會不會糊在偏亮的畫面裡。
+    "legibility": {
+        "sample_count": 12,     # 取樣句數（逐句解碼太貴，均勻取樣）
+        "min_contrast": 60.0,   # 文字與背景的亮度差下限（0~255）
+        "band_ratio": 0.14,     # 字幕帶高度佔畫面高度的比例
+    },
     # 發佈資訊健檢：標題／說明欄／hashtag／標籤的上限（hashtag 超量會靜默失效）。
     "publishcheck": {
         "title_limit": 100,             # 標題字元上限
