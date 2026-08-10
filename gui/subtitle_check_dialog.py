@@ -32,6 +32,9 @@ from subtitle.adfriendly import (format_adfriendly_report,
 from subtitle.burner import ffmpeg_available
 from subtitle.hookcheck import (analyze_hook, format_hook_report,
                                 resolve_hookcheck_settings)
+from subtitle.legibility import (analyze_legibility,
+                                 format_legibility_report,
+                                 resolve_legibility_settings)
 from subtitle.subsync import (analyze_sync, apply_sync_correction,
                               format_sync_report, resolve_subsync_settings)
 from subtitle.subtitlecheck import (analyze_cues, fix_cue_durations,
@@ -62,6 +65,7 @@ class SubtitleCheckDialog(tk.Toplevel):
         self.last_ad_result = None
         self.last_hook_result = None
         self.last_sync_result = None
+        self.last_legib_result = None
         self.is_syncing = False
         self.result_queue = queue.Queue()
 
@@ -251,6 +255,16 @@ class SubtitleCheckDialog(tk.Toplevel):
             text="（掃描素材實際語音，抓出整體偏移或幀率漂移）").pack(
             side="left", padx=(8, 0))
 
+        legib_row = ttk.Frame(body)
+        legib_row.pack(fill="x", pady=(4, 0))
+        self.legib_btn = ttk.Button(
+            legib_row, text="檢查字幕可讀性", command=self._on_legibility)
+        self.legib_btn.pack(side="left")
+        ttk.Label(
+            legib_row, foreground="#666666",
+            text="（量測字幕背後的畫面有多亮，抓出燒錄後會糊掉的段落）").pack(
+            side="left", padx=(8, 0))
+
         self._poll_job = self.after(120, self._poll_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._on_run()
@@ -381,6 +395,36 @@ class SubtitleCheckDialog(tk.Toplevel):
         self.status_var.set("正在掃描素材語音區間並比對字幕時間軸...")
         threading.Thread(target=self._sync_worker, daemon=True).start()
 
+    def _on_legibility(self):
+        if self.is_syncing:
+            return
+        if not self.media_path or not os.path.exists(self.media_path):
+            messagebox.showinfo(
+                "提示", "請先在主視窗選好對應的影片素材，"
+                       "可讀性檢查需要讀取實際畫面。", parent=self)
+            return
+        if not ffmpeg_available():
+            show_friendly_error(
+                self, "可讀性檢查需要 ffmpeg",
+                RuntimeError("找不到 ffmpeg，請先安裝並加入系統 PATH。"))
+            return
+        self._set_syncing(True)
+        self.status_var.set("正在量測字幕背後的畫面亮度...")
+        threading.Thread(target=self._legibility_worker, daemon=True).start()
+
+    def _legibility_worker(self):
+        try:
+            def progress(ratio, message):
+                self.result_queue.put(("status", (message, ratio)))
+            result = analyze_legibility(
+                self.media_path, self.cues,
+                self.config_data.get("subtitle_style", {}),
+                self.config_data, progress_cb=progress)
+            self.result_queue.put(("legib_done", result))
+        except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
+            logger.exception("字幕可讀性檢查失敗")
+            self.result_queue.put(("legib_error", exc))
+
     def _sync_worker(self):
         try:
             result = analyze_sync(
@@ -403,6 +447,17 @@ class SubtitleCheckDialog(tk.Toplevel):
                     self._set_syncing(False)
                     self.status_var.set("同步檢查失敗。")
                     show_friendly_error(self, "字幕同步檢查失敗", payload)
+                elif kind == "legib_done":
+                    self._set_syncing(False)
+                    self.last_legib_result = payload
+                    self._append_legibility_report(payload)
+                elif kind == "legib_error":
+                    self._set_syncing(False)
+                    self.status_var.set("字幕可讀性檢查失敗。")
+                    show_friendly_error(self, "字幕可讀性檢查失敗", payload)
+                elif kind == "status":
+                    message, _ratio = payload
+                    self.status_var.set(message)
         except queue.Empty:
             pass
         self._poll_job = self.after(120, self._poll_queue)
@@ -429,6 +484,26 @@ class SubtitleCheckDialog(tk.Toplevel):
         else:
             self.status_var.set("同步檢查完成：字幕與語音同步正常。")
 
+    def _append_legibility_report(self, result):
+        """把可讀性報告接在既有報告後面（與同步檢查的呈現方式一致）。"""
+        text = format_legibility_report(
+            result, resolve_legibility_settings(self.config_data))
+        self.report.configure(state="normal")
+        existing = self.report.get("1.0", "end").strip()
+        self.report.delete("1.0", "end")
+        combined = f"{existing}\n\n{text}" if existing else text
+        self.report.insert("1.0", combined, "report")
+        self.report.configure(state="disabled")
+        self.report.see("end")
+        self.copy_btn.configure(state="normal")
+        weak = len(result.get("weak") or [])
+        if result.get("ok"):
+            self.status_var.set("字幕可讀性檢查完成：字幕在畫面上看得清楚。")
+        else:
+            self.status_var.set(
+                f"字幕可讀性檢查完成：{weak} 個取樣點的字幕會糊在背景裡，"
+                "詳見報告。")
+
     def _on_sync_fix(self):
         result = self.last_sync_result
         if not result or result.get("kind") not in ("offset", "drift"):
@@ -445,9 +520,11 @@ class SubtitleCheckDialog(tk.Toplevel):
         self._on_run()
 
     def _set_syncing(self, syncing):
+        # 兩個掃描都會跑 ffmpeg，共用同一個忙碌旗標，避免同時啟動兩份掃描。
         self.is_syncing = syncing
         state = "disabled" if syncing else "normal"
         self.sync_btn.configure(state=state)
+        self.legib_btn.configure(state=state)
 
     def _on_close(self):
         if getattr(self, "_poll_job", None):

@@ -31,6 +31,7 @@
     python main.py --pacecheck 影片.mp4           # 剪輯節奏健檢（畫面太久沒變化）
     python main.py --thumbcheck 封面1.png 封面2.png # 封面健檢（手機上看不看得清）
     python main.py --publishcheck 發佈資訊.txt 影片.mp4  # 發佈資訊健檢（hashtag/長度上限）
+    python main.py --legibility 影片.mp4          # 字幕可讀性（燒錄後看不看得清）
     python main.py --subs 舊字幕.srt --synccheck 影片.mp4  # 字幕與語音同步檢查
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
@@ -84,6 +85,9 @@ from subtitle.thumbcheck import (format_ranking_report,
 from subtitle.publishcheck import (analyze_publish,
                                    format_publish_report,
                                    resolve_publishcheck_settings)
+from subtitle.legibility import (analyze_legibility,
+                                 format_legibility_report,
+                                 resolve_legibility_settings)
 from subtitle.media import probe_duration
 from subtitle.pipeline import (EXPORT_FORMATS, enabled_export_formats,
                                export_and_burn, run_batch, unique_path)
@@ -239,6 +243,13 @@ def build_parser() -> argparse.ArgumentParser:
              "「檔名_廣告友善度.txt」；詞表可於 config.json 的 adfriendly "
              "增補（extra_terms）與排除誤判（ignore_terms）。僅供自查，"
              "不自動改動內容。可與一般轉錄／對齊模式或 --subs 併用。")
+    parser.add_argument(
+        "--legibility", action="store_true",
+        help="字幕可讀性健檢：量測字幕實際會落在畫面上的那一條帶子有多亮，"
+             "與文字顏色相比，抓出「燒錄後會糊在背景裡」的段落。白字遇到"
+             "偏白的畫面就看不見，而這通常要等到燒錄完、播出去才發現。"
+             "輸出「檔名_字幕可讀性.txt」；門檻可於 config.json 的 "
+             "legibility 調整。可與一般轉錄／對齊模式或 --subs 併用。")
     parser.add_argument(
         "--publishcheck", metavar="發佈資訊檔",
         help="發佈資訊健檢（免轉錄、免媒體）：讀入一個純文字檔，第一行為"
@@ -489,6 +500,25 @@ def main(argv=None) -> int:
             base = os.path.splitext(os.path.basename(item["path"]))[0]
             item["result"]["exports"].append(
                 _export_adcheck(cues, config, out_dir, base))
+
+    if args.legibility:
+        automation = config.get("automation", {})
+        out_dir_override = (automation.get("output_dir") or "").strip()
+        for item in results:
+            cues = (item.get("result") or {}).get("cues") if item["ok"] else None
+            if not cues:
+                continue
+            out_dir = out_dir_override or os.path.dirname(
+                os.path.abspath(item["path"]))
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(item["path"]))[0]
+            try:
+                item["result"]["exports"].append(
+                    _export_legibility(item["path"], cues, config, out_dir,
+                                       base))
+            except (RuntimeError, ValueError) as exc:
+                report(f"{os.path.basename(item['path'])}："
+                       f"字幕可讀性健檢略過（{exc}）")
 
     if args.hookcheck:
         automation = config.get("automation", {})
@@ -755,6 +785,20 @@ def _export_adcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
     result = scan_cues(cues, resolve_adfriendly_settings(config))
     text = format_adfriendly_report(result)
     check_path = unique_path(os.path.join(out_dir, f"{base}_廣告友善度.txt"))
+    with open(check_path, "w", encoding="utf-8") as fp:
+        fp.write(text)
+    print(text, flush=True)
+    return check_path
+
+
+def _export_legibility(media_path: str, cues: list, config: dict,
+                       out_dir: str, base: str) -> str:
+    """對素材與字幕跑可讀性健檢並輸出報告文字檔，回傳報告路徑。"""
+    settings = resolve_legibility_settings(config)
+    style = config.get("subtitle_style", {})
+    result = analyze_legibility(media_path, cues, style, config)
+    text = format_legibility_report(result, settings)
+    check_path = unique_path(os.path.join(out_dir, f"{base}_字幕可讀性.txt"))
     with open(check_path, "w", encoding="utf-8") as fp:
         fp.write(text)
     print(text, flush=True)
