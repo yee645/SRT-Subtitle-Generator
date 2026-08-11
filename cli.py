@@ -32,6 +32,7 @@
     python main.py --thumbcheck 封面1.png 封面2.png # 封面健檢（手機上看不看得清）
     python main.py --publishcheck 發佈資訊.txt 影片.mp4  # 發佈資訊健檢（hashtag/長度上限）
     python main.py --legibility 影片.mp4          # 字幕可讀性（燒錄後看不看得清）
+    python main.py --preflight 影片.mp4           # 上片前總體檢（一次跑完所有健檢）
     python main.py --subs 舊字幕.srt --synccheck 影片.mp4  # 字幕與語音同步檢查
 
 命令列旗標僅影響本次執行，不會改寫 config.json 記憶的設定。
@@ -88,6 +89,8 @@ from subtitle.publishcheck import (analyze_publish,
 from subtitle.legibility import (analyze_legibility,
                                  format_legibility_report,
                                  resolve_legibility_settings)
+from subtitle.preflight import (format_preflight_report,
+                                run_preflight)
 from subtitle.media import probe_duration
 from subtitle.pipeline import (EXPORT_FORMATS, enabled_export_formats,
                                export_and_burn, run_batch, unique_path)
@@ -243,6 +246,14 @@ def build_parser() -> argparse.ArgumentParser:
              "「檔名_廣告友善度.txt」；詞表可於 config.json 的 adfriendly "
              "增補（extra_terms）與排除誤判（ignore_terms）。僅供自查，"
              "不自動改動內容。可與一般轉錄／對齊模式或 --subs 併用。")
+    parser.add_argument(
+        "--preflight", action="store_true",
+        help="上片前總體檢：一次跑完所有適用的健檢（音訊、畫質、色偏、"
+             "音量一致性、剪輯節奏，有字幕時再加上字幕健檢、廣告友善度、"
+             "開場健檢與字幕可讀性），把結果依嚴重度排成一份清單並給出"
+             "準備度評級。依素材自動略過不適用的項目（純音訊檔跳過畫面"
+             "檢查、沒有字幕跳過字幕檢查）。輸出「檔名_總體檢.txt」；"
+             "各項可於 config.json 的 preflight 單獨關閉。")
     parser.add_argument(
         "--legibility", action="store_true",
         help="字幕可讀性健檢：量測字幕實際會落在畫面上的那一條帶子有多亮，"
@@ -500,6 +511,33 @@ def main(argv=None) -> int:
             base = os.path.splitext(os.path.basename(item["path"]))[0]
             item["result"]["exports"].append(
                 _export_adcheck(cues, config, out_dir, base))
+
+    if args.preflight:
+        automation = config.get("automation", {})
+        out_dir_override = (automation.get("output_dir") or "").strip()
+        for item in results:
+            path = item["path"]
+            if not os.path.exists(path):
+                continue
+            cues = (item.get("result") or {}).get("cues") if item["ok"] else None
+            out_dir = out_dir_override or os.path.dirname(os.path.abspath(path))
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(path))[0]
+            try:
+                def progress(ratio, message):
+                    report(message, ratio)
+                result = run_preflight(path, cues or [], config,
+                                       progress_cb=progress)
+                text = format_preflight_report(result)
+                out_path = unique_path(os.path.join(
+                    out_dir, f"{base}_總體檢.txt"))
+                with open(out_path, "w", encoding="utf-8") as fp:
+                    fp.write(text)
+                print(text, flush=True)
+                if item.get("result"):
+                    item["result"]["exports"].append(out_path)
+            except (RuntimeError, ValueError, FileNotFoundError) as exc:
+                report(f"{os.path.basename(path)}：總體檢略過（{exc}）")
 
     if args.legibility:
         automation = config.get("automation", {})
