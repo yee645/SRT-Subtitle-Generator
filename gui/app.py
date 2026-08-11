@@ -45,6 +45,7 @@ from gui.branding_dialog import BrandingDialog
 from gui.chapter_dialog import ChapterCheckDialog
 from gui.thumbcheck_dialog import ThumbCheckDialog
 from gui.publishcheck_dialog import PublishCheckDialog
+from gui.preflight_dialog import PreflightDialog
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
 from gui.cue_editor import CueEditDialog
@@ -215,7 +216,8 @@ class SrtApp(tk.Tk):
                 ("系列一致性", 12, self._open_series_dialog),
                 ("章節健檢", 12, self._open_chapter_dialog),
                 ("封面健檢", 12, self._open_thumbcheck_dialog),
-                ("發佈健檢", 12, self._open_publishcheck_dialog))):
+                ("發佈健檢", 12, self._open_publishcheck_dialog),
+                ("上片前總體檢", 14, self._open_preflight_dialog))):
             ttk.Button(tools, text=text, width=width, command=command).grid(
                 row=index // _TOOLS_PER_ROW, column=index % _TOOLS_PER_ROW,
                 sticky="w", padx=(0, 8), pady=(0, 4))
@@ -679,6 +681,18 @@ class SrtApp(tk.Tk):
         """開啟系列一致性：帶入目前選取的多個檔案（可於對話框內再增減）。"""
         files = [p for p in self._selected_files() if os.path.exists(p)]
         SeriesCheckDialog(self, self.config_data, files)
+
+    def _open_preflight_dialog(self):
+        """
+        開啟上片前總體檢：帶入目前選取的素材與目前的字幕清單。
+
+        字幕直接沿用主視窗已經有的那一份，使用者不必再挑一次檔案；
+        沒有字幕時對話框會自動略過字幕相關的檢查。
+        """
+        files = [p for p in self._selected_files() if os.path.exists(p)]
+        PreflightDialog(self, self.config_data,
+                        media_path=files[0] if files else "",
+                        cues=list(getattr(self, "cues", []) or []))
 
     def _open_publishcheck_dialog(self):
         """

@@ -208,6 +208,21 @@ DEFAULT_CONFIG = {
         "max_lines": 2,             # 超過此行數標記「行數過多」
         "max_chars_per_line": 21,   # 單行字元數超過此值標記「單行過長」
     },
+    # 上片前總體檢：一次跑完所有適用的健檢並依嚴重度排序。
+    "preflight": {
+        "run_audio": True,        # 音訊健檢
+        "run_video": True,        # 影片畫質健檢
+        "run_color": True,        # 畫面曝光與色偏
+        "run_volume": True,       # 分段音量一致性
+        "run_pacing": True,       # 剪輯節奏
+        "run_subtitle": True,     # 字幕健檢（需有字幕）
+        "run_adfriendly": True,   # 廣告友善度（需有字幕）
+        "run_hook": True,         # 開場健檢（需有字幕）
+        "run_legibility": True,   # 字幕可讀性（需有字幕與畫面）
+        # 視為「沒有資訊」的檔名關鍵字（逗號分隔）。
+        "generic_name_terms": ("final,final_cut,export,output,video,movie,"
+                               "未命名,新增專案,序列,專案,輸出,影片"),
+    },
     # 字幕可讀性健檢：燒錄後的字幕會不會糊在偏亮的畫面裡。
     "legibility": {
         "sample_count": 12,     # 取樣句數（逐句解碼太貴，均勻取樣）
