@@ -53,6 +53,7 @@ DEFAULT_PREFLIGHT = {
     "run_adfriendly": True,   # 廣告友善度（黃標風險）
     "run_hook": True,         # 開場健檢（多久才進正題）
     "run_legibility": True,   # 字幕可讀性（與背景的對比）
+    "run_endscreen": True,    # 片尾空間（結束畫面放不放得下）
     # 視為「沒有資訊」的檔名關鍵字（逗號分隔）。
     "generic_name_terms": ("final,final_cut,export,output,video,movie,"
                            "未命名,新增專案,序列,專案,輸出,影片"),
@@ -60,7 +61,7 @@ DEFAULT_PREFLIGHT = {
 
 _BOOL_KEYS = ("run_audio", "run_video", "run_color", "run_volume",
               "run_pacing", "run_subtitle", "run_adfriendly", "run_hook",
-              "run_legibility")
+              "run_legibility", "run_endscreen")
 
 # 檔名裡「只有數字與符號」的樣式（IMG_1234、DJI_0002、20260101_120000）。
 _MEANINGLESS_NAME = re.compile(r"^[\W\d_]*$|^[A-Za-z]{2,4}[\W_]?\d{2,}$")
@@ -320,6 +321,8 @@ def _build_steps(settings: dict, has_video: bool, has_cues: bool) -> list:
         steps.append(("開場健檢", _run_hook))
     if settings["run_legibility"] and has_cues and has_video:
         steps.append(("字幕可讀性", _run_legibility))
+    if settings["run_endscreen"]:
+        steps.append(("片尾空間", _run_endscreen))
     return steps
 
 
@@ -380,6 +383,12 @@ def _run_legibility(media_path, cues, config):
     style = (config or {}).get("subtitle_style", {})
     return normalize_findings(
         analyze_legibility(media_path, cues, style, config), "字幕可讀性")
+
+
+def _run_endscreen(media_path, cues, config):
+    from subtitle.endscreen import analyze_endscreen
+    return normalize_findings(
+        analyze_endscreen(media_path, cues, config), "片尾空間")
 
 
 def format_preflight_report(result: dict) -> str:

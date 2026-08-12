@@ -129,7 +129,7 @@ check("有一定要修時建議修再少也不會是 A",
 # ===== 6. 依素材自動略過（不碰 ffmpeg 也能單獨測）=====
 names = lambda steps: [n for n, _ in steps]
 full = pf._build_steps(S, has_video=True, has_cues=True)
-check("有畫面有字幕時九項全跑", len(full) == 9, str(names(full)))
+check("有畫面有字幕時全部項目都跑", len(full) == 10, str(names(full)))
 audio_only = pf._build_steps(S, has_video=False, has_cues=True)
 check("純音訊檔略過所有畫面檢查",
       "影片畫質健檢" not in names(audio_only)
@@ -145,10 +145,11 @@ check("沒有字幕時略過所有字幕相關檢查",
               ("字幕健檢", "廣告友善度", "開場健檢", "字幕可讀性")),
       str(names(no_cues)))
 check("沒有字幕時畫面與聲音檢查照跑",
-      len(names(no_cues)) == 5, str(names(no_cues)))
+      len(names(no_cues)) == 6, str(names(no_cues)))
 bare = pf._build_steps(S, has_video=False, has_cues=False)
-check("純音訊又沒字幕時只剩兩項",
-      names(bare) == ["音訊健檢", "分段音量一致性"], str(names(bare)))
+check("純音訊又沒字幕時只剩不需畫面也不需字幕的項目",
+      names(bare) == ["音訊健檢", "分段音量一致性", "片尾空間"],
+      str(names(bare)))
 # 關閉設定要真的生效。
 disabled = pf.resolve_preflight_settings({"preflight": {
     "run_pacing": False, "run_hook": False}})

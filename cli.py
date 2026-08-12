@@ -32,6 +32,7 @@
     python main.py --thumbcheck 封面1.png 封面2.png # 封面健檢（手機上看不看得清）
     python main.py --publishcheck 發佈資訊.txt 影片.mp4  # 發佈資訊健檢（hashtag/長度上限）
     python main.py --legibility 影片.mp4          # 字幕可讀性（燒錄後看不看得清）
+    python main.py --endscreen 影片.mp4           # 片尾空間（結束畫面放不放得下）
     python main.py --preflight 影片.mp4           # 上片前總體檢（一次跑完所有健檢）
     python main.py --subs 舊字幕.srt --synccheck 影片.mp4  # 字幕與語音同步檢查
 
@@ -89,6 +90,9 @@ from subtitle.publishcheck import (analyze_publish,
 from subtitle.legibility import (analyze_legibility,
                                  format_legibility_report,
                                  resolve_legibility_settings)
+from subtitle.endscreen import (analyze_endscreen,
+                                format_endscreen_report,
+                                resolve_endscreen_settings)
 from subtitle.preflight import (format_preflight_report,
                                 run_preflight)
 from subtitle.media import probe_duration
@@ -249,8 +253,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--preflight", action="store_true",
         help="上片前總體檢：一次跑完所有適用的健檢（音訊、畫質、色偏、"
-             "音量一致性、剪輯節奏，有字幕時再加上字幕健檢、廣告友善度、"
-             "開場健檢與字幕可讀性），把結果依嚴重度排成一份清單並給出"
+             "音量一致性、剪輯節奏、片尾空間，有字幕時再加上字幕健檢、"
+             "廣告友善度、開場健檢與字幕可讀性），把結果依嚴重度排成一份清單並給出"
              "準備度評級。依素材自動略過不適用的項目（純音訊檔跳過畫面"
              "檢查、沒有字幕跳過字幕檢查）。輸出「檔名_總體檢.txt」；"
              "各項可於 config.json 的 preflight 單獨關閉。")
@@ -261,6 +265,15 @@ def build_parser() -> argparse.ArgumentParser:
              "偏白的畫面就看不見，而這通常要等到燒錄完、播出去才發現。"
              "輸出「檔名_字幕可讀性.txt」；門檻可於 config.json 的 "
              "legibility 調整。可與一般轉錄／對齊模式或 --subs 併用。")
+    parser.add_argument(
+        "--endscreen", action="store_true",
+        help="片尾空間健檢：YouTube 的結束畫面加在影片結束前的 5~20 秒處，"
+             "官方也明講「編輯時請務必考慮影片最後 20 秒」。檢查最後這段"
+             "放不放得下結束畫面、字幕會不會落進元素會擺的位置、有沒有"
+             "變成一段什麼都不講的死寂片尾，以及畫面是不是雜到元素疊上去"
+             "看不清。輸出「檔名_片尾空間.txt」；門檻可於 config.json 的 "
+             "endscreen 調整。可與一般轉錄／對齊模式或 --subs 併用；"
+             "沒有字幕也能跑（沒字幕本身就是死寂片尾的徵兆）。")
     parser.add_argument(
         "--publishcheck", metavar="發佈資訊檔",
         help="發佈資訊健檢（免轉錄、免媒體）：讀入一個純文字檔，第一行為"
@@ -558,6 +571,26 @@ def main(argv=None) -> int:
                 report(f"{os.path.basename(item['path'])}："
                        f"字幕可讀性健檢略過（{exc}）")
 
+    if args.endscreen:
+        automation = config.get("automation", {})
+        out_dir_override = (automation.get("output_dir") or "").strip()
+        for item in results:
+            if not item["ok"]:
+                continue
+            # 這項不需要字幕：沒字幕的片尾本身就是「死寂片尾」的徵兆。
+            cues = (item.get("result") or {}).get("cues") or []
+            out_dir = out_dir_override or os.path.dirname(
+                os.path.abspath(item["path"]))
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(item["path"]))[0]
+            try:
+                item["result"]["exports"].append(
+                    _export_endscreen(item["path"], cues, config, out_dir,
+                                      base))
+            except (RuntimeError, ValueError) as exc:
+                report(f"{os.path.basename(item['path'])}："
+                       f"片尾空間健檢略過（{exc}）")
+
     if args.hookcheck:
         automation = config.get("automation", {})
         out_dir_override = (automation.get("output_dir") or "").strip()
@@ -837,6 +870,19 @@ def _export_legibility(media_path: str, cues: list, config: dict,
     result = analyze_legibility(media_path, cues, style, config)
     text = format_legibility_report(result, settings)
     check_path = unique_path(os.path.join(out_dir, f"{base}_字幕可讀性.txt"))
+    with open(check_path, "w", encoding="utf-8") as fp:
+        fp.write(text)
+    print(text, flush=True)
+    return check_path
+
+
+def _export_endscreen(media_path: str, cues: list, config: dict,
+                      out_dir: str, base: str) -> str:
+    """對素材跑片尾空間健檢並輸出報告文字檔，回傳報告路徑。"""
+    settings = resolve_endscreen_settings(config)
+    result = analyze_endscreen(media_path, cues, config)
+    text = format_endscreen_report(result, settings)
+    check_path = unique_path(os.path.join(out_dir, f"{base}_片尾空間.txt"))
     with open(check_path, "w", encoding="utf-8") as fp:
         fp.write(text)
     print(text, flush=True)

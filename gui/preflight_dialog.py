@@ -48,6 +48,7 @@ _CHECK_ITEMS = (
     ("run_adfriendly", "廣告友善度", True),
     ("run_hook", "開場健檢", True),
     ("run_legibility", "字幕可讀性", True),
+    ("run_endscreen", "片尾空間", False),
 )
 _COLUMNS = 3
 
