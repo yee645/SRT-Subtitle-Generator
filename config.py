@@ -219,6 +219,7 @@ DEFAULT_CONFIG = {
         "run_adfriendly": True,   # 廣告友善度（需有字幕）
         "run_hook": True,         # 開場健檢（需有字幕）
         "run_legibility": True,   # 字幕可讀性（需有字幕與畫面）
+        "run_endscreen": True,    # 片尾空間（結束畫面放不放得下）
         # 視為「沒有資訊」的檔名關鍵字（逗號分隔）。
         "generic_name_terms": ("final,final_cut,export,output,video,movie,"
                                "未命名,新增專案,序列,專案,輸出,影片"),
@@ -228,6 +229,12 @@ DEFAULT_CONFIG = {
         "sample_count": 12,     # 取樣句數（逐句解碼太貴，均勻取樣）
         "min_contrast": 60.0,   # 文字與背景的亮度差下限（0~255）
         "band_ratio": 0.14,     # 字幕帶高度佔畫面高度的比例
+    },
+    # 片尾空間健檢：YouTube 結束畫面加在片尾 5~20 秒處，最後這段要留得下。
+    "endscreen": {
+        "window_seconds": 20.0,    # 檢查最後幾秒（官方可設 5~20，取最長值）
+        "min_speech_ratio": 0.30,  # 講話覆蓋率低於此值視為「死寂的片尾」
+        "max_busy_edge": 12.0,     # 畫面細節量高於此值視為太雜、元素會很亂
     },
     # 發佈資訊健檢：標題／說明欄／hashtag／標籤的上限（hashtag 超量會靜默失效）。
     "publishcheck": {
