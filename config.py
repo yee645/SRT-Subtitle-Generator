@@ -220,6 +220,7 @@ DEFAULT_CONFIG = {
         "run_hook": True,         # 開場健檢（需有字幕）
         "run_legibility": True,   # 字幕可讀性（需有字幕與畫面）
         "run_endscreen": True,    # 片尾空間（結束畫面放不放得下）
+        "run_sponsor": True,      # 工商揭露（需有字幕）
         # 視為「沒有資訊」的檔名關鍵字（逗號分隔）。
         "generic_name_terms": ("final,final_cut,export,output,video,movie,"
                                "未命名,新增專案,序列,專案,輸出,影片"),
@@ -229,6 +230,14 @@ DEFAULT_CONFIG = {
         "sample_count": 12,     # 取樣句數（逐句解碼太貴，均勻取樣）
         "min_contrast": 60.0,   # 文字與背景的亮度差下限（0~255）
         "band_ratio": 0.14,     # 字幕帶高度佔畫面高度的比例
+    },
+    # 工商揭露健檢：業配要在段落開始「之前」揭露，這是法規要求不是建議。
+    "sponsorcheck": {
+        "gap_seconds": 30.0,             # 相鄰命中間隔小於此值視為同一段
+        "max_ratio": 0.25,               # 工商段落佔全片比例上限
+        "extra_disclosure_terms": "",    # 自訂揭露詞
+        "extra_promo_terms": "",         # 自訂推銷詞
+        "ignore_terms": "",              # 誤判排除詞
     },
     # 片尾空間健檢：YouTube 結束畫面加在片尾 5~20 秒處，最後這段要留得下。
     "endscreen": {

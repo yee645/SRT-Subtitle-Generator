@@ -49,6 +49,7 @@ _CHECK_ITEMS = (
     ("run_hook", "開場健檢", True),
     ("run_legibility", "字幕可讀性", True),
     ("run_endscreen", "片尾空間", False),
+    ("run_sponsor", "工商揭露", True),
 )
 _COLUMNS = 3
 
