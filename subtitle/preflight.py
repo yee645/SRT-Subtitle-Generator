@@ -55,6 +55,7 @@ DEFAULT_PREFLIGHT = {
     "run_legibility": True,   # 字幕可讀性（與背景的對比）
     "run_endscreen": True,    # 片尾空間（結束畫面放不放得下）
     "run_sponsor": True,      # 工商揭露（需有字幕）
+    "run_term": True,         # 術語一致性（需有字幕）
     # 視為「沒有資訊」的檔名關鍵字（逗號分隔）。
     "generic_name_terms": ("final,final_cut,export,output,video,movie,"
                            "未命名,新增專案,序列,專案,輸出,影片"),
@@ -62,7 +63,8 @@ DEFAULT_PREFLIGHT = {
 
 _BOOL_KEYS = ("run_audio", "run_video", "run_color", "run_volume",
               "run_pacing", "run_subtitle", "run_adfriendly", "run_hook",
-              "run_legibility", "run_endscreen", "run_sponsor")
+              "run_legibility", "run_endscreen", "run_sponsor",
+              "run_term")
 
 # 檔名裡「只有數字與符號」的樣式（IMG_1234、DJI_0002、20260101_120000）。
 _MEANINGLESS_NAME = re.compile(r"^[\W\d_]*$|^[A-Za-z]{2,4}[\W_]?\d{2,}$")
@@ -326,6 +328,8 @@ def _build_steps(settings: dict, has_video: bool, has_cues: bool) -> list:
         steps.append(("片尾空間", _run_endscreen))
     if settings["run_sponsor"] and has_cues:
         steps.append(("工商揭露", _run_sponsor))
+    if settings["run_term"] and has_cues:
+        steps.append(("術語一致性", _run_term))
     return steps
 
 
@@ -399,6 +403,11 @@ def _run_sponsor(media_path, cues, config):
     from subtitle.sponsorcheck import analyze_sponsor
     return normalize_findings(
         analyze_sponsor(cues, probe_duration(media_path), config), "工商揭露")
+
+
+def _run_term(media_path, cues, config):
+    from subtitle.termcheck import analyze_terms
+    return normalize_findings(analyze_terms(cues, config), "術語一致性")
 
 
 def format_preflight_report(result: dict) -> str:
