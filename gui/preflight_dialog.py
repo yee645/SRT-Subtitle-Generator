@@ -50,6 +50,7 @@ _CHECK_ITEMS = (
     ("run_legibility", "字幕可讀性", True),
     ("run_endscreen", "片尾空間", False),
     ("run_sponsor", "工商揭露", True),
+    ("run_term", "術語一致性", True),
 )
 _COLUMNS = 3
 

@@ -34,6 +34,8 @@
     python main.py --legibility 影片.mp4          # 字幕可讀性（燒錄後看不看得清）
     python main.py --endscreen 影片.mp4           # 片尾空間（結束畫面放不放得下）
     python main.py --sponsorcheck 影片.mp4        # 工商揭露（業配揭露得夠不夠早）
+    python main.py --termcheck 影片.mp4           # 術語一致性（同一個詞有幾種寫法）
+    python main.py --termcheck --termfix 影片.mp4 # 順便把有主流寫法的統一
     python main.py --preflight 影片.mp4           # 上片前總體檢（一次跑完所有健檢）
     python main.py --subs 舊字幕.srt --synccheck 影片.mp4  # 字幕與語音同步檢查
 
@@ -97,6 +99,9 @@ from subtitle.endscreen import (analyze_endscreen,
 from subtitle.sponsorcheck import (analyze_sponsor,
                                    format_sponsor_report,
                                    resolve_sponsorcheck_settings)
+from subtitle.termcheck import (analyze_terms, apply_term_fixes,
+                                build_fix_choices, format_term_report,
+                                resolve_termcheck_settings)
 from subtitle.preflight import (format_preflight_report,
                                 run_preflight)
 from subtitle.media import probe_duration
@@ -258,7 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--preflight", action="store_true",
         help="上片前總體檢：一次跑完所有適用的健檢（音訊、畫質、色偏、"
              "音量一致性、剪輯節奏、片尾空間，有字幕時再加上字幕健檢、"
-             "廣告友善度、開場健檢、字幕可讀性與工商揭露），把結果依嚴重度排成一份清單並給出"
+             "廣告友善度、開場健檢、字幕可讀性、工商揭露與術語一致性），把結果依嚴重度排成一份清單並給出"
              "準備度評級。依素材自動略過不適用的項目（純音訊檔跳過畫面"
              "檢查、沒有字幕跳過字幕檢查）。輸出「檔名_總體檢.txt」；"
              "各項可於 config.json 的 preflight 單獨關閉。")
@@ -287,6 +292,19 @@ def build_parser() -> argparse.ArgumentParser:
              "章節行，讓觀眾能跳過（坦白反而留得住觀眾）。輸出"
              "「檔名_工商揭露.txt」；詞表與門檻可於 config.json 的 "
              "sponsorcheck 調整。可與一般轉錄／對齊模式或 --subs 併用。")
+    parser.add_argument(
+        "--termcheck", action="store_true",
+        help="術語一致性檢查：找出同一個詞在同一支影片裡被寫成好幾種樣子"
+             "（YouTube／Youtube／youtube、Anthropic／Anthropik）。語音辨識"
+             "最會錯的就是專有名詞，而且會拿發音相近的詞去替換，導致同一個"
+             "名字前後拼法不一致。輸出「檔名_術語一致性.txt」，並列出可以"
+             "直接貼進「自動修正詞庫」的規則；門檻可於 config.json 的 "
+             "termcheck 調整。可與一般轉錄／對齊模式或 --subs 併用。")
+    parser.add_argument(
+        "--termfix", action="store_true",
+        help="搭配 --termcheck 使用：把有明確主流寫法的詞一鍵統一，另存"
+             "「檔名_術語統一.srt」；原始檔不受影響。各種寫法出現次數"
+             "一樣多時不會替你猜，會原樣保留並在報告中標示。")
     parser.add_argument(
         "--publishcheck", metavar="發佈資訊檔",
         help="發佈資訊健檢（免轉錄、免媒體）：讀入一個純文字檔，第一行為"
@@ -604,6 +622,25 @@ def main(argv=None) -> int:
                 report(f"{os.path.basename(item['path'])}："
                        f"片尾空間健檢略過（{exc}）")
 
+    if args.termcheck:
+        automation = config.get("automation", {})
+        out_dir_override = (automation.get("output_dir") or "").strip()
+        for item in results:
+            cues = (item.get("result") or {}).get("cues") if item["ok"] else None
+            if not cues:
+                continue
+            out_dir = out_dir_override or os.path.dirname(
+                os.path.abspath(item["path"]))
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(item["path"]))[0]
+            try:
+                for path in _export_termcheck(cues, config, out_dir, base,
+                                              args.termfix):
+                    item["result"]["exports"].append(path)
+            except (RuntimeError, ValueError) as exc:
+                report(f"{os.path.basename(item['path'])}："
+                       f"術語一致性檢查略過（{exc}）")
+
     if args.sponsorcheck:
         automation = config.get("automation", {})
         out_dir_override = (automation.get("output_dir") or "").strip()
@@ -919,6 +956,40 @@ def _export_endscreen(media_path: str, cues: list, config: dict,
         fp.write(text)
     print(text, flush=True)
     return check_path
+
+
+def _export_termcheck(cues: list, config: dict, out_dir: str, base: str,
+                      do_fix: bool = False) -> list:
+    """
+    對字幕清單跑術語一致性檢查並輸出報告，回傳產生的檔案路徑清單。
+
+    加上 --termfix 時另外輸出統一寫法後的 SRT；沒有可統一的項目時
+    不會產生空檔案，只如實回報。
+    """
+    from subtitle.exporter import export
+
+    settings = resolve_termcheck_settings(config)
+    result = analyze_terms(cues, config)
+    text = format_term_report(result, settings)
+    paths = []
+    check_path = unique_path(os.path.join(out_dir, f"{base}_術語一致性.txt"))
+    with open(check_path, "w", encoding="utf-8") as fp:
+        fp.write(text)
+    print(text, flush=True)
+    paths.append(check_path)
+
+    if do_fix:
+        choices = build_fix_choices(result.get("groups") or [])
+        if not choices:
+            print("（沒有可以安全統一的詞，未輸出統一版字幕）", flush=True)
+        else:
+            fixed, count = apply_term_fixes(cues, choices)
+            srt_path = unique_path(
+                os.path.join(out_dir, f"{base}_術語統一.srt"))
+            export(fixed, srt_path, config.get("subtitle_style"))
+            print(f"（已統一 {count} 處寫法 → {srt_path}）", flush=True)
+            paths.append(srt_path)
+    return paths
 
 
 def _export_sponsorcheck(media_path: str, cues: list, config: dict,
