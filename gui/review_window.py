@@ -32,6 +32,8 @@ from subtitle.media import probe_duration
 from subtitle.pipeline import resolve_output_dir, unique_path
 from subtitle.publisher import build_publish_pack, resolve_publish_settings
 from subtitle.segmenter import build_cues_from_words
+from subtitle.clipplan import (format_clip_plan_report, plan_clips,
+                               resolve_clipplan_settings)
 from subtitle.shorts import cut_vertical_clip, resolve_shorts_settings
 from subtitle.thumbnails import (generate_thumbnails,
                                  resolve_thumbnail_settings)
@@ -260,7 +262,9 @@ class ReviewWindow(tk.Toplevel):
         self.filter_var = tk.StringVar(value="all")
         for value, label in (("all", "全部"), ("highlight", "只看精彩"),
                              ("review", "只看待審視")):
-            tk.Radiobutton(
+            # 有選取狀態的控件一律用 ttk：classic tk 元件在 sv_ttk
+            # 主題下不會跟著換色，深色主題會整顆糊掉。
+            ttk.Radiobutton(
                 ops, text=label, value=value, variable=self.filter_var,
                 command=self._on_filter_change,
             ).pack(side="left")
@@ -334,6 +338,11 @@ class ReviewWindow(tk.Toplevel):
             command=self._on_export_shorts, state="disabled")
         shorts_btn.pack(side="left", padx=(8, 3))
         self.export_buttons.append(shorts_btn)
+        auto_btn = ttk.Button(
+            row3, text="自動選段輸出",
+            command=self._on_auto_shorts, state="disabled")
+        auto_btn.pack(side="left", padx=(0, 3))
+        self.export_buttons.append(auto_btn)
 
         # 第三排之二：字幕安全區（避開 TikTok／Reels／Shorts 平台介面遮擋）。
         row3b = ttk.Frame(exports)
@@ -836,6 +845,52 @@ class ReviewWindow(tk.Toplevel):
                 if clip_words:
                     cues = build_cues_from_words(clip_words, seg_cfg)
             jobs.append({"start": item["start"], "end": item["end"],
+                         "cues": cues})
+
+        self._set_processing(True)
+        threading.Thread(
+            target=self._shorts_worker, args=(jobs, settings),
+            daemon=True).start()
+
+    def _on_auto_shorts(self):
+        """
+        自動選段輸出：不必自己一段一段勾，直接規劃出幾支可發的短片。
+
+        選段邏輯完全交給 clipplan（沿講話段落邊界擴張、彼此不重疊、
+        長度落在平台可用範圍），輸出仍走既有的 _shorts_worker。
+        """
+        if self.is_processing or not self.items:
+            return
+        if not self._require_ffmpeg("輸出短片"):
+            return
+
+        plan_settings = resolve_clipplan_settings(self.config_data)
+        clips = plan_clips(self.items, plan_settings,
+                           media_duration=self.media_duration)
+        if not clips:
+            messagebox.showinfo(
+                "沒有規劃出短片段落",
+                format_clip_plan_report(clips, plan_settings), parent=self)
+            return
+
+        if not messagebox.askokcancel(
+                "自動選段結果",
+                format_clip_plan_report(clips, plan_settings)
+                + "\n\n要照這個規劃輸出嗎？", parent=self):
+            return
+
+        settings = self._collect_shorts_settings()
+        seg_cfg = self.config_data.get("segmentation", {})
+        jobs = []
+        for clip in clips:
+            cues = []
+            if settings["burn_subtitles"] and self.words:
+                clip_words = [w for w in self.words
+                              if w["end"] > clip["start"] - 0.05
+                              and w["start"] < clip["end"] + 0.05]
+                if clip_words:
+                    cues = build_cues_from_words(clip_words, seg_cfg)
+            jobs.append({"start": clip["start"], "end": clip["end"],
                          "cues": cues})
 
         self._set_processing(True)
