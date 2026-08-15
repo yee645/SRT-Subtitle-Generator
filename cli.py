@@ -12,6 +12,8 @@
     python main.py --formats srt,ass 影片.mp4     # 本次改匯出 SRT 與 ASS
     python main.py --output-dir D:/out 影片.mp4   # 本次改輸出到指定資料夾
     python main.py --review 素材1.mp4 素材2.mp4   # 批次審片：輸出片段分析 CSV
+    python main.py --shorts 長片.mp4              # 自動挑段並輸出多支直式短片
+    python main.py --shorts --shorts-count 5 *.mp4  # 批次：每支各出 5 支短片
     python main.py --audiocheck 影片.mp4          # 上片前音訊健檢（免轉錄）
     python main.py --thumbnails 影片.mp4          # 封面候選圖（免轉錄）
     python main.py --audiofix 影片.mp4            # 音訊修復版（降噪等，免轉錄）
@@ -47,11 +49,13 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from typing import Optional
 
 from config import load_config
 from subtitle.adbreaks import resolve_adbreak_settings, suggest_ad_breaks
 from subtitle.adfriendly import (format_adfriendly_report,
                                  resolve_adfriendly_settings, scan_cues)
+from subtitle.audio import DEFAULT_TARGET_LUFS
 from subtitle.audiocheck import format_report, run_audio_check
 from subtitle.audiofix import (fix_audio, resolve_audiofix_settings,
                                suggest_output_path)
@@ -123,6 +127,10 @@ from subtitle.volumeconsistency import (analyze_volume_consistency,
                                         suggest_volume_output_path)
 from subtitle.thumbnails import (generate_thumbnails,
                                  resolve_thumbnail_settings)
+from subtitle.clipplan import (format_clip_plan_report, plan_clips,
+                               resolve_clipplan_settings)
+from subtitle.shorts import cut_vertical_clip, resolve_shorts_settings
+from subtitle.segmenter import build_cues_from_words
 from subtitle.review import (analyze, build_chapters, collect_highlights,
                              compute_loudness, export_batch_csv,
                              export_batch_html, export_csv,
@@ -293,6 +301,18 @@ def build_parser() -> argparse.ArgumentParser:
              "「檔名_工商揭露.txt」；詞表與門檻可於 config.json 的 "
              "sponsorcheck 調整。可與一般轉錄／對齊模式或 --subs 併用。")
     parser.add_argument(
+        "--shorts", action="store_true",
+        help="自動把長片挑成多支直式短片（9:16）：沿用審片模組已經算好的"
+             "精彩片段，規劃出彼此不重疊、長度落在平台可用範圍的段落，"
+             "再逐段輸出「檔名_短片01.mp4」。太短的片段會沿講話段落邊界"
+             "往外擴（不會從句子中間切），擴不到最短長度就放棄而不硬湊。"
+             "本模式會先轉錄，可與 --thumbnails／--audiocheck 併用；"
+             "支數與長度可於 config.json 的 clipplan 調整。")
+    parser.add_argument(
+        "--shorts-count", type=int, metavar="支數",
+        help="搭配 --shorts 使用：本次要輸出幾支短片（覆寫 config.json 的"
+             " clipplan.count，僅影響本次執行）。")
+    parser.add_argument(
         "--termcheck", action="store_true",
         help="術語一致性檢查：找出同一個詞在同一支影片裡被寫成好幾種樣子"
              "（YouTube／Youtube／youtube、Anthropic／Anthropik）。語音辨識"
@@ -432,11 +452,13 @@ def main(argv=None) -> int:
                 "直接用既有字幕匯出／燒錄），目前給了 "
                 f"{len(args.files)} 個檔案。")
         results = _run_subs_batch(args.files[0], args.subs, config, report)
-    elif args.review:
+    elif args.review or args.shorts:
         results = _run_review_batch(
             args.files, config, report,
             with_audiocheck=args.audiocheck,
-            with_thumbnails=args.thumbnails)
+            with_thumbnails=args.thumbnails,
+            with_shorts=args.shorts,
+            shorts_count=args.shorts_count)
     elif (args.audiocheck or args.thumbnails or args.audiofix
             or args.branding or args.videocheck or args.volumecheck
             or args.volumefix or args.audiovis or args.colorcheck or args.pacecheck):
@@ -958,6 +980,64 @@ def _export_endscreen(media_path: str, cues: list, config: dict,
     return check_path
 
 
+def _export_shorts(media_path: str, items: list, words: list,
+                   duration: float, config: dict, out_dir: str, base: str,
+                   count_override: Optional[int], report, prefix: str = ""
+                   ) -> list:
+    """
+    規劃並輸出多支直式短片，回傳產生的檔案路徑清單。
+
+    選段完全交給 clipplan（沿講話段落邊界擴張、彼此不重疊、長度落在
+    平台可用範圍），實際裁切重用既有的 shorts.cut_vertical_clip——
+    本函式不重新實作任何一邊。
+    """
+    plan_settings = resolve_clipplan_settings(config)
+    if count_override:
+        plan_settings["count"] = max(int(count_override), 1)
+    clips = plan_clips(items, plan_settings, media_duration=duration)
+
+    text = format_clip_plan_report(clips, plan_settings)
+    print(text, flush=True)
+    plan_path = unique_path(os.path.join(out_dir, f"{base}_短片選段.txt"))
+    with open(plan_path, "w", encoding="utf-8") as fp:
+        fp.write(text)
+    paths = [plan_path]
+    if not clips:
+        return paths
+
+    shorts_settings = resolve_shorts_settings(config)
+    style = config.get("subtitle_style", {})
+    seg_cfg = config.get("segmentation", {})
+    loudnorm_target = (DEFAULT_TARGET_LUFS
+                       if shorts_settings["loudnorm"] else None)
+    total = len(clips)
+    for index, clip in enumerate(clips, start=1):
+        report(f"{prefix}輸出短片 {index}/{total}"
+               f"（{clip['duration']:.0f} 秒）...")
+        # 字幕從逐字時間軸重建，時間軸由輸出流程平移到片段起點。
+        cues = []
+        if shorts_settings["burn_subtitles"] and words:
+            clip_words = [w for w in words
+                          if w["end"] > clip["start"] - 0.05
+                          and w["start"] < clip["end"] + 0.05]
+            if clip_words:
+                cues = build_cues_from_words(clip_words, seg_cfg)
+        output = unique_path(
+            os.path.join(out_dir, f"{base}_短片{index:02d}.mp4"))
+        cut_vertical_clip(
+            media_path, clip["start"], clip["end"], output,
+            mode=shorts_settings["mode"],
+            focus_x=shorts_settings["focus_x"],
+            style=style, cues=cues,
+            loudnorm_target=loudnorm_target,
+            safe_zone_enabled=shorts_settings["safe_zone_enabled"],
+            safe_zone_top=shorts_settings["safe_zone_top"],
+            safe_zone_bottom=shorts_settings["safe_zone_bottom"],
+            safe_zone_side=shorts_settings["safe_zone_side"])
+        paths.append(output)
+    return paths
+
+
 def _export_termcheck(cues: list, config: dict, out_dir: str, base: str,
                       do_fix: bool = False) -> list:
     """
@@ -1250,7 +1330,9 @@ def _run_tools_batch(files: list, config: dict, report,
 
 def _run_review_batch(files: list, config: dict, report,
                       with_audiocheck: bool = False,
-                      with_thumbnails: bool = False) -> list:
+                      with_thumbnails: bool = False,
+                      with_shorts: bool = False,
+                      shorts_count: Optional[int] = None) -> list:
     """審片模式批次：逐檔轉錄、分析並輸出審片清單 CSV，回傳與 run_batch 同構的結果。"""
     automation = config.get("automation", {})
     settings = resolve_settings(config)
@@ -1302,6 +1384,10 @@ def _run_review_batch(files: list, config: dict, report,
                 report(f"{prefix}擷取封面候選中（優先精彩段落）...")
                 exports.extend(_export_thumbnails(
                     path, items, duration, config, out_dir, base))
+            if with_shorts:
+                exports.extend(_export_shorts(
+                    path, items, words, duration, config, out_dir, base,
+                    shorts_count, report, prefix))
             dropped = sum(1 for item in items if not item["keep"])
             report(f"{prefix}分析完成，共 {len(items)} 段（建議捨棄 {dropped} 段）",
                    (index + 1) / total)
