@@ -856,7 +856,10 @@ class SrtApp(tk.Tk):
             self.apply_text_edits()
             self.status_var.set("已套用翻譯結果。")
 
-        TranslateDialog(self, self.config_data, self.cues, on_done=on_done)
+        files = self._selected_files()
+        media_path = files[0] if files and os.path.exists(files[0]) else ""
+        TranslateDialog(self, self.config_data, self.cues, on_done=on_done,
+                        media_path=media_path)
 
     def _import_subtitles(self):
         """
