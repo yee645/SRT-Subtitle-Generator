@@ -201,6 +201,12 @@ DEFAULT_CONFIG = {
         "mode": "bilingual",      # bilingual＝原文+譯文上下行；replace＝僅譯文
         "batch_size": 30,         # 每次 API 請求的句數
     },
+    # 多語字幕包：一份母帶字幕一次翻成多國語言，各自輸出可上傳的單語檔。
+    "multilang": {
+        "languages": "en,ja",   # 目標語言代碼（逗號分隔）
+        "skip_source": True,    # 略過與影片原文相同的語言
+        "dedupe": True,         # 重複句子只送一次 API（省費用）
+    },
     # 字幕健檢門檻（閱讀速度 CPS、顯示時間、行數與行長）。
     "subtitlecheck": {
         "cps_limit": 17.0,          # 每秒字元數超過此值標記「閱讀過快」

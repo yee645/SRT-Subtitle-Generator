@@ -13,6 +13,8 @@
     python main.py --output-dir D:/out 影片.mp4   # 本次改輸出到指定資料夾
     python main.py --review 素材1.mp4 素材2.mp4   # 批次審片：輸出片段分析 CSV
     python main.py --shorts 長片.mp4              # 自動挑段並輸出多支直式短片
+    python main.py --multilang 影片.mp4           # 多語字幕包：一次翻成多國語言
+    python main.py --multilang --languages en,ja,ko --subs 字幕.srt 影片.mp4
     python main.py --shorts --shorts-count 5 *.mp4  # 批次：每支各出 5 支短片
     python main.py --audiocheck 影片.mp4          # 上片前音訊健檢（免轉錄）
     python main.py --thumbnails 影片.mp4          # 封面候選圖（免轉錄）
@@ -129,6 +131,10 @@ from subtitle.thumbnails import (generate_thumbnails,
                                  resolve_thumbnail_settings)
 from subtitle.clipplan import (format_clip_plan_report, plan_clips,
                                resolve_clipplan_settings)
+from subtitle.multilang import (build_language_pack, format_pack_report,
+                                pack_path, parse_languages,
+                                resolve_multilang_settings)
+from subtitle.translator import resolve_translate_settings
 from subtitle.shorts import cut_vertical_clip, resolve_shorts_settings
 from subtitle.segmenter import build_cues_from_words
 from subtitle.review import (analyze, build_chapters, collect_highlights,
@@ -300,6 +306,19 @@ def build_parser() -> argparse.ArgumentParser:
              "章節行，讓觀眾能跳過（坦白反而留得住觀眾）。輸出"
              "「檔名_工商揭露.txt」；詞表與門檻可於 config.json 的 "
              "sponsorcheck 調整。可與一般轉錄／對齊模式或 --subs 併用。")
+    parser.add_argument(
+        "--multilang", action="store_true",
+        help="多語字幕包：把一份校對好的母帶字幕一次翻成多國語言，每個語言"
+             "各輸出一個可直接上傳的「單語」SRT（如「影片.en.srt」）。"
+             "YouTube 官方指出平均超過三分之二的觀看時間來自居住地區以外"
+             "的觀眾。注意上傳用的字幕每個語言都必須是單語檔——既有的"
+             "「字幕翻譯」產出的是給燒錄用的雙語字幕，拿去上傳英文觀眾"
+             "每一句都會看到黏著的原文。需要 OpenAI API 金鑰（沿用轉寫"
+             "設定的金鑰）；語言清單可於 config.json 的 multilang 調整。")
+    parser.add_argument(
+        "--languages", metavar="語言代碼",
+        help="搭配 --multilang 使用：本次要翻的語言（逗號分隔，如 "
+             "en,ja,ko），覆寫 config.json 的 multilang.languages。")
     parser.add_argument(
         "--shorts", action="store_true",
         help="自動把長片挑成多支直式短片（9:16）：沿用審片模組已經算好的"
@@ -644,6 +663,25 @@ def main(argv=None) -> int:
                 report(f"{os.path.basename(item['path'])}："
                        f"片尾空間健檢略過（{exc}）")
 
+    if args.multilang:
+        automation = config.get("automation", {})
+        out_dir_override = (automation.get("output_dir") or "").strip()
+        for item in results:
+            cues = (item.get("result") or {}).get("cues") if item["ok"] else None
+            if not cues:
+                continue
+            out_dir = out_dir_override or os.path.dirname(
+                os.path.abspath(item["path"]))
+            os.makedirs(out_dir, exist_ok=True)
+            try:
+                for path in _export_multilang(
+                        item["path"], cues, config, out_dir,
+                        args.languages, report):
+                    item["result"]["exports"].append(path)
+            except (RuntimeError, ValueError) as exc:
+                report(f"{os.path.basename(item['path'])}："
+                       f"多語字幕包略過（{exc}）")
+
     if args.termcheck:
         automation = config.get("automation", {})
         out_dir_override = (automation.get("output_dir") or "").strip()
@@ -978,6 +1016,54 @@ def _export_endscreen(media_path: str, cues: list, config: dict,
         fp.write(text)
     print(text, flush=True)
     return check_path
+
+
+def _export_multilang(media_path: str, cues: list, config: dict,
+                      out_dir: str, languages_override, report) -> list:
+    """
+    把母帶字幕翻成多國語言，各自輸出單語 SRT，回傳產生的檔案路徑清單。
+
+    翻譯本身呼叫既有的 translator（透過 multilang），本函式只負責
+    挑語言、寫檔與回報；某一個語言失敗不會中斷其他語言。
+    """
+    from subtitle.exporter import export
+
+    settings = resolve_multilang_settings(config)
+    source_language = (config.get("transcription", {})
+                       .get("language", "") or "").strip()
+    # 有給 --languages 就以它為準，**即使是空字串**——使用者明講了空清單，
+    # 靜靜退回設定檔的預設語言等於擅自替他決定要翻哪幾種、還要付 API 費用。
+    languages = parse_languages(
+        settings["languages"] if languages_override is None
+        else languages_override,
+        source_language=source_language,
+        skip_source=settings["skip_source"])
+    if not languages:
+        print(format_pack_report({}, [], {}, {}), flush=True)
+        return []
+
+    api_key = (config.get("transcription", {}).get("api_key", "") or "").strip()
+    if not api_key:
+        raise RuntimeError(
+            "多語字幕包需要 OpenAI API 金鑰（於「轉寫設定」填入）。")
+    batch_size = resolve_translate_settings(config)["batch_size"]
+
+    pack, paths, failed = {}, {}, {}
+    for language in languages:
+        try:
+            report(f"翻譯成 {language}...")
+            one = build_language_pack(
+                cues, [language], api_key, batch_size=batch_size,
+                dedupe=settings["dedupe"])
+            pack[language] = one[language]
+            target = pack_path(media_path, language, out_dir)
+            export(pack[language], target, config.get("subtitle_style"))
+            paths[language] = target
+        except Exception as exc:      # 單一語言失敗不影響其他語言。
+            failed[language] = str(exc)
+
+    print(format_pack_report(pack, languages, paths, failed), flush=True)
+    return list(paths.values())
 
 
 def _export_shorts(media_path: str, items: list, words: list,
