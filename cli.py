@@ -14,6 +14,7 @@
     python main.py --review 素材1.mp4 素材2.mp4   # 批次審片：輸出片段分析 CSV
     python main.py --shorts 長片.mp4              # 自動挑段並輸出多支直式短片
     python main.py --multilang 影片.mp4           # 多語字幕包：一次翻成多國語言
+    python main.py --beatcheck --music 配樂.mp3 影片.mp4  # 節拍分析＋剪點對齊
     python main.py --multilang --languages en,ja,ko --subs 字幕.srt 影片.mp4
     python main.py --shorts --shorts-count 5 *.mp4  # 批次：每支各出 5 支短片
     python main.py --audiocheck 影片.mp4          # 上片前音訊健檢（免轉錄）
@@ -131,6 +132,8 @@ from subtitle.thumbnails import (generate_thumbnails,
                                  resolve_thumbnail_settings)
 from subtitle.clipplan import (format_clip_plan_report, plan_clips,
                                resolve_clipplan_settings)
+from subtitle.beatsync import (analyze_beats, format_beat_report,
+                               resolve_beatsync_settings, snap_times)
 from subtitle.multilang import (build_language_pack, format_pack_report,
                                 pack_path, parse_languages,
                                 resolve_multilang_settings)
@@ -307,6 +310,19 @@ def build_parser() -> argparse.ArgumentParser:
              "「檔名_工商揭露.txt」；詞表與門檻可於 config.json 的 "
              "sponsorcheck 調整。可與一般轉錄／對齊模式或 --subs 併用。")
     parser.add_argument(
+        "--beatcheck", action="store_true",
+        help="音樂節拍分析：量出配樂的 BPM 與每一拍的時間點，並把影片"
+             "既有的剪接點對齊到最近的拍子上。調研指出「把轉場對齊到"
+             "音樂的重拍與停頓」至今仍是編輯得手動做的事。搭配 --music "
+             "指定配樂檔；若位置參數是影片，會一併掃出畫面剪接點並算出"
+             "各要挪多少秒。離拍子太遠的剪點不會硬挪（那會讓畫面與內容"
+             "對不上）。輸出「檔名_節拍分析.txt」；門檻可於 config.json "
+             "的 beatsync 調整。純人聲或環境音沒有穩定拍點時會據實回報。")
+    parser.add_argument(
+        "--music", metavar="配樂檔",
+        help="搭配 --beatcheck 使用：要分析節拍的音樂檔；未指定時改為"
+             "分析位置參數本身的音訊。")
+    parser.add_argument(
         "--multilang", action="store_true",
         help="多語字幕包：把一份校對好的母帶字幕一次翻成多國語言，每個語言"
              "各輸出一個可直接上傳的「單語」SRT（如「影片.en.srt」）。"
@@ -480,8 +496,10 @@ def main(argv=None) -> int:
             shorts_count=args.shorts_count)
     elif (args.audiocheck or args.thumbnails or args.audiofix
             or args.branding or args.videocheck or args.volumecheck
-            or args.volumefix or args.audiovis or args.colorcheck or args.pacecheck):
-        # 免轉錄的輕量工具模式：健檢、封面候選、音訊修復與品牌套版都只需 ffmpeg。
+            or args.volumefix or args.audiovis or args.colorcheck
+            or args.pacecheck or args.beatcheck):
+        # 免轉錄的輕量工具模式：健檢、封面候選、音訊修復、品牌套版與
+        # 節拍分析都只需 ffmpeg，不必先跑語音辨識。
         results = _run_tools_batch(
             args.files, config, report,
             do_audiocheck=args.audiocheck,
@@ -662,6 +680,24 @@ def main(argv=None) -> int:
             except (RuntimeError, ValueError) as exc:
                 report(f"{os.path.basename(item['path'])}："
                        f"片尾空間健檢略過（{exc}）")
+
+    if args.beatcheck:
+        automation = config.get("automation", {})
+        out_dir_override = (automation.get("output_dir") or "").strip()
+        for item in results:
+            if not item["ok"]:
+                continue
+            out_dir = out_dir_override or os.path.dirname(
+                os.path.abspath(item["path"]))
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(item["path"]))[0]
+            try:
+                item["result"]["exports"].append(
+                    _export_beatcheck(item["path"], args.music, config,
+                                      out_dir, base, report))
+            except (RuntimeError, ValueError) as exc:
+                report(f"{os.path.basename(item['path'])}："
+                       f"節拍分析略過（{exc}）")
 
     if args.multilang:
         automation = config.get("automation", {})
@@ -1015,6 +1051,38 @@ def _export_endscreen(media_path: str, cues: list, config: dict,
     with open(check_path, "w", encoding="utf-8") as fp:
         fp.write(text)
     print(text, flush=True)
+    return check_path
+
+
+def _export_beatcheck(media_path: str, music_path, config: dict,
+                      out_dir: str, base: str, report) -> str:
+    """
+    分析配樂節拍並把影片剪點對齊過去，輸出報告文字檔，回傳報告路徑。
+
+    節拍偵測與對齊都交給 beatsync；畫面剪接點重用既有的
+    pacing.detect_scene_changes，本函式不重新實作任何一邊。
+    """
+    from subtitle.media import has_video_stream
+    from subtitle.pacing import detect_scene_changes, resolve_pacing_settings
+
+    settings = resolve_beatsync_settings(config)
+    target = music_path or media_path
+    report(f"分析 {os.path.basename(target)} 的節拍…")
+    result = analyze_beats(target, config)
+
+    snapped = None
+    # 有指定配樂、而且位置參數本身是影片時，才去掃畫面剪接點來對齊。
+    if result["bpm"] and music_path and has_video_stream(media_path):
+        report("掃描畫面剪接點…")
+        cuts = detect_scene_changes(media_path, resolve_pacing_settings(config))
+        if cuts:
+            snapped = snap_times(cuts, result["beats"], settings["max_shift"])
+
+    text = format_beat_report(result, snapped, settings)
+    print(text, flush=True)
+    check_path = unique_path(os.path.join(out_dir, f"{base}_節拍分析.txt"))
+    with open(check_path, "w", encoding="utf-8") as fp:
+        fp.write(text)
     return check_path
 
 
