@@ -18,7 +18,11 @@ from config import save_config
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
 from subtitle.audio import mix_background_music, resolve_ducking_settings
+from subtitle.beatsync import (analyze_beats, format_beat_report,
+                               resolve_beatsync_settings, snap_times)
 from subtitle.burner import ffmpeg_available
+from subtitle.media import has_video_stream
+from subtitle.pacing import detect_scene_changes, resolve_pacing_settings
 from subtitle.pipeline import unique_path
 
 logger = logging.getLogger(__name__)
@@ -120,6 +124,9 @@ class MusicDuckingDialog(tk.Toplevel):
         self.run_btn = ttk.Button(
             buttons, text="輸出混音影片", command=self._on_run)
         self.run_btn.pack(side="left")
+        self.beat_btn = ttk.Button(
+            buttons, text="分析節拍（對齊剪點）", command=self._on_beatcheck)
+        self.beat_btn.pack(side="left", padx=(6, 0))
         ttk.Button(buttons, text="關閉", command=self._on_close).pack(
             side="right")
 
@@ -192,6 +199,56 @@ class MusicDuckingDialog(tk.Toplevel):
             daemon=True,
         ).start()
 
+    def _on_beatcheck(self):
+        """
+        分析配樂節拍，並把影片既有的剪接點對齊到拍子上。
+
+        節拍偵測與對齊交給 beatsync，畫面剪接點重用既有的
+        pacing.detect_scene_changes；本方法只收參數與回報。
+        """
+        if self.is_processing:
+            return
+        music_path = self.music_var.get().strip()
+        if not music_path or not os.path.exists(music_path):
+            messagebox.showinfo("提示", "請先選擇要分析節拍的背景音樂檔。",
+                                parent=self)
+            return
+        if not ffmpeg_available():
+            show_friendly_error(
+                self, "節拍分析需要 ffmpeg",
+                RuntimeError("找不到 ffmpeg，請先安裝並加入系統 PATH。"),
+                on_install_ffmpeg=lambda: FfmpegInstallDialog(self))
+            return
+        video_path = self.video_var.get().strip()
+        self._set_processing(True)
+        threading.Thread(
+            target=self._beat_worker, args=(video_path, music_path),
+            daemon=True).start()
+
+    def _beat_worker(self, video_path, music_path):
+        """背景執行緒：分析節拍並對齊剪點。"""
+        try:
+            def report(ratio, message):
+                self.result_queue.put(("status", (message, ratio)))
+
+            settings = resolve_beatsync_settings(self.config_data)
+            result = analyze_beats(music_path, self.config_data,
+                                   progress_cb=report)
+            snapped = None
+            if (result["bpm"] and video_path and os.path.exists(video_path)
+                    and has_video_stream(video_path)):
+                report(0.8, "掃描畫面剪接點…")
+                cuts = detect_scene_changes(
+                    video_path, resolve_pacing_settings(self.config_data))
+                if cuts:
+                    snapped = snap_times(cuts, result["beats"],
+                                         settings["max_shift"])
+            self.result_queue.put(
+                ("beat_done", format_beat_report(result, snapped, settings)))
+        except Exception as exc:   # 背景執行緒須攔截所有例外回報主執行緒。
+            logger.exception("節拍分析失敗")
+            self.result_queue.put(("error", exc))
+
     def _run_worker(self, video_path, music_path, output_path, settings):
         try:
             def report(ratio, message):
@@ -218,6 +275,11 @@ class MusicDuckingDialog(tk.Toplevel):
                     self.status_var.set(f"完成：{payload}")
                     messagebox.showinfo(
                         "配樂助手", f"已輸出混音影片：\n{payload}", parent=self)
+                elif kind == "beat_done":
+                    self._set_processing(False)
+                    self.progress_var.set(100.0)
+                    self.status_var.set("節拍分析完成。")
+                    messagebox.showinfo("音樂節拍分析", payload, parent=self)
                 elif kind == "error":
                     self._set_processing(False)
                     self.status_var.set("混音失敗。")
@@ -230,7 +292,9 @@ class MusicDuckingDialog(tk.Toplevel):
 
     def _set_processing(self, processing):
         self.is_processing = processing
-        self.run_btn.configure(state="disabled" if processing else "normal")
+        state = "disabled" if processing else "normal"
+        self.run_btn.configure(state=state)
+        self.beat_btn.configure(state=state)
 
     def _on_close(self):
         if getattr(self, "_poll_job", None):

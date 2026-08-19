@@ -201,6 +201,14 @@ DEFAULT_CONFIG = {
         "mode": "bilingual",      # bilingual＝原文+譯文上下行；replace＝僅譯文
         "batch_size": 30,         # 每次 API 請求的句數
     },
+    # 音樂節拍分析：量出 BPM 與拍點，把剪點對齊到拍子上。
+    "beatsync": {
+        "min_bpm": 60.0,          # 搜尋的最慢速度
+        "max_bpm": 200.0,         # 搜尋的最快速度
+        "max_shift": 0.25,        # 剪點最多可挪幾秒去對齊拍子
+        "octave_tolerance": 0.85, # 倍速分數達此比例就改取較快者
+        "min_confidence": 2.0,    # 低於此信心視為「沒有穩定節拍」
+    },
     # 多語字幕包：一份母帶字幕一次翻成多國語言，各自輸出可上傳的單語檔。
     "multilang": {
         "languages": "en,ja",   # 目標語言代碼（逗號分隔）
