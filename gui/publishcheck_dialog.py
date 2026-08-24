@@ -20,6 +20,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from config import save_config
 from gui.error_dialog import show_friendly_error
+from subtitle.desccheck import (analyze_description, format_desc_report,
+                                resolve_desccheck_settings)
 from subtitle.publishcheck import (analyze_publish, format_publish_report,
                                    resolve_publishcheck_settings)
 
@@ -184,7 +186,16 @@ class PublishCheckDialog(tk.Toplevel):
                 self.description.get("1.0", "end"),
                 self.tags_var.get(),
                 settings)
-            self.report_text = format_publish_report(result, settings)
+            # 上限檢查之外，再看說明欄的結構（前幾行、堆砌、分段）。
+            # 這裡沒有影片長度，章節那一項會自動略過。
+            description = self.description.get("1.0", "end")
+            desc_result = analyze_description(description, 0.0,
+                                              self.config_data)
+            self.report_text = (
+                format_publish_report(result, settings) + "\n\n"
+                + format_desc_report(desc_result,
+                                     resolve_desccheck_settings(
+                                         self.config_data)))
             self.report.configure(state="normal")
             self.report.delete("1.0", "end")
             self.report.insert("1.0", self.report_text, "report")
@@ -193,8 +204,18 @@ class PublishCheckDialog(tk.Toplevel):
             self.save_btn.configure(state="normal")
 
             stats = result.get("stats") or {}
+            # 上限沒問題不代表寫得好：說明欄結構若有建議，狀態列要說出來，
+            # 否則會出現「可以直接使用」與下方警告並存的矛盾訊息。
+            desc_warns = sum(1 for f in desc_result.get("findings") or []
+                             if f["level"] != "good")
             if result.get("ok"):
-                self.status_var.set("符合 YouTube 的各項上限，可以直接使用。")
+                if desc_warns:
+                    self.status_var.set(
+                        f"符合各項上限，但說明欄結構有 {desc_warns} 項建議"
+                        "（見報告下半部）。")
+                else:
+                    self.status_var.set(
+                        "符合 YouTube 的各項上限，可以直接使用。")
             elif stats.get("hashtag_count", 0) > settings["max_hashtags"]:
                 self.status_var.set(
                     f"hashtag 共 {stats['hashtag_count']} 個，超過上限——"

@@ -201,6 +201,15 @@ DEFAULT_CONFIG = {
         "mode": "bilingual",      # bilingual＝原文+譯文上下行；replace＝僅譯文
         "batch_size": 30,         # 每次 API 請求的句數
     },
+    # 說明欄結構健檢：寫了，但寫在對的地方嗎（前幾行、堆砌、章節、分段）。
+    "desccheck": {
+        "fold_chars": 200,         # 收合前看得到的字元數
+        "min_chars": 100,          # 低於此字元數視為幾乎沒寫
+        "max_term_ratio": 0.05,    # 單一詞佔比超過此值視為堆砌
+        "min_repeat": 4,           # 至少重複幾次才可能判為堆砌
+        "max_plumbing_ratio": 0.55,# 開頭被連結／交際語佔掉的比例上限
+        "chapter_hint_seconds": 300.0,  # 影片長於此秒數卻無章節時提醒
+    },
     # 音樂節拍分析：量出 BPM 與拍點，把剪點對齊到拍子上。
     "beatsync": {
         "min_bpm": 60.0,          # 搜尋的最慢速度

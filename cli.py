@@ -94,6 +94,8 @@ from subtitle.thumbcheck import (format_ranking_report,
                                  format_thumb_report,
                                  rank_thumbnails,
                                  resolve_thumbcheck_settings)
+from subtitle.desccheck import (analyze_description, format_desc_report,
+                                resolve_desccheck_settings)
 from subtitle.publishcheck import (analyze_publish,
                                    format_publish_report,
                                    resolve_publishcheck_settings)
@@ -459,8 +461,10 @@ def main(argv=None) -> int:
     if args.publishcheck:
         # 發佈資訊健檢的輸入是「一份文字」而非媒體內容，與其他逐檔處理的
         # 模式結構不同，因此獨立成一個分支。
+        # 位置參數若給了媒體檔，拿來取得影片長度（判斷該不該有章節）。
+        media = next((f for f in args.files if os.path.exists(f)), "")
         results = _run_publishcheck(args.publishcheck, args.tags, config,
-                                    report)
+                                    report, media_path=media)
     elif args.thumbcheck:
         # 封面健檢的輸入是「圖片」而非影片內容，與其他逐檔處理的模式
         # 結構不同，因此獨立成一個分支。
@@ -826,7 +830,7 @@ def _export_subcheck(cues: list, config: dict, out_dir: str, base: str) -> str:
 
 
 def _run_publishcheck(text_path: str, tags: str, config: dict,
-                      report) -> list:
+                      report, media_path: str = "") -> list:
     """
     發佈資訊健檢：第一行當標題、其餘當說明欄。
 
@@ -841,10 +845,23 @@ def _run_publishcheck(text_path: str, tags: str, config: dict,
         title = lines[0].strip() if lines else ""
         description = "\n".join(lines[1:])
 
-        report("檢查各項上限…", 0.5)
+        report("檢查各項上限…", 0.4)
         settings = resolve_publishcheck_settings(config)
         result = analyze_publish(title, description, tags or "", settings)
         text = format_publish_report(result, settings)
+
+        # 上限檢查（會不會被系統拒絕）之外，再看說明欄的**結構**寫得對不對。
+        # 影片長度只用來判斷「長到該有章節了嗎」，沒給媒體檔就跳過那一項。
+        report("檢查說明欄結構…", 0.7)
+        duration = 0.0
+        if media_path:
+            try:
+                duration = probe_duration(media_path)
+            except Exception:
+                duration = 0.0
+        desc_settings = resolve_desccheck_settings(config)
+        desc_result = analyze_description(description, duration, config)
+        text = text + "\n\n" + format_desc_report(desc_result, desc_settings)
         print(text, flush=True)
 
         automation = config.get("automation", {})
