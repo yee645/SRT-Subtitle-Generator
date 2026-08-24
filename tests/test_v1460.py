@@ -91,7 +91,18 @@ check("關鍵字挑不到時照精彩分數",
 check("被挑去當開頭的句子不會又出現在摘要",
       kw_desc.count("字幕這件事") == 1, kw_desc)
 
-# ===== 5. 參數與邊界 =====
+# ===== 5. 開頭句剝完贅詞不能是空的 =====
+# _clean_title 會剝句首贅詞，整段只有「然後」時會剝成空字串；直接拿來
+# 當開頭會讓草稿以一行空白開場、而且完全沒有主題句。
+filler_items = [seg(0, 3, "然後", 9.0, True), seg(4, 9, "剪輯節奏其實有三個關鍵", 5.0, True)]
+fd = pub.build_description(filler_items, None, ["剪輯"])
+check("開頭句被剝成空字串時往後找下一句", fd.startswith("剪輯節奏"), repr(fd[:20]))
+check("草稿不以空行開頭", not fd.startswith("\n"), repr(fd[:10]))
+check("全部段落都只剩贅詞時回空字串",
+      pub.build_description([seg(0, 3, "然後", 9.0, True),
+                             seg(4, 9, "呃", 5.0, True)], None, None) == "")
+
+# ===== 6. 參數與邊界 =====
 check("可調摘要點數",
       pub.build_description(ITEMS, None, None,
                             summary_points=1).count("・") == 1)
@@ -116,7 +127,7 @@ check("只有一句時也能組出草稿",
 check("hashtag 最多取五個",
       pub.build_description(ITEMS, None, list("abcdefgh")).count("#") == 5)
 
-# ===== 6. 發佈包整體 =====
+# ===== 7. 發佈包整體 =====
 pack = pub.build_publish_pack(ITEMS, pub.resolve_publish_settings(),
                               CHAPTERS, "示範.mp4")
 check("發佈包含描述草稿區塊", "【描述草稿" in pack)
@@ -130,7 +141,7 @@ check("沒有段落時發佈包不會炸",
       isinstance(pub.build_publish_pack([], pub.resolve_publish_settings()),
                  str))
 
-# ===== 7. 重用既有邏輯，不重新實作 =====
+# ===== 8. 重用既有邏輯，不重新實作 =====
 import inspect
 src = inspect.getsource(pub.build_description)
 check("句子清理重用 _clean_title", "_clean_title" in src)

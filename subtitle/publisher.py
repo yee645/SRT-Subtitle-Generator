@@ -335,17 +335,28 @@ def build_description(items, chapters=None, tags=None,
     # 開頭句優先挑**講到主題關鍵字**的那一句：前 200 字元權重最高，
     # 主題詞落在這裡才有意義，落在最後一段等於白放。挑不到就照分數。
     keyword = _top_keyword(items, extra_words)
-    lead_item = pool[0]
-    if keyword:
-        for item in pool:
-            if keyword.lower() in (item.get("text") or "").lower():
-                lead_item = item
-                break
 
-    lead = _clean_title(lead_item["text"], _DESC_LEAD_CHARS)
-    lines = []
-    if lead:
-        lines.append(lead + "。")
+    def _lead_from(candidates):
+        # 剝掉句首贅詞後可能整句都不剩（例如整段只有「然後」），那種
+        # 句子當不了開頭；往後找下一句，不要留一行空白在最前面。
+        for item in candidates:
+            text = _clean_title(item.get("text") or "", _DESC_LEAD_CHARS)
+            if text:
+                return item, text
+        return None, ""
+
+    lead_item = lead = None
+    if keyword:
+        lead_item, lead = _lead_from(
+            [i for i in pool
+             if keyword.lower() in (i.get("text") or "").lower()])
+    if not lead:
+        lead_item, lead = _lead_from(pool)
+    if not lead:
+        # 全部段落都只剩贅詞，硬組出來的草稿沒有任何資訊量。
+        return ""
+
+    lines = [lead + "。"]
 
     # 摘要：再取幾個不同的重點句，讓說明欄有內容而不是只有一行。
     limit = max(int(summary_points or 0), 0)
