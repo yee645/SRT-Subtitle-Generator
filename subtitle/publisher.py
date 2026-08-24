@@ -297,6 +297,91 @@ def suggest_tags(items, tag_count: int = 15,
     return tags[:tag_count]
 
 
+DEFAULT_DESC_SUMMARY_POINTS = 3
+_DESC_LEAD_CHARS = 90
+_DESC_POINT_CHARS = 40
+
+
+def build_description(items, chapters=None, tags=None,
+                      summary_points: int = DEFAULT_DESC_SUMMARY_POINTS,
+                      extra_words: str = "") -> str:
+    """
+    組出**有結構的**描述草稿。
+
+    舊版是 `kept[0]["text"][:60] + "……"`——把第一段講話硬截 60 字。實測
+    產出的開頭是「那個 就是說 今天我們要來聊一個東西……」：句首贅詞沒剝
+    （本工具別處明明就會剪掉口頭禪）、攔腰截斷、而且取的是**第一段**而
+    不是**最精彩那段**。同一個模組替標題挑到了「怎麼樣讓你的影片節奏
+    變得更好看」，描述卻用了最沒資訊量的一句，前後不一致。
+
+    調研（中英文皆搜）給的結構很明確：**前 200 字元權重最高**、要用
+    「清楚說明這支影片是什麼」的一句開頭，接著簡短摘要、章節、最後才是
+    hashtag，而且**頻道樣板要放最下面不是最上面**。本函式就照這個順序組。
+
+    句子的挑選與清理完全重用 suggest_titles 那套（依精彩分數排序、剝
+    句首贅詞、以完整子句湊長度），不重新實作。
+    """
+    speech = [item for item in items or []
+              if item.get("kind") == "speech" and item.get("keep")
+              and (item.get("text") or "").strip()]
+    if not speech:
+        return ""
+
+    ranked = sorted(speech, key=lambda i: i.get("score", 0.0), reverse=True)
+    highlights = [i for i in ranked if TAG_HIGHLIGHT in i.get("tags", ())]
+    # 沒有標記精彩時退回分數排序，仍然比「取第一段」有意義。
+    pool = highlights or ranked
+
+    # 開頭句優先挑**講到主題關鍵字**的那一句：前 200 字元權重最高，
+    # 主題詞落在這裡才有意義，落在最後一段等於白放。挑不到就照分數。
+    keyword = _top_keyword(items, extra_words)
+    lead_item = pool[0]
+    if keyword:
+        for item in pool:
+            if keyword.lower() in (item.get("text") or "").lower():
+                lead_item = item
+                break
+
+    lead = _clean_title(lead_item["text"], _DESC_LEAD_CHARS)
+    lines = []
+    if lead:
+        lines.append(lead + "。")
+
+    # 摘要：再取幾個不同的重點句，讓說明欄有內容而不是只有一行。
+    limit = max(int(summary_points or 0), 0)
+    points = []
+    seen = {lead}
+    for item in pool:
+        if len(points) >= limit:
+            break
+        if item is lead_item:
+            continue
+        point = _clean_title(item["text"], _DESC_POINT_CHARS)
+        if point and point not in seen and len(point) >= 6:
+            seen.add(point)
+            points.append(point)
+    if points:
+        lines.append("")
+        lines.append("這支影片會講到：")
+        lines.extend(f"・{point}" for point in points)
+
+    chapters_text = _format_chapters(chapters)
+    if chapters_text:
+        lines.append("")
+        lines.append("章節：")
+        lines.append(chapters_text)
+
+    if tags:
+        lines.append("")
+        lines.append(" ".join(f"#{tag}" for tag in list(tags)[:5]))
+
+    # 頻道樣板放最後——調研明講「boilerplate 放最下面，不要放最上面」，
+    # 放最上面會把權重最高的前 200 字元佔掉。
+    lines.append("")
+    lines.append("（訂閱、社群連結與合作邀約請放在這一段，不要放最上面）")
+    return "\n".join(lines)
+
+
 def _format_chapters(chapters) -> str:
     lines = []
     for chapter in chapters or []:
@@ -328,10 +413,6 @@ def build_publish_pack(items, settings: Optional[dict] = None,
                             settings["title_max_chars"], extra_words)
     tags = suggest_tags(items, settings["tag_count"], extra_words)
 
-    kept = [item for item in items
-            if item["kind"] == "speech" and item["keep"]]
-    hook = re.sub(r"\s+", " ", kept[0]["text"].strip())[:60] if kept else ""
-
     lines = [f"===== 發佈包：{source_name or '素材'} =====", ""]
 
     lines.append(f"【建議標題（{len(titles)} 個候選，含精華句／疑問句／"
@@ -344,17 +425,10 @@ def build_publish_pack(items, settings: Optional[dict] = None,
     lines.append("")
 
     lines.append("【描述草稿（複製後自行潤飾）】")
-    if hook:
-        lines.append(hook + "……")
-        lines.append("")
-    chapters_text = _format_chapters(chapters)
-    if chapters_text:
-        lines.append("章節：")
-        lines.append(chapters_text)
-        lines.append("")
-    if tags:
-        lines.append(" ".join(f"#{tag}" for tag in tags[:5]))
-        lines.append("")
+    description = build_description(items, chapters, tags,
+                                    extra_words=extra_words)
+    lines.append(description or "（沒有可用的段落文字，請先完成分析）")
+    lines.append("")
 
     lines.append(f"【建議標籤（{len(tags)} 個，取自素材中實際講到的高頻詞，"
                  "上傳時可自行增刪）】")
