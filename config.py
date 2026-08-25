@@ -269,6 +269,12 @@ DEFAULT_CONFIG = {
         "latin_similarity": 0.80,  # 拼法相近的相似度下限（0~1）
         "ignore_terms": "",        # 誤判排除詞（逗號或空白分隔）
     },
+    # 中文字幕標點規範：逐字稿的標點與字幕的標點慣例不一樣。
+    "punctstyle": {
+        "mode": "trim",      # off／trim（只拿掉行尾標點）／subtitle（完整慣例）
+        "space": "\u3000",   # subtitle 模式下句中逗頓改成的空白
+        "cjk_ratio": 0.15,   # 一行要多少比例是中日韓字元才視為中文行
+    },
     # 工商揭露健檢：業配要在段落開始「之前」揭露，這是法規要求不是建議。
     "sponsorcheck": {
         "gap_seconds": 30.0,             # 相鄰命中間隔小於此值視為同一段

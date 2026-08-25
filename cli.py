@@ -41,6 +41,8 @@
     python main.py --sponsorcheck 影片.mp4        # 工商揭露（業配揭露得夠不夠早）
     python main.py --termcheck 影片.mp4           # 術語一致性（同一個詞有幾種寫法）
     python main.py --termcheck --termfix 影片.mp4 # 順便把有主流寫法的統一
+    python main.py --punctcheck 影片.mp4          # 中文字幕標點規範（行尾多餘標點）
+    python main.py --punctcheck --punctfix 影片.mp4 # 順便輸出規範化後的字幕
     python main.py --preflight 影片.mp4           # 上片前總體檢（一次跑完所有健檢）
     python main.py --subs 舊字幕.srt --synccheck 影片.mp4  # 字幕與語音同步檢查
 
@@ -111,6 +113,9 @@ from subtitle.sponsorcheck import (analyze_sponsor,
 from subtitle.termcheck import (analyze_terms, apply_term_fixes,
                                 build_fix_choices, format_term_report,
                                 resolve_termcheck_settings)
+from subtitle.punctstyle import (analyze_punctuation, apply_punct_style,
+                                 format_punct_report,
+                                 resolve_punctstyle_settings)
 from subtitle.preflight import (format_preflight_report,
                                 run_preflight)
 from subtitle.media import probe_duration
@@ -362,6 +367,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="搭配 --termcheck 使用：把有明確主流寫法的詞一鍵統一，另存"
              "「檔名_術語統一.srt」；原始檔不受影響。各種寫法出現次數"
              "一樣多時不會替你猜，會原樣保留並在報告中標示。")
+    parser.add_argument(
+        "--punctcheck", action="store_true",
+        help="中文字幕標點規範健檢：抓出行尾那些沒有作用的逗號句號（斷行"
+             "本身就已經表達停頓），輸出「檔名_標點規範.txt」。英文字幕"
+             "不受影響。強度可於 config.json 的 punctstyle 調整。")
+    parser.add_argument(
+        "--punctfix", action="store_true",
+        help="搭配 --punctcheck 使用：把標點規範化後另存「檔名_標點規範.srt」。")
     parser.add_argument(
         "--publishcheck", metavar="發佈資訊檔",
         help="發佈資訊健檢（免轉錄、免媒體）：讀入一個純文字檔，第一行為"
@@ -740,6 +753,25 @@ def main(argv=None) -> int:
             except (RuntimeError, ValueError) as exc:
                 report(f"{os.path.basename(item['path'])}："
                        f"術語一致性檢查略過（{exc}）")
+
+    if args.punctcheck:
+        automation = config.get("automation", {})
+        out_dir_override = (automation.get("output_dir") or "").strip()
+        for item in results:
+            cues = (item.get("result") or {}).get("cues") if item["ok"] else None
+            if not cues:
+                continue
+            out_dir = out_dir_override or os.path.dirname(
+                os.path.abspath(item["path"]))
+            os.makedirs(out_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(item["path"]))[0]
+            try:
+                for path in _export_punctcheck(cues, config, out_dir, base,
+                                               args.punctfix):
+                    item["result"]["exports"].append(path)
+            except (RuntimeError, ValueError) as exc:
+                report(f"{os.path.basename(item['path'])}："
+                       f"標點規範健檢略過（{exc}）")
 
     if args.sponsorcheck:
         automation = config.get("automation", {})
@@ -1239,6 +1271,39 @@ def _export_termcheck(cues: list, config: dict, out_dir: str, base: str,
                 os.path.join(out_dir, f"{base}_術語統一.srt"))
             export(fixed, srt_path, config.get("subtitle_style"))
             print(f"（已統一 {count} 處寫法 → {srt_path}）", flush=True)
+            paths.append(srt_path)
+    return paths
+
+
+def _export_punctcheck(cues: list, config: dict, out_dir: str, base: str,
+                       do_fix: bool = False) -> list:
+    """
+    對字幕清單跑中文標點規範健檢並輸出報告，回傳產生的檔案路徑清單。
+
+    加上 --punctfix 時另外輸出規範化後的 SRT；沒有任何一句需要更動時
+    不會產生空檔案，只如實回報。
+    """
+    from subtitle.exporter import export
+
+    settings = resolve_punctstyle_settings(config)
+    result = analyze_punctuation(cues, config)
+    text = format_punct_report(result, settings)
+    paths = []
+    check_path = unique_path(os.path.join(out_dir, f"{base}_標點規範.txt"))
+    with open(check_path, "w", encoding="utf-8") as fp:
+        fp.write(text)
+    print(text, flush=True)
+    paths.append(check_path)
+
+    if do_fix:
+        fixed, count = apply_punct_style(cues, settings)
+        if not count:
+            print("（沒有需要規範化的標點，未輸出規範版字幕）", flush=True)
+        else:
+            srt_path = unique_path(
+                os.path.join(out_dir, f"{base}_標點規範.srt"))
+            export(fixed, srt_path, config.get("subtitle_style"))
+            print(f"（已規範化 {count} 句 → {srt_path}）", flush=True)
             paths.append(srt_path)
     return paths
 

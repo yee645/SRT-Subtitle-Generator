@@ -35,6 +35,9 @@ from subtitle.hookcheck import (analyze_hook, format_hook_report,
 from subtitle.legibility import (analyze_legibility,
                                  format_legibility_report,
                                  resolve_legibility_settings)
+from subtitle.punctstyle import (analyze_punctuation, apply_punct_style,
+                                 format_punct_report,
+                                 resolve_punctstyle_settings)
 from subtitle.subsync import (analyze_sync, apply_sync_correction,
                               format_sync_report, resolve_subsync_settings)
 from subtitle.subtitlecheck import (analyze_cues, fix_cue_durations,
@@ -50,7 +53,7 @@ class SubtitleCheckDialog(tk.Toplevel):
     def __init__(self, master, config_data, cues, on_fixed=None,
                  media_path=""):
         super().__init__(master)
-        self.title("字幕健檢：閱讀速度、行數、廣告友善度、開場與語音同步")
+        self.title("字幕健檢：閱讀速度、行數、標點、廣告友善度、開場與語音同步")
         # 三組設定區（判定門檻／廣告友善度／開場健檢）加起來就佔掉約 400px，
         # 視窗高度需一併放大，否則下方的報告區會被擠到只剩幾行。
         self.geometry("720x860")
@@ -255,6 +258,24 @@ class SubtitleCheckDialog(tk.Toplevel):
             text="（掃描素材實際語音，抓出整體偏移或幀率漂移）").pack(
             side="left", padx=(8, 0))
 
+        # 中文字幕標點規範：純文字分析，強度可就地切換。
+        punct_row = ttk.Frame(body)
+        punct_row.pack(fill="x", pady=(6, 0))
+        ttk.Label(punct_row, text="中文標點規範：").pack(side="left")
+        self.punct_mode_var = tk.StringVar(
+            value=resolve_punctstyle_settings(self.config_data)["mode"])
+        for value, label in (("trim", "只拿掉行尾標點"),
+                             ("subtitle", "完整字幕慣例"),
+                             ("off", "不套用")):
+            ttk.Radiobutton(punct_row, text=label, value=value,
+                            variable=self.punct_mode_var,
+                            command=self._on_punct_mode).pack(
+                side="left", padx=(6, 0))
+        self.punct_fix_btn = ttk.Button(
+            punct_row, text="一鍵套用標點規範", state="disabled",
+            command=self._on_punct_fix)
+        self.punct_fix_btn.pack(side="left", padx=(10, 0))
+
         legib_row = ttk.Frame(body)
         legib_row.pack(fill="x", pady=(4, 0))
         self.legib_btn = ttk.Button(
@@ -288,6 +309,9 @@ class SubtitleCheckDialog(tk.Toplevel):
             "extra_terms": self.ad_extra_var.get().strip(),
             "ignore_terms": self.ad_ignore_var.get().strip(),
         }
+        self.config_data["punctstyle"] = dict(
+            self.config_data.get("punctstyle") or {},
+            mode=self.punct_mode_var.get())
         self.config_data["hookcheck"] = {
             "target_seconds": safe(self.hook_target_var, 15.0),
             "max_greeting_seconds": safe(self.hook_greeting_var, 5.0),
@@ -314,6 +338,12 @@ class SubtitleCheckDialog(tk.Toplevel):
         self.last_hook_result = analyze_hook(self.cues, hook_settings)
         text = (f"{text}\n\n"
                 f"{format_hook_report(self.last_hook_result, hook_settings)}")
+        # 中文標點規範：同樣是純文字分析，共用同一次「開始健檢」。
+        punct_settings = resolve_punctstyle_settings(self.config_data)
+        self.last_punct_result = analyze_punctuation(self.cues,
+                                                     self.config_data)
+        text = (f"{text}\n\n"
+                f"{format_punct_report(self.last_punct_result, punct_settings)}")
         self.report.configure(state="normal")
         self.report.delete("1.0", "end")
         self.report.insert("1.0", text, "report")
@@ -323,6 +353,13 @@ class SubtitleCheckDialog(tk.Toplevel):
         fixable = any(i["title"] in ("閱讀速度過快", "顯示時間過短")
                      for i in issues)
         self.fix_btn.configure(state="normal" if fixable else "disabled")
+        # 「不套用」時按鈕一律停用，避免按了什麼都不會發生。
+        punct_stats = self.last_punct_result.get("stats") or {}
+        punct_fixable = (punct_settings["mode"] != "off"
+                         and not self.last_punct_result.get("ok")
+                         and punct_stats.get("chinese", 0) > 0)
+        self.punct_fix_btn.configure(
+            state="normal" if punct_fixable else "disabled")
         overlap_fixable = any(i["title"] == "字幕重疊" for i in issues)
         self.fix_overlap_btn.configure(
             state="normal" if overlap_fixable else "disabled")
@@ -330,23 +367,35 @@ class SubtitleCheckDialog(tk.Toplevel):
         ad_note = f"、廣告友善度高風險段落 {clusters} 處" if clusters else ""
         hook_ok = self.last_hook_result.get("ok")
         hook_note = "" if hook_ok else "、開場有拖累留存的問題"
+        # 待辦的可能是行尾標點、也可能是句中逗頓（完整慣例模式才算），
+        # 照實際剩下什麼寫，不要固定講行尾——會出現「0 行有多餘的行尾標點」。
+        trailing = punct_stats.get("trailing", 0)
+        punct_parts = []
+        if trailing:
+            punct_parts.append(f"{trailing} 行有多餘的行尾標點")
+        if punct_settings["mode"] == "subtitle" and punct_stats.get("inline"):
+            punct_parts.append(f"{punct_stats['inline']} 個句中逗頓待改成空格")
+        punct_summary = "、".join(punct_parts)
+        punct_note = f"、標點還有 {punct_summary}" if punct_fixable and punct_summary else ""
         if issues:
             self.status_var.set(
                 f"健檢完成，發現 {len(issues)} 項字幕問題"
-                f"{ad_note}{hook_note}，結果如下。")
-        elif clusters or not hook_ok:
+                f"{ad_note}{hook_note}{punct_note}，結果如下。")
+        elif clusters or not hook_ok or punct_fixable:
             parts = []
             if clusters:
                 parts.append(f"{clusters} 處廣告友善度高風險段落")
             if not hook_ok:
                 point = self.last_hook_result.get("time_to_point")
                 parts.append("開場太久才進正題" if point else "開場無法判定")
+            if punct_fixable and punct_summary:
+                parts.append(punct_summary)
             self.status_var.set(
                 "健檢完成，字幕品質全數通過，但有" + "、".join(parts)
                 + "，詳見報告。")
         else:
             self.status_var.set(
-                "健檢完成，字幕品質、廣告友善度與開場皆通過。")
+                "健檢完成，字幕品質、廣告友善度、開場與標點皆通過。")
 
     def _on_fix(self):
         settings = self._collect_settings()
@@ -361,6 +410,23 @@ class SubtitleCheckDialog(tk.Toplevel):
         if self.on_fixed:
             self.on_fixed(new_cues)
         self.status_var.set(f"已延長 {fixed} 句字幕的顯示時間，重新健檢中...")
+        self._on_run()
+
+    def _on_punct_mode(self):
+        """切換強度後就地重跑：使用者要立刻看到差別，不用再按一次健檢。"""
+        self._on_run()
+
+    def _on_punct_fix(self):
+        settings = resolve_punctstyle_settings(self.config_data)
+        new_cues, changed = apply_punct_style(self.cues, settings)
+        if changed == 0:
+            messagebox.showinfo(
+                "提示", "目前的字幕沒有需要規範化的標點。", parent=self)
+            return
+        self.cues = new_cues
+        if self.on_fixed:
+            self.on_fixed(new_cues)
+        self.status_var.set(f"已規範化 {changed} 句字幕的標點，重新健檢中...")
         self._on_run()
 
     def _on_fix_overlap(self):
