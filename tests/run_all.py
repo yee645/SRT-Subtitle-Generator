@@ -24,7 +24,8 @@ TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
          "test_v1340.py", "test_v1350.py",
          "test_v1360.py", "test_v1370.py",
          "test_v1380.py", "test_v1390.py",
-         "test_v1400.py", "test_v1410.py", "test_v1420.py", "test_v1430.py", "test_v1440.py", "test_v1450.py", "test_v1460.py", "test_v1470.py"]
+         "test_v1400.py", "test_v1410.py", "test_v1420.py", "test_v1430.py", "test_v1440.py", "test_v1450.py", "test_v1460.py", "test_v1470.py",
+         "test_v1480.py"]
 
 
 def main() -> int:
