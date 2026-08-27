@@ -210,6 +210,15 @@ DEFAULT_CONFIG = {
         "max_plumbing_ratio": 0.55,# 開頭被連結／交際語佔掉的比例上限
         "chapter_hint_seconds": 300.0,  # 影片長於此秒數卻無章節時提醒
     },
+    # 快速翻譯：選取一段文字立刻看到中文翻譯（英翻中優先），附帶關鍵詞解說。
+    "quicktranslate": {
+        "target_language": "zh-TW",  # 目標語言代碼
+        "debounce_ms": 350,          # 選取變動後等待這麼久才送出
+        "cache_size": 200,           # LRU 快取筆數
+        "max_chars": 600,            # 單次翻譯的字數上限（避免整份逐字稿誤送）
+        "min_chars": 2,              # 選取字數低於此值不觸發
+        "explain": True,             # 是否一併請模型解說關鍵詞
+    },
     # 音樂節拍分析：量出 BPM 與拍點，把剪點對齊到拍子上。
     "beatsync": {
         "min_bpm": 60.0,          # 搜尋的最慢速度
