@@ -218,8 +218,12 @@ def _scrolled_text(parent, height):
                      relief="flat", highlightthickness=0)
     bar = ttk.Scrollbar(holder, orient="vertical", command=widget.yview)
     widget.configure(yscrollcommand=bar.set)
-    widget.pack(side="left", fill="both", expand=True)
+    # 捲軸要先 pack：pack() 是按呼叫順序分配版面，若 fill+expand 的文字
+    # 區先佔走整個 holder，之後才 pack 的捲軸會被擠成 1px 寬、實質上不會
+    # 顯示（實測 winfo_ismapped() 是 0）。捲軸（固定寬度）先佔好右側欄
+    # 位，文字區（fill+expand）再吃剩下的空間，才會兩者都正常顯示。
     bar.pack(side="right", fill="y")
+    widget.pack(side="left", fill="both", expand=True)
     return widget
 
 class QuickTranslatePanel(tk.Toplevel):
