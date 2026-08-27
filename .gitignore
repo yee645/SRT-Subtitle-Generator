@@ -7,6 +7,9 @@ __pycache__/
 # 設定檔（含使用者個人資料如 OpenAI API 金鑰，不入版控）
 config.json
 
+# 即時查譯生字本（本機保存的個人學習資料，不入版控）
+quicktranslate_vocab.json
+
 # PyInstaller 工件
 build/
 dist/

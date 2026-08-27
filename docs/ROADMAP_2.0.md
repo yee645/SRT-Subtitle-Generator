@@ -49,12 +49,44 @@
       的中文判定；含 LRU 快取、`max_chars` 花費上限、關鍵詞解說（與譯文
       同一次 API 呼叫取得）。測試 `tests/test_v1480.py` 以假 openai 模組
       驗證，不打真的 API。
-- [ ] **GUI 面板** — 設計中
-      **驗收條件（不可略過）**：`cache_size` 與 `debounce_ms` 這兩個設定
-      在核心層是沒有作用的，GUI 必須真的把值傳進 `TranslationCache(...)`
-      與事件節流，否則它們只是寫在 `config.json` 裡的裝飾品。要有測試或
-      截圖證明它們真的生效。
-- [ ] **README 使用說明、CHANGELOG、`APP_VERSION` 升 1.48.0，PR #105 轉正式 PR**
+- [x] **GUI 面板** — 已完成（`gui/quicktranslate_panel.py`）
+      獨立浮動 Toplevel（520x600、minsize 480x560、預設置頂可關），工具列
+      新按鈕「即時查譯」開啟、單例、關閉是隱藏（`withdraw`）不是銷毀。
+      `<<Selection>>` 去抖動 `debounce_ms`；去抖動到期時左鍵仍按著（拖曳
+      中途停下來讀字）不觸發，改等 `<ButtonRelease-1>` 後重新排一次；另有
+      「翻譯選取內容」手動按鈕，無文字選取時退而取字幕清單目前選取列。
+      API 呼叫在背景執行緒、經 `queue`＋`after()` 輪詢回主執行緒（比照
+      `gui/subtitle_check_dialog.py`），以 `request_id` 擋過期回應。
+      無金鑰時開窗即進入說明狀態，「選取後自動翻譯」勾選框一併
+      `state="disabled"`，金鑰每次要打 API 前才重讀，貼上金鑰後不必
+      重開視窗即恢復可用。連續 3 次失敗自動暫停自動翻譯。生字本分頁
+      可刪除選取／清空／匯出 CSV（UTF-8 BOM，Anki 相容）。
+      **驗收條件證明方式**：`tests/test_v1480_gui.py` 起一個離屏 Tk 視窗，
+      monkeypatch `panel.after` 直接記錄實際延遲驗證等於設定的
+      `debounce_ms`（10ms 與 2000ms 都驗）；以 `cache_size=2` 實測第 3 筆
+      真的擠掉第 1 筆；另驗證無金鑰控件停用／恢復、API 確實跑在背景
+      執行緒（非 `MainThread`）且不卡主執行緒、過期回應被丟棄、連續
+      失敗自動暫停、生字本增刪與 CSV 格式。GUI 亦有實際截圖（深淺主題
+      各狀態）供人工檢視。
+      **偏離設計文件之處**：設計文件只講「所有勾選與目標語言變動即寫回
+      `config["quicktranslate"]`」，但 `resolve_quicktranslate_settings()`
+      只認得 6 個既有鍵，並不認得「自動翻譯」「存入生字本」「視窗置頂」
+      這三個 GUI 專屬的勾選狀態。做法是把這三個鍵一併寫進同一個
+      `config["quicktranslate"]` dict（`resolve_quicktranslate_settings()`
+      會自動忽略它不認得的鍵，不影響核心層，也沒有改
+      `subtitle/quicktranslate.py`）。另外，生字本同一個詞重複查到時
+      「只留第一次的意思、不覆蓋」是實作時自行決定，設計文件未定案。
+      本專案既有測試慣例是「一般測試套件不依賴 tkinter/DISPLAY」（見
+      `tests/test_v1141.py`），但這次的硬性驗收條件本來就是「GUI 真的
+      有沒有把設定接起來」，純靜態掃原始碼證明力不足，所以
+      `tests/test_v1480_gui.py` 改為要求真實 `DISPLAY`（本機用 Xvfb `:99`），
+      沒有可用顯示環境時會自動印出提示跳過該段、不算失敗，但驗證力會
+      降低——這是刻意的取捨，在 CHANGELOG 中一併寫明。
+- [x] **README 使用說明、CHANGELOG、`APP_VERSION` 升 1.48.0** — 已完成
+      README 新增「即時查譯」章節與功能一覽表新增一列；CHANGELOG 新增
+      v1.48.0 條目；`updater.py` 的 `APP_VERSION` 已改 `"1.48.0"`。
+      **PR #105 轉正式 PR 這件事本回合刻意沒做**——按這次任務指示不動
+      PR、不 commit、不 push，留給下一輪或人工審查後處理。
 
 ### 2. 介面現況稽核與 2.0 資訊架構定案
 

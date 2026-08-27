@@ -53,6 +53,7 @@ from gui.jumpcut_dialog import JumpCutDialog
 from gui.retakes_dialog import RetakesDialog
 from gui.music_dialog import MusicDuckingDialog
 from gui.preview_panel import PreviewPanel
+from gui.quicktranslate_panel import QuickTranslatePanel
 from gui.replace_dialog import ReplaceDialog
 from gui.review_window import ReviewWindow
 from gui.scrollable import ScrollableFrame
@@ -217,7 +218,8 @@ class SrtApp(tk.Tk):
                 ("章節健檢", 12, self._open_chapter_dialog),
                 ("封面健檢", 12, self._open_thumbcheck_dialog),
                 ("發佈健檢", 12, self._open_publishcheck_dialog),
-                ("上片前總體檢", 14, self._open_preflight_dialog))):
+                ("上片前總體檢", 14, self._open_preflight_dialog),
+                ("即時查譯", 12, self._open_quicktranslate_panel))):
             ttk.Button(tools, text=text, width=width, command=command).grid(
                 row=index // _TOOLS_PER_ROW, column=index % _TOOLS_PER_ROW,
                 sticky="w", padx=(0, 8), pady=(0, 4))
@@ -844,6 +846,14 @@ class SrtApp(tk.Tk):
             existing.focus_set()
             return
         self._replace_dialog = ReplaceDialog(self)
+
+    def _open_quicktranslate_panel(self):
+        """開啟即時查譯浮動視窗：獨立視窗、單例，關閉是隱藏不是銷毀。"""
+        panel = getattr(self, "_quicktranslate_panel", None)
+        if panel is not None and panel.winfo_exists():
+            panel.show()
+            return
+        self._quicktranslate_panel = QuickTranslatePanel(self, self.config_data)
 
     def _open_translate_dialog(self):
         """開啟字幕翻譯對話框：需先有字幕清單才能翻譯。"""
