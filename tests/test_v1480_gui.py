@@ -287,15 +287,32 @@ if TK_OK:
     cfg = make_config()
     cfg["transcription"] = dict(cfg.get("transcription", {}), api_key="")
     panel = QuickTranslatePanel(tk_root, cfg)
-    pump(0.4)
+    # 捲軸的版面斷言需要視窗真的上畫面才量得到真實寬度。
+    panel.geometry("520x600")
+    panel.deiconify()
+    pump(1.2)
     for name, widget in (("原文", panel.src_text),
                          ("譯文", panel.dst_text),
                          ("關鍵詞", panel.term_text)):
-        siblings = [c.winfo_class() for c in widget.master.winfo_children()]
+        children = list(widget.master.winfo_children())
+        siblings = [c.winfo_class() for c in children]
         check(f"{name}區有捲軸元件",
               any("Scrollbar" in cls for cls in siblings), str(siblings))
         check(f"{name}區有掛上 yscrollcommand",
               bool(widget.cget("yscrollcommand")))
+        # 只驗「元件存在＋掛了 yscrollcommand＋yview 可捲」是不夠的：
+        # pack() 按呼叫順序分配版面，若 fill+expand 的文字區先佔走整個
+        # holder，之後才 pack 的捲軸會被擠成 1px 寬且 winfo_ismapped()==0
+        # ——元件在、yview 照樣回報可捲，但使用者看不到也捲不動。實測踩
+        # 過這個坑（修正前 mapped=0/1px、修正後 mapped=1/12px）。
+        # 注意：未 deiconify 的視窗其子元件一律回報 mapped=0、寬度 1px，
+        # 所以這組斷言必須在面板真的顯示出來之後才驗。
+        scrollbar = next(c for c in children
+                         if "Scrollbar" in c.winfo_class())
+        check(f"{name}區的捲軸真的顯示出來（不是被擠成 1px）",
+              scrollbar.winfo_ismapped() == 1 and scrollbar.winfo_width() > 4,
+              f"mapped={scrollbar.winfo_ismapped()} "
+              f"width={scrollbar.winfo_width()}")
     first, last = panel.dst_text.yview()
     check("無金鑰說明文超出可視範圍（確認這段真的比框高）",
           last < 0.999, f"yview=({first:.3f}, {last:.3f})")
