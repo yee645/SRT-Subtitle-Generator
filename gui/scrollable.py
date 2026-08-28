@@ -96,3 +96,46 @@ class ScrollableFrame(ttk.Frame):
     def _on_mousewheel(self, event):
         """處理滑鼠滾輪垂直捲動（Windows 的 delta 為 120 的倍數）。"""
         self.canvas.yview_scroll(int(-event.delta / 120), "units")
+
+    def scroll_into_view(self, widget, top_margin=40):
+        """把 widget 捲進目前可視範圍內（v1.49.0）。
+
+        背景：主視窗預設 1400x800 放不下全部內容，字幕清單、動作按鈕、
+        匯出區都落在折疊線下（見 docs/UI_AUDIT_2.0.md）。生成完成後若使用
+        者仍停在頁頂，畫面上不會有任何變化——這個方法用來在那個當下把結
+        果捲進視野。
+
+        - 已經整個看得見就不捲動，避免沒事跳畫面比不捲更擾人。
+        - 需要捲動時，widget 上方留 `top_margin` px 的脈絡，不貼齊頂端。
+        - widget 尚未 map（`winfo_ismapped()` 為 0）、或 interior／canvas
+          高度量不到（尚未完成版面配置）時安全略過，不丟例外——呼叫端
+          不需要先確認元件是否已顯示。
+        """
+        try:
+            if not widget.winfo_ismapped() or not self.interior.winfo_ismapped():
+                return
+            self.canvas.update_idletasks()
+            interior_height = self.interior.winfo_height()
+            canvas_height = self.canvas.winfo_height()
+            if interior_height <= 0 or canvas_height <= 0:
+                return
+
+            # widget 相對 interior 頂端的 y 座標，用螢幕座標換算（跨巢狀
+            # 容器、跨 LabelFrame 皆可直接算出，不必手動走 widget tree）。
+            widget_top = widget.winfo_rooty() - self.interior.winfo_rooty()
+            widget_bottom = widget_top + widget.winfo_height()
+
+            top_frac, bottom_frac = self.canvas.yview()
+            visible_top = top_frac * interior_height
+            visible_bottom = bottom_frac * interior_height
+
+            if widget_top >= visible_top and widget_bottom <= visible_bottom:
+                return  # 已經整個看得見，不捲動。
+
+            target_top = max(0, widget_top - top_margin)
+            fraction = target_top / interior_height
+            fraction = min(max(fraction, 0.0), 1.0)
+            self.canvas.yview_moveto(fraction)
+        except tk.TclError:
+            # 視窗正在銷毀或元件狀態異常時，捲動失敗不應影響呼叫端。
+            return

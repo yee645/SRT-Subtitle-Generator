@@ -1288,6 +1288,9 @@ class SrtApp(tk.Tk):
             self._populate_cue_list(self.cues)
             self._update_export_state()
             self._refresh_preview()
+            # 折疊線問題（docs/UI_AUDIT_2.0.md）：清單在預設視窗高度之外，
+            # 完成後主動把它捲進視野（v1.49.0）。
+            self.scroll_frame.scroll_into_view(self.cue_tree)
 
         lines = []
         for item in succeeded:
@@ -1381,6 +1384,9 @@ class SrtApp(tk.Tk):
             self.cue_tree.selection_set(children[0])
             self.cue_tree.focus(children[0])
         self._refresh_preview()
+        # 折疊線問題（docs/UI_AUDIT_2.0.md）：清單在預設視窗高度之外，
+        # 完成後主動把它捲進視野（v1.49.0）。
+        self.scroll_frame.scroll_into_view(self.cue_tree)
 
     def _on_generation_error(self, message):
         """生成失敗：顯示原因與解決方法。"""
