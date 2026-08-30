@@ -63,8 +63,8 @@ class HealthCenterDialog(tk.Toplevel):
                 on_fixed=None):
         super().__init__(master)
         self.title("健檢中心：影片與字幕的所有健檢，一次跑完")
-        self.geometry("920x760")
-        self.minsize(820, 640)
+        self.geometry("1040x780")
+        self.minsize(900, 640)
         self.transient(master)
 
         self.config_data = config_data
@@ -166,9 +166,12 @@ class HealthCenterDialog(tk.Toplevel):
                column=index % _CHECKLIST_COLUMNS, sticky="w",
                padx=(0, 16), pady=2)
 
-        ttk.Button(frame, text="進階設定（門檻）⚙", width=16,
+        # 這顆原本 pack(side="right") 與勾選格線搶同一條水平空間，實測
+        # 它需要 168px 卻只分到 69px、文字被切成「進階設」。改成自己一
+        # 列靠右，格線就能拿到完整寬度。
+        ttk.Button(frame, text="進階設定（門檻）⚙",
                   command=self._open_settings).pack(
-            side="right", anchor="n")
+            side="bottom", anchor="e", pady=(6, 0))
 
     def _build_run_row(self, body):
         self.status_var = tk.StringVar(
