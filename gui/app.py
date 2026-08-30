@@ -39,13 +39,12 @@ from subtitle.pipeline import run_batch
 from subtitle.segmenter import build_cues_from_words
 from subtitle.textedit import apply_corrections
 from subtitle.transcriber import transcribe
-from gui.audiocheck_dialog import AudioCheckDialog
 from gui.audiovis_dialog import AudioVisDialog
 from gui.branding_dialog import BrandingDialog
 from gui.chapter_dialog import ChapterCheckDialog
 from gui.thumbcheck_dialog import ThumbCheckDialog
 from gui.publishcheck_dialog import PublishCheckDialog
-from gui.preflight_dialog import PreflightDialog
+from gui.health_center_dialog import HealthCenterDialog
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
 from gui.cue_editor import CueEditDialog
@@ -59,7 +58,6 @@ from gui.review_window import ReviewWindow
 from gui.scrollable import ScrollableFrame
 from gui.series_dialog import SeriesCheckDialog
 from gui.style_panel import StylePanel
-from gui.subtitle_check_dialog import SubtitleCheckDialog
 from gui.translate_dialog import TranslateDialog
 
 logger = logging.getLogger(__name__)
@@ -668,10 +666,24 @@ class SrtApp(tk.Tk):
         MusicDuckingDialog(self, self.config_data, video_path)
 
     def _open_audiocheck_dialog(self):
-        """開啟音訊健檢：以第一個選取檔案為預設素材（可留空自行選擇）。"""
+        """
+        原「上片前健檢」按鈕：v1.50.0 起改開健檢中心。
+
+        按鈕原位保留一版（docs/UI_ARCHITECTURE_2.0.md D-3 的過渡安
+        排）——五項檢查與三個修復動作全數收進健檢中心，下一版才移除
+        這顆按鈕。
+        """
         files = self._selected_files()
         media_path = files[0] if files and os.path.exists(files[0]) else ""
-        AudioCheckDialog(self, self.config_data, media_path)
+
+        def on_fixed(new_cues):
+            self.cues = new_cues
+            self.apply_text_edits()
+
+        HealthCenterDialog(self, self.config_data, media_path=media_path,
+                           cues=list(getattr(self, "cues", []) or []),
+                           on_fixed=on_fixed)
+        self.status_var.set("「上片前健檢」已整併至健檢中心。")
 
     def _open_branding_dialog(self):
         """開啟品牌套版：以第一個選取檔案為預設影片（可留空自行選擇）。"""
@@ -686,15 +698,23 @@ class SrtApp(tk.Tk):
 
     def _open_preflight_dialog(self):
         """
-        開啟上片前總體檢：帶入目前選取的素材與目前的字幕清單。
+        原「上片前總體檢」按鈕：v1.50.0 起改開健檢中心（同一個視窗）。
 
         字幕直接沿用主視窗已經有的那一份，使用者不必再挑一次檔案；
-        沒有字幕時對話框會自動略過字幕相關的檢查。
+        沒有字幕時對話框會自動略過字幕相關的檢查。按鈕原位保留一版，
+        下一版才移除（docs/UI_ARCHITECTURE_2.0.md D-3）。
         """
         files = [p for p in self._selected_files() if os.path.exists(p)]
-        PreflightDialog(self, self.config_data,
-                        media_path=files[0] if files else "",
-                        cues=list(getattr(self, "cues", []) or []))
+
+        def on_fixed(new_cues):
+            self.cues = new_cues
+            self.apply_text_edits()
+
+        HealthCenterDialog(self, self.config_data,
+                           media_path=files[0] if files else "",
+                           cues=list(getattr(self, "cues", []) or []),
+                           on_fixed=on_fixed)
+        self.status_var.set("「上片前總體檢」已整併至健檢中心。")
 
     def _open_publishcheck_dialog(self):
         """
@@ -910,7 +930,14 @@ class SrtApp(tk.Tk):
         self.status_var.set(message)
 
     def _open_subtitle_check_dialog(self):
-        """開啟字幕健檢：檢查目前清單的閱讀速度（CPS）、顯示時間與行數。"""
+        """
+        原「字幕健檢」按鈕：v1.50.0 起改開健檢中心。
+
+        字幕健檢原本不需要選影片就能跑純文字檢查，健檢中心保留這個
+        能力——沒有選影片時只會略過需要媒體檔的項目，不會擋住這裡的
+        呼叫。按鈕原位保留一版，下一版才移除
+        （docs/UI_ARCHITECTURE_2.0.md D-3）。
+        """
         if not self.cues:
             messagebox.showinfo("提示", "目前沒有字幕可健檢，請先生成或匯入字幕。")
             return
@@ -921,8 +948,9 @@ class SrtApp(tk.Tk):
 
         files = self._selected_files()
         media_path = files[0] if files and os.path.exists(files[0]) else ""
-        SubtitleCheckDialog(self, self.config_data, self.cues,
-                            on_fixed=on_fixed, media_path=media_path)
+        HealthCenterDialog(self, self.config_data, media_path=media_path,
+                           cues=self.cues, on_fixed=on_fixed)
+        self.status_var.set("「字幕健檢」已整併至健檢中心。")
 
     def _open_jumpcut_dialog(self):
         """開啟自動跳剪：依目前字幕找出句間停頓，一次剪掉整支影片的冷場。"""
