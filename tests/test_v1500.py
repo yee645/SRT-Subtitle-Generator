@@ -78,10 +78,20 @@ check("gui/app.py 不再 import PreflightDialog（改開健檢中心）",
       "PreflightDialog" not in app_src)
 check("gui/app.py 改為 import HealthCenterDialog",
       "from gui.health_center_dialog import HealthCenterDialog" in app_src)
-check("三顆舊按鈕的 handler 都改開 HealthCenterDialog",
-      app_src.count("HealthCenterDialog(") >= 3)
-check("三顆舊按鈕都留下「已整併至健檢中心」的狀態列訊息",
-      app_src.count("已整併至健檢中心") == 3)
+# v1.50.0 原文寫死「三顆舊按鈕」「== 3」，是當時工具列上「上片前健檢」
+# 「上片前總體檢」＋清單編輯列「字幕健檢」三顆過渡期轉址鈕的精確數字。
+# v1.51.0 依 D-3「原位保留一版、下一版才移除按鈕」的承諾，這一版把已經
+# 走完轉址期的「上片前健檢」「上片前總體檢」正式移除、合併成一顆真正
+# 的「健檢中心」入口（不再是「已整併」的過渡訊息——它就是本體），只剩
+# 「字幕健檢」（清單編輯列，不在本次「工具列 11→6」範圍內，未被本版
+# 觸碰）還留著同一句轉址訊息。因此這裡放寬成「至少 1 顆」，真正精確的
+# 現況數字改由 tests/test_v1510.py 斷言（見該檔工具列一節）。
+check("至少還有一顆入口會開 HealthCenterDialog（健檢中心新按鈕 + 尚未"
+      "移除的「字幕健檢」轉址鈕）",
+      app_src.count("HealthCenterDialog(") >= 1)
+check("「已整併至健檢中心」轉址訊息至少還留著一則（字幕健檢；工具列上"
+      "的兩顆已在 v1.51.0 走完轉址期正式移除，見 test_v1510.py）",
+      app_src.count("已整併至健檢中心") >= 1)
 
 
 # ===== 1. 能力對照表（動態）：舊視窗呼叫過的每個 subtitle/ 函式，========
@@ -140,11 +150,15 @@ EXPECTED_SOURCES = {
     "字幕健檢", "廣告友善度", "開場健檢", "字幕可讀性", "標點規範", "語音同步",
     "片尾空間", "工商揭露", "術語一致性", "檔名",
 }
-check("CHECK_DEFS 剛好 15 項（preflight 12 項 + 標點規範 + 語音同步 + 檔名）",
-      len(ha.CHECK_DEFS) == 15, str(len(ha.CHECK_DEFS)))
-check("CHECK_DEFS 的來源名稱集合與預期一致",
-      {c.source for c in ha.CHECK_DEFS} == EXPECTED_SOURCES,
-      str({c.source for c in ha.CHECK_DEFS} ^ EXPECTED_SOURCES))
+# v1.51.0 在這 15 項之上再擴充 3 項（發佈健檢／封面健檢／章節健檢，見
+# tests/test_v1510.py），因此「剛好 15 項」改放寬為「至少 15 項」——真
+# 正要守住的規範是「這 15 項一項都沒有消失」，不是總數凍結在 15。
+check("CHECK_DEFS 至少涵蓋 v1.50.0 的 15 項（v1.51.0 起可能再擴充）",
+      len(ha.CHECK_DEFS) >= 15, str(len(ha.CHECK_DEFS)))
+check("CHECK_DEFS 的來源名稱集合完整包含 v1.50.0 的 15 項（不因後續擴充"
+      "而遺失）",
+      EXPECTED_SOURCES <= {c.source for c in ha.CHECK_DEFS},
+      str(EXPECTED_SOURCES - {c.source for c in ha.CHECK_DEFS}))
 check("檔名一律檢查（沿用 preflight 的行為，不受勾選控制）",
       ha._BY_KEY["filename"].always_on is True)
 check("字幕健檢／廣告友善度／開場健檢／標點規範／術語一致性"
@@ -158,10 +172,14 @@ check("字幕健檢／廣告友善度／開場健檢／標點規範／術語一�
 
 EXPECTED_FIX_KEYS = {"audiofix", "trim", "volumefix", "extend_cues",
                      "fix_overlap", "punct_fix", "sync_fix"}
-check("7 個既有修復動作在 FIX_LABELS 都有文字",
-      set(ha.FIX_LABELS) == EXPECTED_FIX_KEYS, str(ha.FIX_LABELS))
-check("MEDIA_FIX_KEYS ∪ CUE_FIX_KEYS 剛好等於 7 個修復動作",
-      (ha.MEDIA_FIX_KEYS | ha.CUE_FIX_KEYS) == EXPECTED_FIX_KEYS)
+# v1.51.0 再新增兩個修復動作（term_fix／chapter_fix，見
+# tests/test_v1510.py），且新增了第三種分類 TEXT_FIX_KEYS（修復對象是
+# 對象區的貼上文字，不是字幕也不是媒體檔）；因此這裡放寬成「7 個一項
+# 不少地存在」而非總數與集合的精確相等。
+check("v1.50.0 的 7 個既有修復動作在 FIX_LABELS 都還在（可能有新增）",
+      EXPECTED_FIX_KEYS <= set(ha.FIX_LABELS), str(ha.FIX_LABELS))
+check("MEDIA_FIX_KEYS ∪ CUE_FIX_KEYS 完整包含 v1.50.0 的 7 個修復動作",
+      EXPECTED_FIX_KEYS <= (ha.MEDIA_FIX_KEYS | ha.CUE_FIX_KEYS))
 check("媒體類與字幕類修復動作互斥",
       not (ha.MEDIA_FIX_KEYS & ha.CUE_FIX_KEYS))
 
@@ -351,8 +369,10 @@ try:
     for _ in range(10):
         root.update()
 
-    check("健檢中心開窗時有 14 顆可勾選＋1 顆一律檢查（檔名）",
-          len(dlg.check_vars) == 14)
+    # v1.51.0 再加 3 顆可勾選（發佈健檢／封面健檢／章節健檢），精確數字
+    # 改由 tests/test_v1510.py 斷言；這裡放寬為「至少 14 顆」。
+    check("健檢中心開窗時至少有 14 顆可勾選＋1 顆一律檢查（檔名）",
+          len(dlg.check_vars) >= 14, str(len(dlg.check_vars)))
     check("健檢中心預設尺寸是文件講的『約 900x760』量級",
           dlg.winfo_width() >= 800 and dlg.winfo_height() >= 700)
 
