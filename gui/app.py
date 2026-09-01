@@ -41,9 +41,6 @@ from subtitle.textedit import apply_corrections
 from subtitle.transcriber import transcribe
 from gui.audiovis_dialog import AudioVisDialog
 from gui.branding_dialog import BrandingDialog
-from gui.chapter_dialog import ChapterCheckDialog
-from gui.thumbcheck_dialog import ThumbCheckDialog
-from gui.publishcheck_dialog import PublishCheckDialog
 from gui.health_center_dialog import HealthCenterDialog
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
@@ -56,7 +53,6 @@ from gui.quicktranslate_panel import QuickTranslatePanel
 from gui.replace_dialog import ReplaceDialog
 from gui.review_window import ReviewWindow
 from gui.scrollable import ScrollableFrame
-from gui.series_dialog import SeriesCheckDialog
 from gui.style_panel import StylePanel
 from gui.translate_dialog import TranslateDialog
 
@@ -183,9 +179,16 @@ class SrtApp(tk.Tk):
         """
         頂部工具列：標題／版本一列，功能按鈕另起一列並自動換行。
 
-        功能按鈕已累積到七個，全部排成一列需要 1108px、超過視窗最小寬度，
-        最右邊的按鈕會被切掉。改成每列最多 _TOOLS_PER_ROW 個、滿了就換行，
-        所需寬度固定在一列的量，日後再加按鈕也不必跟著調大視窗。
+        v1.51.0：11 顆收成 6 顆。「上片前健檢」「上片前總體檢」（v1.50.0
+        起原位保留一版轉址）依當時的承諾本版正式移除，改由一顆真正的
+        「健檢中心」入口取代；「系列一致性」「章節健檢」「封面健檢」
+        「發佈健檢」四顆也一併併入健檢中心——但併入的入口不是留在工具
+        列上（那樣工具列會變成 10 顆，直接牴觸本版「11→6」的目標），而
+        是搬進健檢中心自己的「檢查對象」區（見
+        `gui/health_center_dialog.py` 的封面圖／發佈文字／系列影片三
+        區）。這是相對 `docs/UI_ARCHITECTURE_2.0.md` D-3「舊按鈕原位保
+        留一版」慣例的一個明確偏離，理由與其他做法記在
+        `docs/ROADMAP_2.0.md` v1.51 項。
         """
         toolbar = ttk.Frame(self, padding=(10, 6))
         toolbar.pack(fill="x")
@@ -209,14 +212,9 @@ class SrtApp(tk.Tk):
         for index, (text, width, command) in enumerate((
                 ("審片助手（找片段）", 18, self._open_review_window),
                 ("配樂助手（自動閃避）", 18, self._open_music_dialog),
-                ("上片前健檢", 12, self._open_audiocheck_dialog),
+                ("健檢中心", 12, self._open_health_center_dialog),
                 ("品牌套版", 12, self._open_branding_dialog),
                 ("音訊轉影片", 12, self._open_audiovis_dialog),
-                ("系列一致性", 12, self._open_series_dialog),
-                ("章節健檢", 12, self._open_chapter_dialog),
-                ("封面健檢", 12, self._open_thumbcheck_dialog),
-                ("發佈健檢", 12, self._open_publishcheck_dialog),
-                ("上片前總體檢", 14, self._open_preflight_dialog),
                 ("即時查譯", 12, self._open_quicktranslate_panel))):
             ttk.Button(tools, text=text, width=width, command=command).grid(
                 row=index // _TOOLS_PER_ROW, column=index % _TOOLS_PER_ROW,
@@ -665,13 +663,16 @@ class SrtApp(tk.Tk):
         video_path = files[0] if files and os.path.exists(files[0]) else ""
         MusicDuckingDialog(self, self.config_data, video_path)
 
-    def _open_audiocheck_dialog(self):
+    def _open_health_center_dialog(self):
         """
-        原「上片前健檢」按鈕：v1.50.0 起改開健檢中心。
+        健檢中心：v1.50.0 併音訊／字幕／總體檢三窗，v1.51.0 再併發佈資訊／
+        封面／章節三窗（工具列 11→6，見 `_build_toolbar` 的說明）。
 
-        按鈕原位保留一版（docs/UI_ARCHITECTURE_2.0.md D-3 的過渡安
-        排）——五項檢查與三個修復動作全數收進健檢中心，下一版才移除
-        這顆按鈕。
+        字幕直接沿用主視窗已經有的那一份，使用者不必再挑一次檔案；
+        沒有字幕、沒有選影片時對話框會自動略過對應的檢查——健檢中心對
+        象區的封面圖／發佈文字／系列影片仍要在對話框內另外加入，因為
+        那些對象與主視窗的「目前選取檔案」語意不同（一個是影片，一個
+        是圖片或純文字）。
         """
         files = self._selected_files()
         media_path = files[0] if files and os.path.exists(files[0]) else ""
@@ -683,71 +684,12 @@ class SrtApp(tk.Tk):
         HealthCenterDialog(self, self.config_data, media_path=media_path,
                            cues=list(getattr(self, "cues", []) or []),
                            on_fixed=on_fixed)
-        self.status_var.set("「上片前健檢」已整併至健檢中心。")
 
     def _open_branding_dialog(self):
         """開啟品牌套版：以第一個選取檔案為預設影片（可留空自行選擇）。"""
         files = self._selected_files()
         media_path = files[0] if files and os.path.exists(files[0]) else ""
         BrandingDialog(self, self.config_data, media_path)
-
-    def _open_series_dialog(self):
-        """開啟系列一致性：帶入目前選取的多個檔案（可於對話框內再增減）。"""
-        files = [p for p in self._selected_files() if os.path.exists(p)]
-        SeriesCheckDialog(self, self.config_data, files)
-
-    def _open_preflight_dialog(self):
-        """
-        原「上片前總體檢」按鈕：v1.50.0 起改開健檢中心（同一個視窗）。
-
-        字幕直接沿用主視窗已經有的那一份，使用者不必再挑一次檔案；
-        沒有字幕時對話框會自動略過字幕相關的檢查。按鈕原位保留一版，
-        下一版才移除（docs/UI_ARCHITECTURE_2.0.md D-3）。
-        """
-        files = [p for p in self._selected_files() if os.path.exists(p)]
-
-        def on_fixed(new_cues):
-            self.cues = new_cues
-            self.apply_text_edits()
-
-        HealthCenterDialog(self, self.config_data,
-                           media_path=files[0] if files else "",
-                           cues=list(getattr(self, "cues", []) or []),
-                           on_fixed=on_fixed)
-        self.status_var.set("「上片前總體檢」已整併至健檢中心。")
-
-    def _open_publishcheck_dialog(self):
-        """
-        開啟發佈資訊健檢：貼上標題／說明欄／標籤即可檢查。
-
-        與影片無關，因此不帶入任何檔案——最常見的情境正是「我自己寫的
-        說明欄，為什麼 hashtag 沒有作用」。
-        """
-        PublishCheckDialog(self, self.config_data)
-
-    def _open_thumbcheck_dialog(self):
-        """
-        開啟封面健檢：帶入目前選取的圖片檔（可於對話框內再增減）。
-
-        主視窗的檔案欄通常放的是影片，因此只帶入副檔名看起來像圖片的，
-        避免把影片丟進去當封面檢查。
-        """
-        images = [p for p in self._selected_files()
-                  if os.path.exists(p)
-                  and os.path.splitext(p)[1].lower()
-                  in (".png", ".jpg", ".jpeg", ".webp", ".bmp")]
-        ThumbCheckDialog(self, self.config_data, images)
-
-    def _open_chapter_dialog(self):
-        """
-        開啟 YouTube 章節健檢：貼上章節文字即可檢查。
-
-        影片檔為選填（有的話才能檢查最後一章長度），因此即使沒有選檔案
-        也能開啟——最常見的情境正是「手上只有一份貼不出來的章節文字」。
-        """
-        files = [p for p in self._selected_files() if os.path.exists(p)]
-        ChapterCheckDialog(self, self.config_data,
-                           media_path=files[0] if files else None)
 
     def _open_audiovis_dialog(self):
         """開啟音訊轉影片：以第一個選取檔案為預設音訊（可留空自行選擇）。"""

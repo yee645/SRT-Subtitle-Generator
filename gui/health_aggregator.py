@@ -3,17 +3,25 @@
 健檢中心的彙總邏輯（GUI 層黏合，`subtitle/` 零改動）。
 
 v1.50.0 把三個健檢視窗（上片前健檢／字幕健檢／上片前總體檢）併成一個
-「健檢中心」。三個舊視窗背後總共呼叫 15 種既有的 `subtitle/` 健檢邏輯
-（12 項 `subtitle/preflight.py` 已彙總過，外加標點規範／語音同步兩項只
-有字幕健檢有、外加檔名檢查），本模組把這 15 種通通接進同一份分級報告，
-並記錄每一筆發現能不能一鍵修復、修復時該呼叫哪一個既有函式。
+「健檢中心」。v1.51.0 再併入另外三個異質對象的健檢視窗（發佈資訊／封
+面／章節；系列一致性因為是「多支影片互相比較」而非「單支影片」，保留
+為獨立視窗，見 `docs/UI_AUDIT_2.0.md` 2.2 節預留的退路），並把
+`subtitle/termcheck.py` 寫好但從未被 GUI 呼叫過的 `apply_term_fixes`
+首次接上。
+
+本模組現在通共接了 18 種既有的 `subtitle/` 健檢邏輯（12 項
+`subtitle/preflight.py` 已彙總過，外加標點規範／語音同步／發佈資訊／
+封面／章節，外加檔名檢查），把它們通通接進同一份分級報告，並記錄每一
+筆發現能不能一鍵修復、修復時該呼叫哪一個既有函式。
 
 不重新實作任何分析邏輯——只做三件事：
 1. 依使用者勾選跑對應的既有 `subtitle/` 函式，把不同的回傳格式正規化成
    統一的 `{level, title, detail, advice, source, fix_key}`。
-2. 標記每一筆發現的 `fix_key`（能不能修、修的話要呼叫哪個既有修復函式）。
-3. 提供給 GUI 呼叫的修復入口（`apply_cue_fix` / 背景執行緒用的
-   `run_media_fix`），統一包一層例外處理。
+2. 標記每一筆發現的 `fix_key`（能不能修、修的話要呼叫哪個既有修復函式；
+   修復動作依作用對象分三類：`CUE_FIX_KEYS` 改字幕、`MEDIA_FIX_KEYS`
+   要重新編碼媒體檔、`TEXT_FIX_KEYS` 改的是貼上框裡的文字如章節）。
+3. 提供給 GUI 呼叫的修復入口（`apply_cue_fix` / `apply_media_fix` /
+   `apply_text_fix`，皆統一包一層例外處理）。
 
 零 GUI 依賴（本檔案本身可在沒有 Tkinter 顯示的環境被 import 與單元測
 試），但檔名以 `gui/` 開頭是因為它服務的對象是 GUI；純 CLI 用不到本模組
@@ -40,6 +48,9 @@ DEFAULT_HEALTHCENTER = {
     "run_punct": True,     # 標點規範（純文字分析，快）
     "run_subsync": False,  # 語音同步（需完整解碼音訊，預設關閉，同舊版
                            # 字幕健檢視窗裡需手動點擊才會跑的行為一致）
+    "run_publish": True,   # 發佈資訊（標題／說明欄／hashtag／標籤）
+    "run_thumb": True,     # 封面健檢（可加入多張排名）
+    "run_chapter": True,   # YouTube 章節規則
 }
 
 
@@ -74,13 +85,24 @@ class CheckDef:
     術語）原本完全不需要媒體檔就能跑（純文字分析），若健檢中心把它們
     也綁上「一定要先選素材」的門檻，就是把舊字幕健檢視窗能做的事做少
     了——這是本次整併最容易不小心弄丟的一項能力，所以特別留這個旗標。
+
+    v1.51.0 新增四個旗標，同一條界線延伸到新併入的三個異質對象：
+    `needs_ffmpeg` 是「只需要 ffmpeg 本身、不需要選一支影片」（封面健
+    檢量測任意圖片，與 `needs_media` 的「選好的媒體檔＋ffmpeg」不同）；
+    `needs_images`／`needs_publish_text`／`needs_chapters_text` 對應對
+    象區新增的三種選填輸入，沒填就悄悄略過（同檔名檢查「沒選素材就不
+    檢查」的既有邏輯，見 `run_health_scan`），不因為多了這幾項就讓「全
+    部選填、填什麼檢什麼」的既有承諾跳票。
     """
     __slots__ = ("key", "label", "source", "needs_media", "needs_video",
-                "needs_cues", "toggle_group", "always_on")
+                "needs_cues", "toggle_group", "always_on", "needs_ffmpeg",
+                "needs_images", "needs_publish_text", "needs_chapters_text")
 
     def __init__(self, key, label, source, needs_media=True,
                 needs_video=False, needs_cues=False,
-                toggle_group="preflight", always_on=False):
+                toggle_group="preflight", always_on=False,
+                needs_ffmpeg=False, needs_images=False,
+                needs_publish_text=False, needs_chapters_text=False):
         self.key = key
         self.label = label
         self.source = source
@@ -89,6 +111,10 @@ class CheckDef:
         self.needs_cues = needs_cues
         self.toggle_group = toggle_group
         self.always_on = always_on
+        self.needs_ffmpeg = needs_ffmpeg
+        self.needs_images = needs_images
+        self.needs_publish_text = needs_publish_text
+        self.needs_chapters_text = needs_chapters_text
 
 
 CHECK_DEFS = (
@@ -117,6 +143,15 @@ CHECK_DEFS = (
             needs_media=False, needs_cues=True),
     CheckDef("run_term", "術語一致性", "術語一致性",
             needs_media=False, needs_cues=True),
+    CheckDef("run_publish", "發佈資訊（標題／說明欄／hashtag／標籤）",
+            "發佈健檢", needs_media=False, toggle_group="healthcenter",
+            needs_publish_text=True),
+    CheckDef("run_thumb", "封面健檢（可加入多張排名）", "封面健檢",
+            needs_media=False, toggle_group="healthcenter",
+            needs_ffmpeg=True, needs_images=True),
+    CheckDef("run_chapter", "YouTube 章節規則", "章節健檢",
+            needs_media=False, toggle_group="healthcenter",
+            needs_chapters_text=True),
     CheckDef("filename", "檔名（有選素材才會一併檢查）", "檔名",
             needs_media=True, always_on=True),
 )
@@ -170,31 +205,31 @@ def _fmt_ts(seconds):
     return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
 
 
-def _run_filename(media_path, cues, config, progress_cb=None):
+def _run_filename(media_path, cues, config, progress_cb=None, **_extra):
     settings = resolve_preflight_settings(config)
     return list(check_filename(media_path, settings)), None
 
 
-def _run_audio(media_path, cues, config, progress_cb=None):
+def _run_audio(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.audiocheck import run_audio_check
     result = run_audio_check(media_path, config, progress_cb=progress_cb)
     return normalize_findings(result, "音訊健檢"), result
 
 
-def _run_video(media_path, cues, config, progress_cb=None):
+def _run_video(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.videocheck import run_video_check
     result = run_video_check(media_path, config, progress_cb=progress_cb)
     return normalize_findings(result, "影片畫質健檢"), result
 
 
-def _run_color(media_path, cues, config, progress_cb=None):
+def _run_color(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.colorcheck import analyze_color, resolve_colorcheck_settings
     result = analyze_color(media_path, resolve_colorcheck_settings(config),
                            progress_cb=progress_cb)
     return normalize_findings(result, "畫面曝光與色偏"), result
 
 
-def _run_volume(media_path, cues, config, progress_cb=None):
+def _run_volume(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.volumeconsistency import (analyze_volume_consistency,
                                             resolve_volume_consistency_settings)
     result = analyze_volume_consistency(
@@ -234,13 +269,13 @@ def _run_volume(media_path, cues, config, progress_cb=None):
     return findings, result
 
 
-def _run_pacing(media_path, cues, config, progress_cb=None):
+def _run_pacing(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.pacing import analyze_pacing
     result = analyze_pacing(media_path, config, progress_cb=progress_cb)
     return normalize_findings(result, "剪輯節奏"), result
 
 
-def _run_subtitle(media_path, cues, config, progress_cb=None):
+def _run_subtitle(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.subtitlecheck import analyze_cues, resolve_subcheck_settings
     result = analyze_cues(cues, resolve_subcheck_settings(config))
     issues = result.get("issues") or []
@@ -257,19 +292,19 @@ def _run_subtitle(media_path, cues, config, progress_cb=None):
     return findings, result
 
 
-def _run_adfriendly(media_path, cues, config, progress_cb=None):
+def _run_adfriendly(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.adfriendly import resolve_adfriendly_settings, scan_cues
     result = scan_cues(cues, resolve_adfriendly_settings(config))
     return normalize_adfriendly(result, "廣告友善度"), result
 
 
-def _run_hook(media_path, cues, config, progress_cb=None):
+def _run_hook(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.hookcheck import analyze_hook, resolve_hookcheck_settings
     result = analyze_hook(cues, resolve_hookcheck_settings(config))
     return normalize_findings(result, "開場健檢"), result
 
 
-def _run_legibility(media_path, cues, config, progress_cb=None):
+def _run_legibility(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.legibility import analyze_legibility
     style = (config or {}).get("subtitle_style", {})
     result = analyze_legibility(media_path, cues, style, config,
@@ -277,7 +312,7 @@ def _run_legibility(media_path, cues, config, progress_cb=None):
     return normalize_findings(result, "字幕可讀性"), result
 
 
-def _run_punct(media_path, cues, config, progress_cb=None):
+def _run_punct(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.punctstyle import analyze_punctuation
     result = analyze_punctuation(cues, config)
     findings = normalize_findings(result, "標點規範")
@@ -297,7 +332,7 @@ _SYNC_TITLES = {
 }
 
 
-def _run_subsync(media_path, cues, config, progress_cb=None):
+def _run_subsync(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.subsync import analyze_sync, resolve_subsync_settings
     result = analyze_sync(media_path, cues, resolve_subsync_settings(config))
     kind = result.get("kind", "ok")
@@ -332,13 +367,13 @@ def _run_subsync(media_path, cues, config, progress_cb=None):
     return [finding], result
 
 
-def _run_endscreen(media_path, cues, config, progress_cb=None):
+def _run_endscreen(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.endscreen import analyze_endscreen
     result = analyze_endscreen(media_path, cues, config)
     return normalize_findings(result, "片尾空間"), result
 
 
-def _run_sponsor(media_path, cues, config, progress_cb=None):
+def _run_sponsor(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.sponsorcheck import analyze_sponsor
     duration = 0.0
     if media_path and os.path.exists(media_path):
@@ -350,10 +385,123 @@ def _run_sponsor(media_path, cues, config, progress_cb=None):
     return normalize_findings(result, "工商揭露"), result
 
 
-def _run_term(media_path, cues, config, progress_cb=None):
+def _run_term(media_path, cues, config, progress_cb=None, **_extra):
     from subtitle.termcheck import analyze_terms
     result = analyze_terms(cues, config)
     return normalize_findings(result, "術語一致性"), result
+
+
+# ---------------------------------------------------------------------
+# v1.51.0 新增三項：發佈資訊／封面／章節，作用對象不是（media_path,
+# cues），而是對象區新增的三種選填輸入（`publish` 字典與 `image_paths`
+# 清單，由 `run_health_scan` 統一傳給每個 runner；既有 11 個 runner 用
+# `**_extra` 吃掉這兩個用不到的參數，不需要各自改寫）。
+# ---------------------------------------------------------------------
+
+def _run_publish(media_path, cues, config, progress_cb=None,
+                 publish=None, image_paths=None, **_extra):
+    """
+    發佈資訊健檢：標題／說明欄／hashtag／標籤上限 + 說明欄結構健檢。
+
+    對應舊 `gui/publishcheck_dialog.py`——那顆視窗本來就是把
+    `analyze_publish`（上限）與 `analyze_description`（結構）兩份報告
+    接在一起顯示，這裡原樣沿用，只是把「一個視窗」換成「健檢中心裡的
+    一組發現」。
+    """
+    from subtitle.publishcheck import analyze_publish, resolve_publishcheck_settings
+    from subtitle.desccheck import analyze_description
+    publish = publish or {}
+    settings = resolve_publishcheck_settings(config)
+    publish_result = analyze_publish(
+        publish.get("title", ""), publish.get("description", ""),
+        publish.get("tags", ""), settings)
+    findings = normalize_findings(publish_result, "發佈健檢")
+
+    duration = 0.0
+    if media_path and os.path.exists(media_path):
+        from subtitle.media import probe_duration
+        try:
+            duration = probe_duration(media_path)
+        except Exception:  # 讀不到時長不該讓整項檢查失敗，缺章節提醒即可。
+            duration = 0.0
+    desc_result = analyze_description(publish.get("description", ""),
+                                      duration, config)
+    findings += normalize_findings(desc_result, "發佈健檢")
+    return findings, {"publish": publish_result, "description": desc_result}
+
+
+def _run_thumb(media_path, cues, config, progress_cb=None,
+              publish=None, image_paths=None, **_extra):
+    """
+    封面健檢：任意圖片檔，多張時依分數排序並指出建議使用哪一張。
+
+    對應舊 `gui/thumbcheck_dialog.py`。每張圖的發現標題前面加上檔名，
+    因為健檢中心是把所有來源攤平成一份清單，不像舊視窗一張圖一份報
+    告——不加檔名的話，多張圖各自的「手機尺寸可讀性」會在清單裡分不
+    出是哪一張。
+    """
+    from subtitle.thumbcheck import rank_thumbnails
+    paths = list(image_paths or [])
+    results = rank_thumbnails(paths, config, progress_cb=progress_cb)
+    findings = []
+    for result in results:
+        metrics = result.get("metrics") or {}
+        name = metrics.get("name") or os.path.basename(
+            metrics.get("path", "") or "封面")
+        if result.get("error"):
+            findings.append({
+                "level": LEVEL_WARN, "title": f"「{name}」讀取失敗",
+                "detail": result["error"], "advice": "", "source": "封面健檢",
+            })
+            continue
+        for row in result.get("findings") or []:
+            findings.append({
+                "level": row["level"], "title": f"{name}：{row['title']}",
+                "detail": row.get("detail", ""),
+                "advice": row.get("advice", ""), "source": "封面健檢",
+            })
+    if len(results) > 1:
+        usable = [r for r in results if r.get("ok") and not r.get("error")]
+        if usable:
+            best = (usable[0].get("metrics") or {}).get("name", "")
+            findings.append({
+                "level": LEVEL_GOOD, "title": "封面候選排名",
+                "detail": f"共 {len(results)} 張，建議使用「{best}」。",
+                "advice": "", "source": "封面健檢",
+            })
+        else:
+            findings.append({
+                "level": LEVEL_WARN, "title": "封面候選排名",
+                "detail": f"共 {len(results)} 張，沒有一張通過健檢。",
+                "advice": "建議重做封面。", "source": "封面健檢",
+            })
+    return findings, {"results": results}
+
+
+def _run_chapter(media_path, cues, config, progress_cb=None,
+                 publish=None, image_paths=None, **_extra):
+    """
+    YouTube 章節規則健檢：貼上章節文字即可檢查，影片為選填（有的話才能
+    檢查最後一章長度）。對應舊 `gui/chapter_dialog.py`。
+    """
+    from subtitle.chaptercheck import (parse_chapters, resolve_chaptercheck_settings,
+                                       validate_chapters)
+    publish = publish or {}
+    text = publish.get("chapters_text", "")
+    settings = resolve_chaptercheck_settings(config)
+    chapters, errors = parse_chapters(text)
+    duration = None
+    if media_path and os.path.exists(media_path):
+        from subtitle.media import probe_duration
+        try:
+            duration = probe_duration(media_path)
+        except Exception:
+            duration = None
+    result = validate_chapters(chapters, duration, settings, errors)
+    findings = normalize_findings(result, "章節健檢")
+    raw = {"chapters": chapters, "errors": errors, "duration": duration,
+          "settings": settings}
+    return findings, raw
 
 
 _RUNNERS = {
@@ -372,6 +520,9 @@ _RUNNERS = {
     "run_endscreen": _run_endscreen,
     "run_sponsor": _run_sponsor,
     "run_term": _run_term,
+    "run_publish": _run_publish,
+    "run_thumb": _run_thumb,
+    "run_chapter": _run_chapter,
 }
 
 
@@ -393,6 +544,19 @@ _FIXABLE = {
     ("標點規範", "句中逗頓"): "punct_fix",
     ("語音同步", "固定偏移"): "sync_fix",
     ("語音同步", "逐漸漂移"): "sync_fix",
+    # v1.51.0：術語一致性首次接上 apply_term_fixes（subtitle/termcheck.py
+    # 早就寫好，GUI 一直沒有任何入口呼叫，見 docs/UI_AUDIT_2.0.md 2.1
+    # 節重疊表第 14 項）。「無法判斷哪個才對」故意不列在這裡——次數一樣
+    # 多時 analyze_terms 本身就標記為不明確主流寫法，不該自動亂猜。
+    ("術語一致性", "大小寫不一致"): "term_fix",
+    ("術語一致性", "疑似同一個詞的不同寫法"): "term_fix",
+    # v1.51.0：章節規則的「一鍵修正」（沿用 chaptercheck.fix_chapters）。
+    ("章節健檢", "格式錯誤"): "chapter_fix",
+    ("章節健檢", "首章時間"): "chapter_fix",
+    ("章節健檢", "章節數量"): "chapter_fix",
+    ("章節健檢", "時間重複"): "chapter_fix",
+    ("章節健檢", "章節長度"): "chapter_fix",
+    ("章節健檢", "章節標題"): "chapter_fix",
 }
 
 FIX_LABELS = {
@@ -403,6 +567,8 @@ FIX_LABELS = {
     "fix_overlap": "一鍵修復重疊",
     "punct_fix": "一鍵套用標點規範",
     "sync_fix": "一鍵校正同步",
+    "term_fix": "一鍵統一術語寫法",
+    "chapter_fix": "一鍵修正章節",
 }
 
 
@@ -416,9 +582,17 @@ def tag_fix_key(finding: dict) -> Optional[str]:
 # 主要進入點：一次跑完使用者勾選的檢查項，回傳彙總結果。
 # ---------------------------------------------------------------------
 
+def has_publish_text(publish: Optional[dict]) -> bool:
+    publish = publish or {}
+    return any((publish.get(key) or "").strip()
+              for key in ("title", "description", "tags"))
+
+
 def run_health_scan(media_path: str, cues: Optional[list],
                     config: Optional[dict], selected_keys,
-                    progress_cb: Optional[Callable[[float, str], None]] = None
+                    progress_cb: Optional[Callable[[float, str], None]] = None,
+                    publish: Optional[dict] = None,
+                    image_paths: Optional[list] = None,
                     ) -> dict:
     """
     一次跑完 selected_keys 指定的檢查項，回傳
@@ -432,10 +606,16 @@ def run_health_scan(media_path: str, cues: Optional[list],
     這是舊字幕健檢視窗本來就有的能力：CPS／廣告友善度／開場／標點／
     術語一致性完全不需要媒體檔，健檢中心不能因為併了另外兩個一定要選
     素材的視窗，就連帶讓這幾項也變成「一定要先選素材」。）
+
+    `publish`（{"title","description","tags","chapters_text"}）與
+    `image_paths` 是 v1.51.0 新增的兩種選填對象——同樣「沒填就悄悄略
+    過」，不會因為留空而報錯或擋住其他項目繼續跑。
     """
     cues = list(cues or [])
     selected = set(selected_keys or [])
     media_path = (media_path or "").strip()
+    publish = dict(publish or {})
+    image_paths = [p for p in (image_paths or []) if p]
 
     def report(ratio, message):
         if callable(progress_cb):
@@ -443,14 +623,13 @@ def run_health_scan(media_path: str, cues: Optional[list],
 
     report(0.02, "檢查素材類型…")
     has_media = bool(media_path and os.path.exists(media_path))
-    has_ffmpeg = False
+    from subtitle.burner import ffmpeg_available
+    has_ffmpeg = ffmpeg_available()  # 便宜（只查 PATH），與是否選了媒體檔無關
+                                     # ——封面健檢只需要 ffmpeg 本身。
     has_video = False
-    if has_media:
-        from subtitle.burner import ffmpeg_available
-        has_ffmpeg = ffmpeg_available()
-        if has_ffmpeg:
-            from subtitle.media import has_video_stream
-            has_video = has_video_stream(media_path)
+    if has_media and has_ffmpeg:
+        from subtitle.media import has_video_stream
+        has_video = has_video_stream(media_path)
 
     steps = []
     skipped = []
@@ -475,6 +654,16 @@ def run_health_scan(media_path: str, cues: Optional[list],
         if check.needs_cues and not cues:
             skipped.append(f"{check.source}：沒有字幕，已略過")
             continue
+        if check.needs_ffmpeg and not has_ffmpeg:
+            skipped.append(f"{check.source}：找不到 ffmpeg，已略過")
+            continue
+        if check.needs_images and not image_paths:
+            continue  # 對象區沒加封面圖，悄悄略過，同檔名檢查的既有邏輯。
+        if check.needs_publish_text and not has_publish_text(publish):
+            continue  # 對象區沒貼標題／說明欄／標籤，悄悄略過。
+        if check.needs_chapters_text and not (publish.get("chapters_text")
+                                              or "").strip():
+            continue  # 對象區沒貼章節文字，悄悄略過。
         steps.append(check)
 
     findings = []
@@ -491,7 +680,9 @@ def run_health_scan(media_path: str, cues: Optional[list],
 
         try:
             rows, raw_result = runner(media_path, cues, config,
-                                      progress_cb=sub_progress)
+                                      progress_cb=sub_progress,
+                                      publish=publish,
+                                      image_paths=image_paths)
             for row in rows:
                 row = dict(row)
                 row.setdefault("source", check.source)
@@ -608,6 +799,21 @@ def apply_cue_fix(fix_key: str, cues: list, config: Optional[dict],
         new_cues = apply_sync_correction(
             cues, sync_result["scale"], sync_result["offset"])
         return new_cues, 1, "已套用同步校正。"
+    if fix_key == "term_fix":
+        # v1.51.0：apply_term_fixes 首次接上 GUI（subtitle/termcheck.py
+        # 早就寫好，見 docs/UI_AUDIT_2.0.md 2.1 節第 14 項）。
+        term_result = raw.get("術語一致性")
+        groups = (term_result or {}).get("groups") or []
+        if not groups:
+            raise FixError("請先跑過健檢並確認偵測到寫法不一致的詞。")
+        from subtitle.termcheck import apply_term_fixes, build_fix_choices
+        choices = build_fix_choices(groups, decisive_only=True)
+        if not choices:
+            raise FixError("目前抓到的寫法不一致都沒有明確的主流寫法"
+                           "（次數一樣多），無法自動判斷該統一成哪一個，"
+                           "請手動用「尋找取代」處理。")
+        new_cues, changed = apply_term_fixes(cues, choices)
+        return new_cues, changed, f"已統一 {changed} 處術語寫法。"
     raise FixError(f"不支援的修復項目：{fix_key}")
 
 
@@ -666,6 +872,31 @@ def suggest_fix_output_path(fix_key: str, media_path: str) -> str:
     return unique_path(suggest_output_path(media_path))
 
 
+def apply_text_fix(fix_key: str, config: Optional[dict], raw: dict) -> tuple:
+    """
+    處理修復對象是「對象區的一段貼上文字」而非字幕／媒體檔的項目。
+
+    目前只有章節（沿用既有 `chaptercheck.fix_chapters`）。回傳
+    (新文字, 修正說明清單, message)；呼叫端把新文字寫回章節貼上框。
+    """
+    if fix_key == "chapter_fix":
+        chap_raw = raw.get("章節健檢") or {}
+        chapters = chap_raw.get("chapters") or []
+        if not chapters and not chap_raw.get("errors"):
+            raise FixError("請先跑過健檢並確認章節文字已被讀到。")
+        from subtitle.chaptercheck import fix_chapters, format_chapters_text
+        settings = chap_raw.get("settings")
+        fixed, changes = fix_chapters(
+            chapters, chap_raw.get("duration"), settings,
+            parse_errors=chap_raw.get("errors"))
+        text = format_chapters_text(fixed)
+        message = (f"已修正 {len(changes)} 項。" if changes
+                  else "沒有可自動修正的項目（可能需要手動決定影片怎麼分段）。")
+        return text, changes, message
+    raise FixError(f"不支援的修復項目：{fix_key}")
+
+
 MEDIA_FIX_KEYS = frozenset({"audiofix", "trim", "volumefix"})
 CUE_FIX_KEYS = frozenset({"extend_cues", "fix_overlap", "punct_fix",
-                          "sync_fix"})
+                          "sync_fix", "term_fix"})
+TEXT_FIX_KEYS = frozenset({"chapter_fix"})

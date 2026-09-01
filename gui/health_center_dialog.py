@@ -1,13 +1,20 @@
 # -*- coding: utf-8 -*-
 """
 健檢中心：v1.50.0 起取代「上片前健檢」「字幕健檢」「上片前總體檢」三個
-視窗（見 docs/UI_AUDIT_2.0.md 2.2 節、docs/UI_ARCHITECTURE_2.0.md B.5）。
+視窗（見 docs/UI_AUDIT_2.0.md 2.2 節、docs/UI_ARCHITECTURE_2.0.md B.5）；
+v1.51.0 再併入「發佈健檢」「封面健檢」「章節健檢」三個異質對象的視窗，
+對象區隨之擴充加入封面圖（可多選）／發佈文字（標題、說明欄、標籤、章
+節四個貼上框，可摺疊）。「系列一致性」比的是多支影片彼此之間一不一
+致，與其餘 17 項「檢查單一素材合不合格」性質不同，依 2.2 節預留的退
+路保留為獨立視窗，只是入口從主視窗工具列移進本視窗的對象區（見對象區
+「系列影片」一列的〔開啟系列一致性比對...〕）。
 
-三個舊視窗背後總共是 15 種既有的健檢邏輯（`subtitle/` 各模組），彼此有
-5～9 項重疊；本視窗把它們收進同一份分級清單：選好檢查對象（影片／字幕，
-皆選填，填什麼檢什麼）→ 勾選要跑的檢查（門檻收進「進階設定」，不再是
-開窗就是一片 spinbox 牆）→ 開始健檢 → `ttk.Treeview` 分級清單，選取一筆
-發現即顯示詳情與建議，可修的項目按「修復此項」直接呼叫既有的修復函式。
+六個舊視窗背後總共是 18 種既有的健檢邏輯（`subtitle/` 各模組），彼此有
+重疊；本視窗把它們收進同一份分級清單：選好檢查對象（影片／字幕／封面
+圖／發佈文字／系列影片，皆選填，填什麼檢什麼）→ 勾選要跑的檢查（門檻
+收進「進階設定」，不再是開窗就是一片 spinbox 牆）→ 開始健檢 →
+`ttk.Treeview` 分級清單，選取一筆發現即顯示詳情與建議，可修的項目按
+「修復此項」直接呼叫既有的修復函式。
 
 真正的分析與修復邏輯完全在 `gui/health_aggregator.py`（可離線單元測試）
 與各 `subtitle/` 模組；本檔案只負責畫面與背景執行緒調度。
@@ -25,8 +32,10 @@ from gui import health_aggregator as ha
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
 from gui.scrollable import ScrollableFrame
+from gui.series_dialog import SeriesCheckDialog
 from subtitle.audiofix import resolve_audiofix_settings
 from subtitle.burner import ffmpeg_available
+from subtitle.chaptercheck import resolve_chaptercheck_settings
 from subtitle.colorcheck import resolve_colorcheck_settings
 from subtitle.adfriendly import resolve_adfriendly_settings
 from subtitle.hookcheck import resolve_hookcheck_settings
@@ -34,8 +43,10 @@ from subtitle.importer import load_subtitle_file
 from subtitle.pacing import resolve_pacing_settings
 from subtitle.preflight import (LEVEL_BAD, LEVEL_GOOD, LEVEL_WARN,
                                 resolve_preflight_settings)
+from subtitle.publishcheck import resolve_publishcheck_settings
 from subtitle.punctstyle import resolve_punctstyle_settings
 from subtitle.subtitlecheck import resolve_subcheck_settings
+from subtitle.thumbcheck import resolve_thumbcheck_settings
 from subtitle.videocheck import resolve_videocheck_settings
 from subtitle.volumeconsistency import resolve_volume_consistency_settings
 
@@ -47,6 +58,10 @@ MEDIA_FILETYPES = [
 ]
 SUBTITLE_FILETYPES = [
     ("字幕檔", "*.srt *.vtt"),
+    ("所有檔案", "*.*"),
+]
+IMAGE_FILETYPES = [
+    ("圖片檔", "*.png *.jpg *.jpeg *.webp *.bmp"),
     ("所有檔案", "*.*"),
 ]
 
@@ -62,9 +77,14 @@ class HealthCenterDialog(tk.Toplevel):
     def __init__(self, master, config_data, media_path="", cues=None,
                 on_fixed=None):
         super().__init__(master)
-        self.title("健檢中心：影片與字幕的所有健檢，一次跑完")
-        self.geometry("1040x780")
-        self.minsize(900, 640)
+        self.title("健檢中心：影片、字幕、封面與發佈資訊的所有健檢，一次跑完")
+        # 高度刻意壓在 900 而不是把所有內容一次攤開所需的 1020：1080p
+        # 螢幕扣掉工作列只剩約 1032px，1020 幾乎貼死，更小的筆電螢幕會把
+        # 底部的「修復此項」整個推出畫面。對象區與檢查項本來就在可捲動區
+        # 裡（實測垂直溢出 61px，捲一下就到），少看幾列的代價遠小於按鈕
+        # 看不見。
+        self.geometry("1120x900")
+        self.minsize(980, 700)
         self.transient(master)
 
         self.config_data = config_data
@@ -76,13 +96,32 @@ class HealthCenterDialog(tk.Toplevel):
         self.last_result = None
         self._finding_by_item = {}
         self._selected_finding = None
+        self._thumb_paths = []
+        self._series_paths = []
+        self._publish_expanded = False
 
         body = ttk.Frame(self, padding=12)
         body.pack(fill="both", expand=True)
 
-        self._build_ffmpeg_banner(body)
-        self._build_object_row(body, media_path)
-        self._build_checklist(body)
+        # 對象區在 v1.51.0 擴充（封面圖／發佈文字／系列影片）後，展開
+        # 「發佈文字」摺疊區＋18 項檢查清單全展開時的總高度會超過任何
+        # 合理的預設視窗高度（實測需要 1300px 以上）。仿照
+        # `HealthSettingsDialog` 已經在用的做法：把這段低頻捲動的內容
+        # 包進 `ScrollableFrame`、給一個固定高度預算，讓「開始健檢」與
+        # 分級報告永遠留在視窗下半部可見，不會被對象區展開撐到畫面外
+        # （這正是 docs/ROADMAP_2.0.md 點名的「靠看的」版面判斷會漏掉
+        # 的那種垂直溢位，本檔案改用量測＋螢幕截圖雙重驗證）。
+        top_wrap = ttk.Frame(body, height=560)
+        top_wrap.pack(fill="x")
+        top_wrap.pack_propagate(False)
+        self.top_scroll = ScrollableFrame(
+            top_wrap, theme=self.config_data.get("theme", "light"))
+        self.top_scroll.pack(fill="both", expand=True)
+        top = self.top_scroll.interior
+
+        self._build_ffmpeg_banner(top)
+        self._build_object_row(top, media_path)
+        self._build_checklist(top)
         self._build_run_row(body)
         self._build_result_area(body)
 
@@ -130,8 +169,180 @@ class HealthCenterDialog(tk.Toplevel):
         ttk.Button(row_subs, text="瀏覽...", width=8,
                   command=self._choose_subs).pack(side="left")
 
+        ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=(8, 6))
+        self._build_thumb_object(frame)
+        self._build_publish_object(frame)
+        self._build_series_object(frame)
+
     def _subs_summary(self):
         return f"（沿用目前的 {len(self.cues)} 句字幕）" if self.cues else "（無）"
+
+    # -- 封面圖（可多選，v1.51.0 併自 gui/thumbcheck_dialog.py）---------
+    def _build_thumb_object(self, frame):
+        sub = ttk.LabelFrame(frame, text="封面圖（可多選，會依分數排名）",
+                             padding=(8, 4))
+        sub.pack(fill="x")
+        list_row = ttk.Frame(sub)
+        list_row.pack(fill="x")
+        self.thumb_list = tk.Listbox(list_row, height=3,
+                                     font=("Microsoft JhengHei", 9))
+        thumb_scroll = ttk.Scrollbar(list_row, orient="vertical",
+                                     command=self.thumb_list.yview)
+        self.thumb_list.configure(yscrollcommand=thumb_scroll.set)
+        self.thumb_list.pack(side="left", fill="both", expand=True)
+        thumb_scroll.pack(side="left", fill="y")
+        btn_row = ttk.Frame(sub)
+        btn_row.pack(fill="x", pady=(4, 0))
+        ttk.Button(btn_row, text="加入圖片...",
+                  command=self._add_thumbs).pack(side="left")
+        ttk.Button(btn_row, text="移除選取",
+                  command=self._remove_thumb).pack(side="left", padx=(6, 0))
+        ttk.Button(btn_row, text="全部清除",
+                  command=self._clear_thumbs).pack(side="left", padx=(6, 0))
+
+    def _add_thumbs(self):
+        paths = filedialog.askopenfilenames(
+            title="選擇封面圖片", filetypes=IMAGE_FILETYPES, parent=self)
+        for path in paths:
+            if path not in self._thumb_paths:
+                self._thumb_paths.append(path)
+                self.thumb_list.insert("end", os.path.basename(path))
+
+    def _remove_thumb(self):
+        for index in reversed(self.thumb_list.curselection()):
+            self.thumb_list.delete(index)
+            del self._thumb_paths[index]
+
+    def _clear_thumbs(self):
+        self.thumb_list.delete(0, "end")
+        self._thumb_paths = []
+
+    # -- 發佈文字（可摺疊，v1.51.0 併自 publishcheck/chapter_dialog）----
+    def _build_publish_object(self, frame):
+        self.publish_toggle_btn = ttk.Button(
+            frame, text="▸ 發佈文字（標題／說明欄／標籤／章節，點一下展開）",
+            command=self._toggle_publish)
+        self.publish_toggle_btn.pack(fill="x", pady=(6, 0))
+        self.publish_body = ttk.Frame(frame)
+        # 預設收合，不 pack——門檻與低頻的貼上框不該一開窗就佔滿版面
+        # （docs/UI_AUDIT_2.0.md 2.2 節同一原則已用在「進階設定」上）。
+
+        title_row = ttk.Frame(self.publish_body)
+        title_row.pack(fill="x", pady=(4, 0))
+        ttk.Label(title_row, text="標題：", width=8).pack(side="left")
+        self.publish_title_var = tk.StringVar()
+        ttk.Entry(title_row, textvariable=self.publish_title_var).pack(
+            side="left", fill="x", expand=True)
+
+        desc_frame = ttk.LabelFrame(self.publish_body, text="說明欄",
+                                    padding=(6, 4))
+        desc_frame.pack(fill="x", pady=(4, 0))
+        self.publish_desc = tk.Text(desc_frame, wrap="word", height=4,
+                                    font=("Microsoft JhengHei", 9))
+        desc_scroll = ttk.Scrollbar(desc_frame, orient="vertical",
+                                    command=self.publish_desc.yview)
+        self.publish_desc.configure(yscrollcommand=desc_scroll.set)
+        self.publish_desc.pack(side="left", fill="both", expand=True)
+        desc_scroll.pack(side="left", fill="y")
+
+        tags_row = ttk.Frame(self.publish_body)
+        tags_row.pack(fill="x", pady=(4, 0))
+        ttk.Label(tags_row, text="標籤：", width=8).pack(side="left")
+        self.publish_tags_var = tk.StringVar()
+        ttk.Entry(tags_row, textvariable=self.publish_tags_var).pack(
+            side="left", fill="x", expand=True)
+        ttk.Label(self.publish_body, foreground="#666666", anchor="w",
+                 text="（標籤以逗號分隔，就是 YouTube 後台那一欄的填法；"
+                      "hashtag 請直接寫在說明欄或標題裡）"
+                 ).pack(fill="x")
+
+        chapters_frame = ttk.LabelFrame(
+            self.publish_body, text="章節文字（每行「時間戳 空白 標題」）",
+            padding=(6, 4))
+        chapters_frame.pack(fill="x", pady=(4, 0))
+        self.publish_chapters = tk.Text(chapters_frame, wrap="none",
+                                        height=4,
+                                        font=("Microsoft JhengHei", 9))
+        chapters_scroll = ttk.Scrollbar(
+            chapters_frame, orient="vertical",
+            command=self.publish_chapters.yview)
+        self.publish_chapters.configure(yscrollcommand=chapters_scroll.set)
+        self.publish_chapters.pack(side="left", fill="both", expand=True)
+        chapters_scroll.pack(side="left", fill="y")
+
+        media_row = ttk.Frame(self.publish_body)
+        media_row.pack(fill="x", pady=(4, 0))
+        ttk.Label(media_row, foreground="#666666", anchor="w", justify="left",
+                 wraplength=760,
+                 text="說明欄上限算的是位元組，中文一個字佔 3 個位元組；"
+                      "hashtag 超過 15 個 YouTube 會「忽略全部」且不提示；"
+                      "章節的最後一章長度需要上方「影片檔」欄有選檔才能檢查。"
+                 ).pack(fill="x")
+
+    def _toggle_publish(self):
+        self._publish_expanded = not self._publish_expanded
+        if self._publish_expanded:
+            self.publish_body.pack(fill="x", pady=(0, 4))
+            self.publish_toggle_btn.configure(
+                text="▾ 發佈文字（標題／說明欄／標籤／章節，點一下收合）")
+        else:
+            self.publish_body.pack_forget()
+            self.publish_toggle_btn.configure(
+                text="▸ 發佈文字（標題／說明欄／標籤／章節，點一下展開）")
+
+    # -- 系列影片（可多選，保留獨立視窗，v1.51.0 只把入口移進對象區）----
+    def _build_series_object(self, frame):
+        sub = ttk.LabelFrame(
+            frame, text="系列影片（可多選，比對整批彼此是否一致）",
+            padding=(8, 4))
+        sub.pack(fill="x", pady=(6, 0))
+        list_row = ttk.Frame(sub)
+        list_row.pack(fill="x")
+        self.series_list = tk.Listbox(list_row, height=3,
+                                      font=("Microsoft JhengHei", 9))
+        series_scroll = ttk.Scrollbar(list_row, orient="vertical",
+                                      command=self.series_list.yview)
+        self.series_list.configure(yscrollcommand=series_scroll.set)
+        self.series_list.pack(side="left", fill="both", expand=True)
+        series_scroll.pack(side="left", fill="y")
+        btn_row = ttk.Frame(sub)
+        btn_row.pack(fill="x", pady=(4, 0))
+        ttk.Button(btn_row, text="加入影片...",
+                  command=self._add_series).pack(side="left")
+        ttk.Button(btn_row, text="移除選取",
+                  command=self._remove_series).pack(side="left", padx=(6, 0))
+        ttk.Button(btn_row, text="全部清除",
+                  command=self._clear_series).pack(side="left", padx=(6, 0))
+        ttk.Button(btn_row, text="開啟系列一致性比對...",
+                  command=self._open_series_check).pack(side="left",
+                                                        padx=(6, 0))
+        ttk.Label(
+            sub, foreground="#666666", anchor="w", justify="left",
+            wraplength=760,
+            text="系列一致性比的是「多支影片彼此之間」，跟其餘檢查項"
+                 "（單支影片合不合格）性質不同，因此獨立開一個比對視窗、"
+                 "不併進下方的分級報告。",
+        ).pack(fill="x", pady=(2, 0))
+
+    def _add_series(self):
+        paths = filedialog.askopenfilenames(
+            title="選擇同系列的影片", filetypes=MEDIA_FILETYPES, parent=self)
+        for path in paths:
+            if path not in self._series_paths:
+                self._series_paths.append(path)
+                self.series_list.insert("end", os.path.basename(path))
+
+    def _remove_series(self):
+        for index in reversed(self.series_list.curselection()):
+            self.series_list.delete(index)
+            del self._series_paths[index]
+
+    def _clear_series(self):
+        self.series_list.delete(0, "end")
+        self._series_paths = []
+
+    def _open_series_check(self):
+        SeriesCheckDialog(self, self.config_data, list(self._series_paths))
 
     def _build_checklist(self, body):
         frame = ttk.LabelFrame(body, text="要跑哪些檢查（自動記憶）",
@@ -246,11 +457,24 @@ class HealthCenterDialog(tk.Toplevel):
         self.after(80, self._init_pane_sash)
 
     def _init_pane_sash(self):
+        # 發現詳情區的「修復此項」按鈕比清單本身更容易被忽略地壓到 1px
+        # 高（v1.51.0 對象區擴充後，實測預設尺寸下 pane 可用高度比
+        # v1.50.0 小很多，才第一次踩到這個問題）：舊公式只保住清單至少
+        # 140px，detail 區不足額時完全沒有下限，`170 - 234` 這種算式會
+        # 讓 detail 只分到 64px、三行文字＋按鈕塞不進去，按鈕變得看得到
+        # 按不到。改成優先保住 detail 的 170px 下限，清單只保底 60px
+        # （清單本身有自己的捲軸，壓縮只是少看到幾列，不像按鈕壓縮到
+        # 1px 那樣直接壞掉）。
         try:
             self._pane.update_idletasks()
             total = self._pane.winfo_height()
-            if total > 260:
-                self._pane.sashpos(0, max(total - 170, 140))
+            detail_min, tree_min = 170, 60
+            if total <= detail_min + tree_min:
+                sashpos = max(total - detail_min, tree_min)
+            else:
+                sashpos = total - detail_min
+            if total > 100:
+                self._pane.sashpos(0, sashpos)
         except tk.TclError:
             pass  # 視窗已關閉或尚未映射，安全略過。
 
@@ -305,14 +529,29 @@ class HealthCenterDialog(tk.Toplevel):
         except OSError:
             pass  # 存檔失敗不影響本次使用。
 
+    def _collect_publish(self):
+        return {
+            "title": self.publish_title_var.get(),
+            "description": self.publish_desc.get("1.0", "end"),
+            "tags": self.publish_tags_var.get(),
+            "chapters_text": self.publish_chapters.get("1.0", "end"),
+        }
+
+    def _has_any_object(self, media_path, publish):
+        if media_path or self.cues or self._thumb_paths:
+            return True
+        return ha.has_publish_text(publish) or bool(
+            (publish.get("chapters_text") or "").strip())
+
     def _on_run(self):
         if self.is_processing or self.is_fixing:
             return
         media_path = self.media_var.get().strip()
-        if not media_path and not self.cues:
+        publish = self._collect_publish()
+        if not self._has_any_object(media_path, publish):
             messagebox.showinfo(
-                "提示", "請至少選擇要健檢的影片，或先準備好字幕。",
-                parent=self)
+                "提示", "請至少填一項檢查對象：影片、字幕、封面圖，"
+                "或發佈文字（標題／說明欄／標籤／章節）。", parent=self)
             return
         selected = self._selected_keys()
         if not selected:
@@ -326,15 +565,17 @@ class HealthCenterDialog(tk.Toplevel):
         threading.Thread(
             target=self._run_worker,
             args=(media_path, list(self.cues), dict(self.config_data),
-                 selected),
+                 selected, publish, list(self._thumb_paths)),
             daemon=True).start()
 
-    def _run_worker(self, media_path, cues, config, selected):
+    def _run_worker(self, media_path, cues, config, selected, publish,
+                    image_paths):
         try:
             def progress(ratio, message):
                 self.result_queue.put(("status", (message, ratio)))
             result = ha.run_health_scan(media_path, cues, config, selected,
-                                        progress_cb=progress)
+                                        progress_cb=progress, publish=publish,
+                                        image_paths=image_paths)
             self.result_queue.put(("done", result))
         except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
             logger.exception("健檢中心掃描失敗")
@@ -417,6 +658,28 @@ class HealthCenterDialog(tk.Toplevel):
             self._run_cue_fix(fix_key)
         elif fix_key in ha.MEDIA_FIX_KEYS:
             self._run_media_fix(fix_key)
+        elif fix_key in ha.TEXT_FIX_KEYS:
+            self._run_text_fix(fix_key)
+
+    def _run_text_fix(self, fix_key):
+        """處理修復對象是對象區貼上文字的項目（目前只有章節）。"""
+        raw = (self.last_result or {}).get("raw") or {}
+        try:
+            new_text, changes, message = ha.apply_text_fix(
+                fix_key, self.config_data, raw)
+        except ha.FixError as exc:
+            messagebox.showinfo("提示", str(exc), parent=self)
+            return
+        if not changes:
+            messagebox.showinfo("提示", message, parent=self)
+            return
+        if fix_key == "chapter_fix":
+            if not self._publish_expanded:
+                self._toggle_publish()  # 讓使用者看得到被改動的內容。
+            self.publish_chapters.delete("1.0", "end")
+            self.publish_chapters.insert("1.0", new_text)
+        self.status_var.set(f"{message}重新健檢中...")
+        self._on_run()
 
     def _run_cue_fix(self, fix_key):
         raw = (self.last_result or {}).get("raw") or {}
@@ -610,6 +873,9 @@ class HealthSettingsDialog(tk.Toplevel):
         self._build_hook(body)
         self._build_punct(body)
         self._build_filename(body)
+        self._build_publish(body)
+        self._build_thumb(body)
+        self._build_chapter(body)
 
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x", pady=(8, 0))
@@ -817,6 +1083,70 @@ class HealthSettingsDialog(tk.Toplevel):
             side="left", fill="x", expand=True, padx=(2, 0))
         return row
 
+    # -- v1.51.0 新增：發佈／封面／章節三個併入視窗原本的門檻 -----------
+    def _build_publish(self, body):
+        s = resolve_publishcheck_settings(self.config_data)
+        frame = ttk.LabelFrame(body, text="發佈健檢上限（標題／說明欄／標籤）",
+                               padding=(10, 6))
+        frame.pack(fill="x", pady=(0, 8))
+        self.pub_title_limit_var = tk.IntVar(value=s["title_limit"])
+        self._spin_row(frame, "標題上限:", self.pub_title_limit_var,
+                      unit="字元", from_=20, to=200, increment=10)
+        self.pub_mobile_var = tk.IntVar(value=s["title_mobile_visible"])
+        self._spin_row(frame, "手機可見標題:", self.pub_mobile_var, unit="字元",
+                      from_=10, to=100, increment=5)
+        self.pub_desc_limit_var = tk.IntVar(
+            value=s["description_byte_limit"])
+        self._spin_row(frame, "說明欄上限:", self.pub_desc_limit_var,
+                      unit="位元組", from_=500, to=10000, increment=500)
+        self.pub_max_tag_var = tk.IntVar(value=s["max_hashtags"])
+        self._spin_row(frame, "hashtag 上限:", self.pub_max_tag_var, unit="個",
+                      from_=1, to=30, increment=1)
+        self.pub_rec_tag_var = tk.IntVar(value=s["recommended_hashtags"])
+        self._spin_row(frame, "hashtag 建議上限:", self.pub_rec_tag_var,
+                      unit="個", from_=1, to=15, increment=1)
+        self.pub_tag_char_var = tk.IntVar(value=s["tag_char_limit"])
+        self._spin_row(frame, "標籤總字元上限:", self.pub_tag_char_var,
+                      unit="字元", from_=100, to=1000, increment=50)
+
+    def _build_thumb(self, body):
+        s = resolve_thumbcheck_settings(self.config_data)
+        frame = ttk.LabelFrame(body, text="封面健檢門檻", padding=(10, 6))
+        frame.pack(fill="x", pady=(0, 8))
+        self.thumb_width_var = tk.IntVar(value=s["mobile_width"])
+        self._spin_row(frame, "手機縮圖寬度:", self.thumb_width_var, unit="像素",
+                      from_=80, to=640, increment=20)
+        self.thumb_detail_var = tk.DoubleVar(value=s["min_detail_keep"])
+        self._spin_row(frame, "細節保留下限:", self.thumb_detail_var,
+                      from_=0.05, to=1.0, increment=0.05, format="%.2f")
+        self.thumb_contrast_var = tk.DoubleVar(value=s["min_contrast"])
+        self._spin_row(frame, "對比下限:", self.thumb_contrast_var,
+                      from_=10, to=200, increment=5, format="%.0f")
+        self.thumb_saturation_var = tk.DoubleVar(value=s["min_saturation"])
+        self._spin_row(frame, "飽和度下限:", self.thumb_saturation_var,
+                      from_=0, to=120, increment=5, format="%.0f")
+        self.thumb_filesize_var = tk.DoubleVar(value=s["max_file_mb"])
+        self._spin_row(frame, "檔案上限:", self.thumb_filesize_var, unit="MB",
+                      from_=0.5, to=10.0, increment=0.5, format="%.1f")
+
+    def _build_chapter(self, body):
+        s = resolve_chaptercheck_settings(self.config_data)
+        frame = ttk.LabelFrame(body, text="章節規則門檻", padding=(10, 6))
+        frame.pack(fill="x", pady=(0, 8))
+        self.chapter_min_seconds_var = tk.DoubleVar(
+            value=s["min_chapter_seconds"])
+        self._spin_row(frame, "每章最短:", self.chapter_min_seconds_var,
+                      unit="秒", from_=1, to=120, increment=1, format="%.0f")
+        self.chapter_min_count_var = tk.IntVar(value=s["min_chapter_count"])
+        self._spin_row(frame, "最少章節數:", self.chapter_min_count_var,
+                      unit="章", from_=2, to=10, increment=1)
+        ttk.Label(
+            frame, foreground="#666666", anchor="w", justify="left",
+            wraplength=460,
+            text="預設值就是 YouTube 目前的規則（每章 10 秒、至少 3 章），"
+                 "一般不需要調整。",
+        ).pack(fill="x", pady=(4, 0))
+
     # ------------------------------------------------------------------
     def _on_save(self):
         def safe(var, fallback, cast=float):
@@ -884,6 +1214,28 @@ class HealthSettingsDialog(tk.Toplevel):
         preflight = dict(self.config_data.get("preflight") or {})
         preflight["generic_name_terms"] = self.name_terms_var.get().strip()
         self.config_data["preflight"] = preflight
+        self.config_data["publishcheck"] = {
+            "title_limit": safe(self.pub_title_limit_var, 100, cast=int),
+            "title_mobile_visible": safe(self.pub_mobile_var, 40, cast=int),
+            "description_byte_limit": safe(
+                self.pub_desc_limit_var, 5000, cast=int),
+            "max_hashtags": safe(self.pub_max_tag_var, 15, cast=int),
+            "recommended_hashtags": safe(self.pub_rec_tag_var, 5, cast=int),
+            "tag_char_limit": safe(self.pub_tag_char_var, 500, cast=int),
+        }
+        self.config_data["thumbcheck"] = {
+            "mobile_width": safe(self.thumb_width_var, 200, cast=int),
+            "min_detail_keep": safe(self.thumb_detail_var, 0.35),
+            "min_contrast": safe(self.thumb_contrast_var, 40.0),
+            "min_saturation": safe(self.thumb_saturation_var, 15.0),
+            "max_file_mb": safe(self.thumb_filesize_var, 2.0),
+        }
+        self.config_data["chaptercheck"] = {
+            "min_chapter_seconds": safe(
+                self.chapter_min_seconds_var, 10.0),
+            "min_chapter_count": safe(
+                self.chapter_min_count_var, 3, cast=int),
+        }
         try:
             save_config(self.config_data)
         except OSError:
