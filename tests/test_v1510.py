@@ -424,8 +424,18 @@ try:
     check("工具列出現新的「健檢中心」按鈕",
           "健檢中心" in all_texts)
     app.destroy()
-except tk.TclError as exc:  # 沒有 DISPLAY 時整段略過，不算失敗。
-    print(f"SKIP Xvfb 實測（{exc}）")
+except tk.TclError as exc:
+    # 只有「連不上顯示器」才算合理略過。其餘 TclError 是真的程式錯誤
+    # （例如 v1.52.0 開發時撞到的「ttk.Radiobutton 不支援 wraplength」），
+    # 原本這裡一律吞成 SKIP，整份測試照樣印「全數通過」——測試在壞掉的
+    # 程式碼上不會失敗，就等於沒有測試。
+    message = str(exc)
+    if "couldn't connect to display" in message or "no display name" in message:
+        print(f"SKIP Xvfb 實測（沒有可用的顯示環境：{exc}）")
+    else:
+        print(f"FAIL Xvfb 實測期間丟出 TclError（這是真的錯誤，不是環境問題）："
+              f"{exc}")
+        failures.append("Xvfb 實測期間丟出 TclError")
 
 
 # ===== 7. 全站規範：本版新增/改動的檔案全用 ttk 控件 ======================
