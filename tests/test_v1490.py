@@ -1,29 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-v1.49.0 新功能測試：生成完成後把字幕清單捲進視野
+v1.49.0 曾新增的功能：生成完成後把字幕清單捲進視野
 （`gui/scrollable.py` 的 `ScrollableFrame.scroll_into_view`）。
 
-背景（見 `docs/UI_AUDIT_2.0.md` 1.3-①）：主視窗預設 1400x800 放不下自
-己的內容，實測「開始生成字幕」在 y=826、字幕清單在 y=889、匯出與燒錄
-在 y=1180，全部在 800px 之外——生成完成後若使用者停在頁頂，視野內沒有
-任何變化。本檔驗證的硬性條件：
+**v1.52.0 更新說明（重要，讀這份文件前請先讀這段）**：本檔原本測的是
+v1.49.0 的權宜之計——主視窗預設 1400x800 放不下自己的內容
+（`docs/UI_AUDIT_2.0.md` 1.3-①），生成完成後若使用者停在頁頂會看不到
+變化，於是在 `_on_generation_done`／`_on_auto_done` 呼叫
+`scroll_frame.scroll_into_view(self.cue_tree)` 把清單捲進視野。
 
-  1. 要有測試證明「原本看不到、修完看得到」——量測
-     `cue_tree.winfo_rooty() - app.winfo_rooty()`，捲動前 > 視窗高、呼
-     叫 `scroll_into_view` 後 < 視窗高，而不只是斷言函式有被呼叫。
-  2. 「已經看得見就不捲」也要有測試：視窗開得夠高讓清單本來就可見時，
-     `canvas.yview()[0]` 呼叫前後不變。
-  3. 版面類斷言一律在 `deiconify()` 之後、且反覆 `app.update()` 讓版面
-     配置真的跑完之後才量（未顯示的視窗子元件一律 `winfo_ismapped()=0`
-     、寬高 1px，量了也是假數字）。
+v1.52.0 主視窗三欄化（`docs/UI_ARCHITECTURE_2.0.md` B.2/B.3）**結構性
+修好了折疊線問題本身**：字幕清單搬進中欄，中欄不隨左欄（設定區）捲
+動，1400x800 下主動作按鈕與字幕清單本來就同屏永遠可見，不需要再捲。
+`gui/app.py` 的 `_on_generation_done`／`_on_auto_done` 已移除那兩行呼
+叫——這是預期中的retirement，不是缺陷，見 `docs/ROADMAP_2.0.md` v1.52
+項與 `docs/UI_AUDIT_2.0.md` 修正紀錄。
 
-另外驗證：
-  - `_on_generation_done`、`_on_auto_done`（一鍵完成批次路徑）兩條真實
-    呼叫路徑都會觸發捲動（不只是測試底層方法本身）。
-  - widget 尚未 map 時安全略過，不丟例外。
-
-面板本身是真實的 Tkinter 視窗，這裡用 DISPLAY 指向可用的 X 伺服器
-（本機 Xvfb :99）實際開出主視窗量測，而非只靜態掃原始碼。
+本檔改測兩件事：
+  1. `ScrollableFrame.scroll_into_view` 這個工具方法本身還在、行為不
+     變（獨立於 `SrtApp` 測試，因為左欄仍然用它——只捲設定，元件多的
+     時候一樣需要把特定欄位捲進視野；中欄在 minsize 980x560 這種極端
+     窄高情形也改用同一個元件當退化保底，見 `tests/test_v1520.py`）。
+  2. 字幕清單在 v1.52.0 的新版面下，1400x800 預設尺寸「不捲動也看得
+     見」——這是取代舊權宜之計的真正修法，用實際量測驗證。
 """
 import os
 import sys
@@ -43,37 +42,24 @@ def check(name, cond, extra=""):
         failures.append(name)
 
 
-# ===== 1. 靜態檢查：方法存在、兩條呼叫路徑都真的接上了 =====
+# ===== 1. 靜態檢查：scroll_into_view 方法還在；app.py 的舊呼叫已退役 =====
 
 SCROLLABLE_PATH = os.path.join(REPO_ROOT, "gui", "scrollable.py")
 APP_PATH = os.path.join(REPO_ROOT, "gui", "app.py")
 scrollable_src = open(SCROLLABLE_PATH, encoding="utf-8").read()
 app_src = open(APP_PATH, encoding="utf-8").read()
 
-check("gui/scrollable.py 的 ScrollableFrame 有 scroll_into_view 方法",
+check("gui/scrollable.py 的 ScrollableFrame 仍有 scroll_into_view 方法"
+      "（左欄、中欄 minsize 退化保底都還在用這個元件）",
       "def scroll_into_view(self, widget" in scrollable_src)
 
-import re
-gen_done_block = re.search(
-    r"def _on_generation_done\(self, cues\):.*?(?=\n    def )",
-    app_src, re.S)
-check("_on_generation_done 找得到（供下方檢查呼叫是否接上）",
-      gen_done_block is not None)
-if gen_done_block:
-    check("_on_generation_done 內有呼叫 scroll_into_view",
-          "scroll_frame.scroll_into_view(self.cue_tree)" in gen_done_block.group(0))
-
-auto_done_block = re.search(
-    r"def _on_auto_done\(self, results\):.*?(?=\n    def )",
-    app_src, re.S)
-check("_on_auto_done 找得到（一鍵完成批次路徑）",
-      auto_done_block is not None)
-if auto_done_block:
-    check("_on_auto_done 內有呼叫 scroll_into_view",
-          "scroll_frame.scroll_into_view(self.cue_tree)" in auto_done_block.group(0))
+check("gui/app.py 的 _on_generation_done／_on_auto_done 已移除舊版"
+      "「捲進視野」權宜之計（v1.52.0 三欄化讓字幕清單結構性永遠可見，"
+      "不再需要靠捲動補救——這是預期中的retirement，見本檔開頭說明）",
+      "scroll_frame.scroll_into_view(self.cue_tree)" not in app_src)
 
 
-# ===== 2. 起一個離屏 Tk root，用真實主視窗驗證行為 =====
+# ===== 2. 起一個離屏 Tk root，驗證兩件事 =====
 
 try:
     import tkinter as tk
@@ -86,28 +72,77 @@ except Exception as exc:  # pragma: no cover - 沒有可用 X 伺服器時整段
     failures.append("需要可用的 X 顯示環境（DISPLAY），本檔的核心硬性驗收條件無法在此環境驗證")
 
 if TK_OK:
-    import config as config_module
+    import tkinter.ttk as ttk
 
-    # SrtApp 會讀寫真正的 config.json（記憶主題、上次選取路徑等），測試
-    # 不該動到使用者的真實檔案，指到一個獨立暫存目錄。
+    from gui.scrollable import ScrollableFrame
+
+    def pump(widget, times=15, step=0.03):
+        import time
+        for _ in range(times):
+            widget.update()
+            time.sleep(step)
+
+    # ---- 2a. ScrollableFrame.scroll_into_view 本身：獨立驗證（不依賴 SrtApp）----
+    probe_root = tk.Tk()
+    probe_root.geometry("300x150+0+0")
+    probe_root.deiconify()
+    pump(probe_root)
+
+    frame = ScrollableFrame(probe_root, theme="light")
+    frame.pack(fill="both", expand=True)
+    # 塞進遠比可視高度多的內容，讓最後一個 widget 落在視窗外。
+    labels = []
+    for i in range(60):
+        lbl = ttk.Label(frame.interior, text=f"第 {i} 列")
+        lbl.pack(anchor="w")
+        labels.append(lbl)
+    pump(probe_root, times=10)
+
+    target = labels[-1]
+    diff_before = target.winfo_rooty() - probe_root.winfo_rooty()
+    check("刻意塞爆內容後，最後一列確實落在可視範圍之外（量到的前提）",
+          diff_before > probe_root.winfo_height(), diff_before)
+
+    frame.scroll_into_view(target)
+    pump(probe_root, times=8)
+    diff_after = target.winfo_rooty() - probe_root.winfo_rooty()
+    check("呼叫 scroll_into_view 後該列進入可視範圍內",
+          diff_after < probe_root.winfo_height(), diff_after)
+
+    # 已經看得見就不捲：把捲軸移回頂端後，對第一列呼叫應該不動 yview。
+    frame.canvas.yview_moveto(0.0)
+    pump(probe_root, times=5)
+    yview_before = frame.canvas.yview()
+    frame.scroll_into_view(labels[0])
+    pump(probe_root, times=5)
+    yview_after = frame.canvas.yview()
+    check("已可見時呼叫 scroll_into_view 不會捲動（yview 前後不變）",
+          yview_before == yview_after, (yview_before, yview_after))
+
+    # 未 map 的 widget 安全略過。
+    unmapped = ttk.Label(frame.interior, text="尚未 pack")
+    try:
+        frame.scroll_into_view(unmapped)
+        no_exception = True
+    except Exception as exc:  # pragma: no cover
+        no_exception = False
+        print("scroll_into_view 對未 map widget 丟出例外：", exc)
+    check("scroll_into_view 對尚未 map 的 widget 安全略過、不丟例外", no_exception)
+
+    probe_root.destroy()
+
+    # ---- 2b. SrtApp 新版面：字幕清單在 1400x800 不捲動也看得見 ----
+    import config as config_module
     _isolated_dir = tempfile.mkdtemp(prefix="v1490_test_")
     config_module.CONFIG_PATH = os.path.join(_isolated_dir, "config.json")
 
     from gui.app import SrtApp
-    import gui.app as app_module
 
     FAKE_CUES = [
         {"start": i * 2.0, "end": i * 2.0 + 1.5, "text": f"字幕測試句 {i}"}
         for i in range(6)
     ]
 
-    def pump(app, times=15, step=0.03):
-        import time
-        for _ in range(times):
-            app.update()
-            time.sleep(step)
-
-    # ---- 2a. 「原本看不到、修完看得到」：底層方法直接量測 ----
     app = SrtApp()
     app.geometry("1400x800")
     app.deiconify()
@@ -120,39 +155,25 @@ if TK_OK:
     app._populate_cue_list(FAKE_CUES)
     pump(app, times=8)
 
-    diff_before = app.cue_tree.winfo_rooty() - app.winfo_rooty()
+    diff = app.cue_tree.winfo_rooty() - app.winfo_rooty()
     check("字幕清單已 map（deiconify 之後）",
           app.cue_tree.winfo_ismapped() == 1)
-    check(f"捲動前字幕清單在視窗高度之外（量到 y 差={diff_before}, 視窗高={win_height}）",
-          diff_before > win_height, diff_before)
+    check(f"v1.52.0 三欄化後：字幕清單不必捲動就在視窗高度之內"
+          f"（量到 y 差={diff}, 視窗高={win_height}，取代 v1.49.0 的"
+          "「捲進視野」權宜之計）",
+          diff < win_height, diff)
 
-    app.scroll_frame.scroll_into_view(app.cue_tree)
-    pump(app, times=8)
-
-    diff_after = app.cue_tree.winfo_rooty() - app.winfo_rooty()
-    check(f"呼叫 scroll_into_view 後字幕清單進入視窗高度之內（量到 y 差={diff_after}, 視窗高={win_height}）",
-          diff_after < win_height, diff_after)
-
-    # ---- 2b. 真實路徑 _on_generation_done 會觸發捲動 ----
-    app.scroll_frame.canvas.yview_moveto(0.0)  # 重置回頁頂，模擬使用者停在頁頂
-    pump(app, times=5)
-    diff_reset = app.cue_tree.winfo_rooty() - app.winfo_rooty()
-    check(f"重置回頁頂後字幕清單再次落在視窗高度之外（y 差={diff_reset}）",
-          diff_reset > win_height, diff_reset)
-
+    # 真實路徑 _on_generation_done／_on_auto_done 呼叫後清單仍然可見
+    # （不再需要捲動，但功能——填入清單、更新預覽——要維持正常）。
     app._on_generation_done(FAKE_CUES)
     pump(app, times=8)
-    diff_gen_done = app.cue_tree.winfo_rooty() - app.winfo_rooty()
-    check(f"真實呼叫 _on_generation_done 後字幕清單進入視野（y 差={diff_gen_done}）",
-          diff_gen_done < win_height, diff_gen_done)
+    diff_gen = app.cue_tree.winfo_rooty() - app.winfo_rooty()
+    check(f"呼叫 _on_generation_done 後字幕清單仍在視野內（y 差={diff_gen}）",
+          diff_gen < win_height, diff_gen)
+    check("_on_generation_done 正確填入字幕清單",
+          len(app.cue_tree.get_children()) == len(FAKE_CUES))
 
-    # ---- 2c. 真實路徑 _on_auto_done（一鍵完成批次）也會觸發捲動 ----
-    app.scroll_frame.canvas.yview_moveto(0.0)
-    pump(app, times=5)
-    diff_reset2 = app.cue_tree.winfo_rooty() - app.winfo_rooty()
-
-    # _on_auto_done 結束時會跳出摘要訊息框（messagebox.showinfo/showwarning），
-    # Xvfb 下沒有人可以按確定，攔掉避免整個測試卡住。
+    import gui.app as app_module
     info_calls = []
     warn_calls = []
     real_showinfo = app_module.messagebox.showinfo
@@ -175,45 +196,14 @@ if TK_OK:
         app_module.messagebox.showinfo = real_showinfo
         app_module.messagebox.showwarning = real_showwarning
 
-    diff_auto_done = app.cue_tree.winfo_rooty() - app.winfo_rooty()
-    check(f"重置回頁頂後（一鍵完成前）字幕清單落在視窗高度之外（y 差={diff_reset2}）",
-          diff_reset2 > win_height, diff_reset2)
-    check(f"真實呼叫 _on_auto_done（一鍵完成批次路徑）後字幕清單進入視野（y 差={diff_auto_done}）",
-          diff_auto_done < win_height, diff_auto_done)
+    diff_auto = app.cue_tree.winfo_rooty() - app.winfo_rooty()
+    check(f"呼叫 _on_auto_done（一鍵完成批次路徑）後字幕清單仍在視野內"
+          f"（y 差={diff_auto}）",
+          diff_auto < win_height, diff_auto)
     check("一鍵完成結束確實跳出摘要訊息框（成功路徑）",
           len(info_calls) == 1 and len(warn_calls) == 0)
 
-    # ---- 2d. 已經看得見就不要捲：夠高的視窗，canvas.yview() 不變 ----
-    app_tall = SrtApp()
-    app_tall.geometry("1400x2200")
-    app_tall.deiconify()
-    pump(app_tall)
-    app_tall._populate_cue_list(FAKE_CUES)
-    pump(app_tall, times=8)
-
-    check("夠高的視窗下字幕清單本來就已 map 可見",
-          app_tall.cue_tree.winfo_ismapped() == 1)
-
-    yview_before = app_tall.scroll_frame.canvas.yview()
-    app_tall.scroll_frame.scroll_into_view(app_tall.cue_tree)
-    pump(app_tall, times=5)
-    yview_after = app_tall.scroll_frame.canvas.yview()
-    check(f"已可見時 canvas.yview() 呼叫前後不變（before={yview_before}, after={yview_after}）",
-          yview_before == yview_after, (yview_before, yview_after))
-
-    # ---- 2e. widget 尚未 map 時安全略過，不丟例外 ----
-    import tkinter.ttk as ttk
-    unmapped_widget = ttk.Label(app_tall.scroll_frame.interior, text="尚未 pack")
-    # 刻意不呼叫 pack()／grid()，widget 停留在未 map 狀態。
-    check("刻意建立的未 map widget 確實 winfo_ismapped()==0（前提成立才有意義測略過）",
-          unmapped_widget.winfo_ismapped() == 0)
-    try:
-        app_tall.scroll_frame.scroll_into_view(unmapped_widget)
-        no_exception = True
-    except Exception as exc:  # pragma: no cover
-        no_exception = False
-        print("scroll_into_view 對未 map widget 丟出例外：", exc)
-    check("scroll_into_view 對尚未 map 的 widget 安全略過、不丟例外", no_exception)
+    app.destroy()
 
 
 print()

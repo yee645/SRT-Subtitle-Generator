@@ -76,6 +76,16 @@ MODE_ALIGN = "align"
 MODE_MANUAL = "manual"
 # 工具列每一列最多放幾個功能按鈕（超過就換行，避免被視窗寬度切掉）。
 _TOOLS_PER_ROW = 4
+# 三欄主體版面（v1.52.0，修折疊線：docs/UI_AUDIT_2.0.md 1.3-①、
+# docs/UI_ARCHITECTURE_2.0.md B.2/B.3）：左欄固定寬（自帶垂直捲動，只
+# 捲設定）、右欄固定寬（外觀：樣式組合／預覽／樣式面板），中欄吃剩餘
+# 寬度放主動作與字幕清單，兩者同屏永遠可見。
+_LEFT_COLUMN_WIDTH = 330
+_RIGHT_COLUMN_WIDTH = 420
+# 視窗寬度低於此值時右欄先收合讓中欄有喘息空間（docs/UI_ARCHITECTURE_2.0.md
+# F-5 點名這是未定案項；v1.52.0 定案為「右欄收合」，見 PR 說明與
+# ROADMAP 的偏離規劃記錄）。330(左) + 420(右) + 400(中欄可用最小值) ≈ 1150。
+_LAYOUT_COLLAPSE_WIDTH = 1150
 
 
 class SrtApp(tk.Tk):
@@ -126,6 +136,11 @@ class SrtApp(tk.Tk):
         scroll_frame = getattr(self, "scroll_frame", None)
         if scroll_frame is not None:
             scroll_frame.refresh_theme(theme)
+        # v1.52.0：中欄也包了一層 ScrollableFrame（minsize 980x560 時的
+        # 退化保底，見 `_build_widgets`），同一個理由需要同步背景色。
+        middle_scroll_frame = getattr(self, "middle_scroll_frame", None)
+        if middle_scroll_frame is not None:
+            middle_scroll_frame.refresh_theme(theme)
 
     def _toggle_theme(self):
         """切換淺色與深色主題並寫回設定。"""
@@ -145,35 +160,122 @@ class SrtApp(tk.Tk):
     # 介面建構
     # ==================================================================
     def _build_widgets(self):
-        """建立整體版面。"""
+        """
+        建立整體版面：頂部工具列＋三欄主體。
+
+        v1.52.0 三欄化（`docs/UI_ARCHITECTURE_2.0.md` B.2/B.3）：把 v1.x
+        「1240px 高的設定長表單」轉九十度——左欄（`_LEFT_COLUMN_WIDTH`，
+        自帶垂直捲動）收生成前設定，中欄放主動作＋字幕清單＋清單編輯
+        列＋匯出燒錄＋自動化輸出（永遠可見，不隨左欄捲動），右欄（
+        `_RIGHT_COLUMN_WIDTH`）收外觀（樣式組合／預覽／樣式面板）。這一
+        步只換容器：控件本身、事件處理、config 欄位一概不變（不做頁
+        籤、不拆一鍵完成，那些是 v1.53）。
+        """
         # 頂部工具列：主題切換等全域控制。
         self._build_toolbar()
 
-        scroll = ScrollableFrame(self, theme=self.config_data.get("theme", "light"))
+        body = ttk.Frame(self)
+        body.pack(fill="both", expand=True)
+        self.body_frame = body
+
+        # 左欄：固定寬、自帶垂直捲動，只捲設定（生成前才需要調整的區塊）。
+        self.left_container = ttk.Frame(body, width=_LEFT_COLUMN_WIDTH)
+        self.left_container.pack_propagate(False)
+        scroll = ScrollableFrame(
+            self.left_container, theme=self.config_data.get("theme", "light"))
         scroll.pack(fill="both", expand=True)
-        container = scroll.interior
+        left = scroll.interior
         # 供 _apply_theme 在主題切換時同步更新 Canvas 背景色。
         self.scroll_frame = scroll
 
-        left = ttk.Frame(container, padding=10)
-        left.pack(side="left", fill="both", expand=True)
-        right = ttk.Frame(container, padding=10)
-        right.pack(side="right", fill="y")
+        # 右欄：固定寬，外觀設定（樣式組合／預覽／樣式面板）。
+        self.right_container = ttk.Frame(body, width=_RIGHT_COLUMN_WIDTH)
+        self.right_container.pack_propagate(False)
+        # 水平 padding 只留 6px（垂直仍 10px）：392px 寬的預覽畫布＋外層
+        # LabelFrame 邊框，在 420px 右欄裡沒有太多容錯空間，見
+        # `_build_preview_section` 同一份理由。
+        right = ttk.Frame(self.right_container, padding=(6, 10))
+        right.pack(fill="both", expand=True)
+
+        # 中欄：吃剩餘寬度，主動作與字幕清單放最上方、與右欄同高不裁切。
+        # 包一層 ScrollableFrame 只當 minsize 980x560 的退化保底——正常
+        # 尺寸下中欄內容量得到全部塞得下（見 `_build_widgets` docstring
+        # 的 1400x800 實測值），不需要捲動；但 980x560 時中欄全部內容
+        # 實測需要 700px 高、只分到約 440px，若中欄本身不能捲動，「自動
+        # 化輸出」整區會被 pack 直接擠到 `winfo_ismapped()==0`（不是裁
+        # 切，是整個消失、比裁切更嚴重），這裡讓它退化成可捲動而不是憑
+        # 空消失。
+        self.middle_frame = ttk.Frame(body)
+        middle_scroll = ScrollableFrame(
+            self.middle_frame, theme=self.config_data.get("theme", "light"))
+        middle_scroll.pack(fill="both", expand=True)
+        middle = ttk.Frame(middle_scroll.interior, padding=10)
+        middle.pack(fill="both", expand=True)
+        self.middle_scroll_frame = middle_scroll
+
+        # 先套一次三欄排版（預設展開右欄），內容建好後再依視窗寬度即時調整。
+        self._right_collapsed = None
+        self._apply_body_layout(collapsed=False)
 
         self._build_mode_section(left)
         self._build_file_section(left)
         self._build_transcription_section(left)
         self._build_segmentation_section(left)
         self._build_transcript_section(left)
-        self._build_automation_section(left)
-        self._build_action_section(left)
-        self._build_cue_list(left)
-        self._build_cue_edit_controls(left)
-        self._build_export_section(left)
+
+        self._build_action_section(middle)
+        self._build_cue_list(middle)
+        self._build_cue_edit_controls(middle)
+        self._build_export_section(middle)
+        # 「自動化輸出」原本在左欄最深處；v1.52.0 移出左欄設定表單，暫放
+        # 中欄「匯出與燒錄」附近（見 docs/ROADMAP_2.0.md v1.52 項：v1.53
+        # 加頁籤後才是它的最終位置——階段④「輸出與發佈」）。
+        self._build_automation_section(middle)
 
         self._build_preset_section(right)
         self._build_preview_section(right)
         self._build_style_section(right)
+
+        # 視窗寬度變化時（含 minsize 980x560）即時套用三欄退化規則。
+        self.bind("<Configure>", self._on_root_configure)
+
+    def _apply_body_layout(self, collapsed):
+        """
+        依 collapsed 狀態重新排三欄。
+
+        一律整批 `pack_forget()` 再依序重新 `pack()`，不對單一容器做
+        forget/re-pack——pack 管理器對同一個 master 內的 slave 是依「最
+        近一次 pack() 的呼叫順序」分配剩餘空間，若只把右欄 forget 再
+        pack 回來，它會被排到順序最後，此時已 expand 的中欄早已吃光剩
+        餘空間，右欄會被擠成 0 寬。整批重排三個容器可以每次都保證
+        「左→右→中」的正確分配順序（中欄最後拿剩餘寬度）。
+        """
+        if collapsed == self._right_collapsed:
+            return
+        self._right_collapsed = collapsed
+        for widget in (self.left_container, self.middle_frame,
+                      self.right_container):
+            widget.pack_forget()
+        self.left_container.pack(side="left", fill="y")
+        if not collapsed:
+            self.right_container.pack(side="right", fill="y")
+        self.middle_frame.pack(side="left", fill="both", expand=True)
+
+    def _on_root_configure(self, event):
+        """
+        視窗尺寸變動時的三欄退化規則（`docs/UI_ARCHITECTURE_2.0.md` F-5）。
+
+        寬度不足 `_LAYOUT_COLLAPSE_WIDTH`（含 minsize 980x560 的情形）
+        時收合右欄（外觀設定），讓中欄的主動作與字幕清單保有可用寬度；
+        右欄的內容（樣式面板／預覽）並未銷毀，只是暫時不 pack，加寬視
+        窗會自動恢復顯示，不需要另外的展開按鈕。
+        """
+        if event.widget is not self:
+            return
+        width = self.winfo_width()
+        if width <= 1:
+            return  # 視窗尚未真正完成配置（初始事件），量到假值時不套用。
+        self._apply_body_layout(collapsed=width < _LAYOUT_COLLAPSE_WIDTH)
 
     def _build_toolbar(self):
         """
@@ -226,21 +328,19 @@ class SrtApp(tk.Tk):
         frame = ttk.LabelFrame(parent, text="運作模式", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.mode_var = tk.StringVar(value=MODE_TRANSCRIBE)
-        ttk.Radiobutton(
-            frame, text="模式一：音訊轉錄（自動產生逐字稿與時間軸）",
-            variable=self.mode_var, value=MODE_TRANSCRIBE,
-            command=self._update_mode_state,
-        ).pack(anchor="w")
-        ttk.Radiobutton(
-            frame, text="模式二：文字稿對齊（貼上現成文字稿，自動對齊時間軸）",
-            variable=self.mode_var, value=MODE_ALIGN,
-            command=self._update_mode_state,
-        ).pack(anchor="w")
-        ttk.Radiobutton(
-            frame, text="模式三：手動字幕模式（從零建立字幕、手動標記時間）",
-            variable=self.mode_var, value=MODE_MANUAL,
-            command=self._update_mode_state,
-        ).pack(anchor="w")
+        # 左欄自 v1.52.0 起固定 330px 窄寬。`ttk.Radiobutton` 不像
+        # `ttk.Label` 支援 `wraplength`（實測會丟 TclError: unknown
+        # option "-wraplength"），改用明確換行斷字——文字內容完全不變，
+        # 只是排成兩行避免撐開欄寬觸發水平捲軸（見
+        # docs/UI_ARCHITECTURE_2.0.md B.2：左欄設計成「只捲設定」）。
+        for value, text in (
+                (MODE_TRANSCRIBE, "模式一：音訊轉錄\n（自動產生逐字稿與時間軸）"),
+                (MODE_ALIGN, "模式二：文字稿對齊\n（貼上現成文字稿，自動對齊時間軸）"),
+                (MODE_MANUAL, "模式三：手動字幕模式\n（從零建立字幕、手動標記時間）")):
+            ttk.Radiobutton(
+                frame, text=text, variable=self.mode_var, value=value,
+                command=self._update_mode_state,
+            ).pack(anchor="w", fill="x", pady=(0, 4))
 
     def _build_file_section(self, parent):
         """檔案選擇區（可一次選取多個檔案進行批次處理）。"""
@@ -253,11 +353,19 @@ class SrtApp(tk.Tk):
         ttk.Button(frame, text="瀏覽...", command=self._choose_file).pack(side="left")
 
     def _build_transcription_section(self, parent):
-        """轉寫設定區（模式一相關）。"""
+        """
+        轉寫設定區（模式一相關）。
+
+        v1.52.0：左欄固定 330px 窄寬，原本擠在同一列的「本地模型／語
+        言」「兩個勾選＋API 金鑰」拆成獨立列，長說明文字改 wraplength
+        換行，避免撐開欄寬（見 `_build_mode_section` 同一份理由）。控制
+        項本身（變數名稱、預設值、行為）完全不變。
+        """
         frame = ttk.LabelFrame(parent, text="轉寫設定（模式一）", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.transcription_frame = frame
         transcription_cfg = self.config_data["transcription"]
+        hint_wrap = _LEFT_COLUMN_WIDTH - 40
 
         row1 = ttk.Frame(frame)
         row1.pack(fill="x", pady=2)
@@ -266,13 +374,16 @@ class SrtApp(tk.Tk):
         ttk.Combobox(
             row1, textvariable=self.model_var, width=10, state="readonly",
             values=["tiny", "base", "small", "medium", "large"],
-        ).pack(side="left", padx=(0, 12))
-        ttk.Label(row1, text="語言:").pack(side="left")
+        ).pack(side="left", padx=(4, 0))
+
+        row1b = ttk.Frame(frame)
+        row1b.pack(fill="x", pady=2)
+        ttk.Label(row1b, text="語言:").pack(side="left")
         self.language_var = tk.StringVar(value=transcription_cfg["language"])
         ttk.Combobox(
-            row1, textvariable=self.language_var, width=10,
+            row1b, textvariable=self.language_var, width=10,
             values=["auto", "zh", "zh-TW", "en", "ja", "ko"],
-        ).pack(side="left")
+        ).pack(side="left", padx=(4, 0))
 
         row2 = ttk.Frame(frame)
         row2.pack(fill="x", pady=2)
@@ -285,44 +396,56 @@ class SrtApp(tk.Tk):
         ttk.Checkbutton(
             row2, text="重用轉錄快取", variable=self.use_cache_var,
         ).pack(side="left", padx=(8, 0))
-        ttk.Label(row2, text="API 金鑰:").pack(side="left", padx=(8, 0))
+
+        row2b = ttk.Frame(frame)
+        row2b.pack(fill="x", pady=2)
+        ttk.Label(row2b, text="API 金鑰:").pack(side="left")
         self.api_key_var = tk.StringVar(value=transcription_cfg["api_key"])
         ttk.Entry(
-            row2, textvariable=self.api_key_var, show="*", width=30,
-        ).pack(side="left", fill="x", expand=True)
+            row2b, textvariable=self.api_key_var, show="*",
+        ).pack(side="left", fill="x", expand=True, padx=(4, 0))
 
         row3 = ttk.Frame(frame)
         row3.pack(fill="x", pady=2)
-        ttk.Label(row3, text="本地 Python:").pack(side="left")
+        ttk.Label(row3, text="本地 Python:").pack(anchor="w")
+        row3b = ttk.Frame(frame)
+        row3b.pack(fill="x", pady=2)
         self.python_path_var = tk.StringVar(
             value=transcription_cfg.get("python_path", ""))
         ttk.Entry(
-            row3, textvariable=self.python_path_var,
+            row3b, textvariable=self.python_path_var,
         ).pack(side="left", fill="x", expand=True, padx=(0, 4))
         ttk.Button(
-            row3, text="瀏覽...", command=self._choose_python,
+            row3b, text="瀏覽...", command=self._choose_python,
         ).pack(side="left")
         ttk.Label(
-            frame, foreground="#666666",
+            frame, foreground="#666666", wraplength=hint_wrap, justify="left",
             text="留空則自動偵測；指向已安裝 openai-whisper 的 python.exe 即可使用本地轉錄。",
         ).pack(anchor="w", pady=(2, 0))
 
         row4 = ttk.Frame(frame)
         row4.pack(fill="x", pady=(6, 2))
-        ttk.Label(row4, text="轉寫提示:").pack(side="left")
+        ttk.Label(row4, text="轉寫提示:").pack(anchor="w")
+        row4b = ttk.Frame(frame)
+        row4b.pack(fill="x", pady=2)
         self.prompt_var = tk.StringVar(
             value=transcription_cfg.get("prompt", ""))
         ttk.Entry(
-            row4, textvariable=self.prompt_var,
+            row4b, textvariable=self.prompt_var,
         ).pack(side="left", fill="x", expand=True)
         ttk.Label(
-            frame, foreground="#666666",
+            frame, foreground="#666666", wraplength=hint_wrap, justify="left",
             text=("可填入常出現的專有名詞、人名或易聽錯的詞彙（以空白或逗號分隔），"
                   "用於導正辨識結果。模式二會與文字稿一併使用。"),
         ).pack(anchor="w", pady=(2, 0))
 
     def _build_segmentation_section(self, parent):
-        """斷句設定區。"""
+        """
+        斷句設定區。
+
+        v1.52.0：原本擠 2-3 對「標籤＋數值」在同一列，330px 窄欄放不
+        下，拆成每列一對；控制項本身不變。
+        """
         frame = ttk.LabelFrame(parent, text="斷句設定", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.segmentation_frame = frame
@@ -334,14 +457,17 @@ class SrtApp(tk.Tk):
         self.cjk_limit_var = tk.IntVar(value=seg["max_chars_cjk"])
         tk.Spinbox(
             row1, from_=4, to=40, width=6, textvariable=self.cjk_limit_var,
-        ).pack(side="left", padx=(0, 4))
-        ttk.Label(row1, text="字").pack(side="left", padx=(0, 14))
-        ttk.Label(row1, text="英文單行上限:").pack(side="left")
+        ).pack(side="left", padx=(4, 4))
+        ttk.Label(row1, text="字").pack(side="left")
+
+        row1b = ttk.Frame(frame)
+        row1b.pack(fill="x", pady=2)
+        ttk.Label(row1b, text="英文單行上限:").pack(side="left")
         self.latin_limit_var = tk.IntVar(value=seg["max_chars_latin"])
         tk.Spinbox(
-            row1, from_=10, to=90, width=6, textvariable=self.latin_limit_var,
-        ).pack(side="left", padx=(0, 4))
-        ttk.Label(row1, text="字母").pack(side="left")
+            row1b, from_=10, to=90, width=6, textvariable=self.latin_limit_var,
+        ).pack(side="left", padx=(4, 4))
+        ttk.Label(row1b, text="字母").pack(side="left")
 
         row2 = ttk.Frame(frame)
         row2.pack(fill="x", pady=2)
@@ -350,19 +476,25 @@ class SrtApp(tk.Tk):
         tk.Spinbox(
             row2, from_=0.3, to=5.0, increment=0.1, width=5,
             textvariable=self.min_dur_var, format="%.1f",
-        ).pack(side="left", padx=(0, 12))
-        ttk.Label(row2, text="最長秒數:").pack(side="left")
+        ).pack(side="left", padx=(4, 0))
+
+        row2b = ttk.Frame(frame)
+        row2b.pack(fill="x", pady=2)
+        ttk.Label(row2b, text="最長秒數:").pack(side="left")
         self.max_dur_var = tk.DoubleVar(value=seg["max_duration"])
         tk.Spinbox(
-            row2, from_=2.0, to=15.0, increment=0.5, width=5,
+            row2b, from_=2.0, to=15.0, increment=0.5, width=5,
             textvariable=self.max_dur_var, format="%.1f",
-        ).pack(side="left", padx=(0, 12))
-        ttk.Label(row2, text="停頓秒數:").pack(side="left")
+        ).pack(side="left", padx=(4, 0))
+
+        row2c = ttk.Frame(frame)
+        row2c.pack(fill="x", pady=2)
+        ttk.Label(row2c, text="停頓秒數:").pack(side="left")
         self.pause_gap_var = tk.DoubleVar(value=seg["pause_gap"])
         tk.Spinbox(
-            row2, from_=0.2, to=2.0, increment=0.1, width=5,
+            row2c, from_=0.2, to=2.0, increment=0.1, width=5,
             textvariable=self.pause_gap_var, format="%.1f",
-        ).pack(side="left")
+        ).pack(side="left", padx=(4, 0))
 
         row3 = ttk.Frame(frame)
         row3.pack(fill="x", pady=2)
@@ -371,10 +503,12 @@ class SrtApp(tk.Tk):
         tk.Spinbox(
             row3, from_=-10.0, to=10.0, increment=0.1, width=6,
             textvariable=self.time_offset_var, format="%.1f",
-        ).pack(side="left", padx=(0, 4))
+        ).pack(side="left", padx=(4, 0))
         ttk.Label(
-            row3, text="秒（正值整體延後、負值整體提前）", foreground="#666666",
-        ).pack(side="left")
+            frame, text="秒（正值整體延後、負值整體提前）",
+            foreground="#666666", wraplength=_LEFT_COLUMN_WIDTH - 40,
+            justify="left",
+        ).pack(anchor="w", pady=(2, 0))
 
     def _build_transcript_section(self, parent):
         """文字稿輸入區（模式二相關）。"""
@@ -384,10 +518,19 @@ class SrtApp(tk.Tk):
         self.transcript_text = tk.Text(frame, height=6, wrap="word")
         self.transcript_text.pack(fill="both", expand=True)
         hint = "請於此貼上現成逐字稿，系統會依語音長度與停頓自動分配時間軸。"
-        ttk.Label(frame, text=hint, foreground="#666666").pack(anchor="w", pady=(4, 0))
+        ttk.Label(
+            frame, text=hint, foreground="#666666",
+            wraplength=_LEFT_COLUMN_WIDTH - 40, justify="left",
+        ).pack(anchor="w", pady=(4, 0))
 
     def _build_automation_section(self, parent):
-        """一鍵自動化輸出設定區：勾選格式與燒錄後，「一鍵完成」全程免對話框。"""
+        """
+        一鍵自動化輸出設定區：勾選格式與燒錄後，「一鍵完成」全程免對話框。
+
+        v1.52.0：原本擠在中欄一列的內容改拆成多列，理由同
+        `_build_export_section`（中欄寬度只剩約 630px，不再是 v1.x 的
+        整頁寬）；控制項本身、config 欄位完全不變。
+        """
         frame = ttk.LabelFrame(parent, text="自動化輸出（一鍵完成用）", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.automation_frame = frame
@@ -405,11 +548,14 @@ class SrtApp(tk.Tk):
                 row1, text=ext.lstrip(".").upper(), variable=var,
                 command=self._collect_automation_config,
             ).pack(side="left", padx=(4, 0))
+
+        row1b = ttk.Frame(frame)
+        row1b.pack(fill="x", pady=2)
         self.auto_burn_var = tk.BooleanVar(value=bool(automation.get("burn_video")))
         ttk.Checkbutton(
-            row1, text="燒錄硬字幕影片", variable=self.auto_burn_var,
+            row1b, text="燒錄硬字幕影片", variable=self.auto_burn_var,
             command=self._collect_automation_config,
-        ).pack(side="left", padx=(14, 0))
+        ).pack(side="left")
 
         row_ln = ttk.Frame(frame)
         row_ln.pack(fill="x", pady=2)
@@ -428,9 +574,9 @@ class SrtApp(tk.Tk):
             command=self._collect_automation_config,
         ).pack(side="left")
         ttk.Label(
-            row_ln, text="LUFS（YouTube 標準 -14；音量偏小的素材建議勾選）",
-            foreground="#666666",
-        ).pack(side="left", padx=(4, 0))
+            frame, text="LUFS（YouTube 標準 -14；音量偏小的素材建議勾選）",
+            foreground="#666666", wraplength=580, justify="left",
+        ).pack(anchor="w", pady=(0, 2))
 
         row2 = ttk.Frame(frame)
         row2.pack(fill="x", pady=2)
@@ -448,44 +594,67 @@ class SrtApp(tk.Tk):
         ).pack(anchor="w", pady=(2, 0))
 
     def _build_action_section(self, parent):
-        """生成 / 匯出 / 燒錄按鈕與狀態列。"""
+        """
+        生成 / 匯出 / 燒錄按鈕與狀態列。
+
+        v1.52.0：主鈕、進度條、狀態列原本擠一列，中欄在 minsize
+        980x560（右欄收合後仍只有約 650px 寬，扣掉此時中欄自己的垂直
+        捲軸又更窄）放不下這一整列（實測「一鍵完成」按鈕本身文字就要
+        不少寬度）；拆成兩列讓兩顆主鈕永遠不必跟進度條搶寬度。
+        """
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(0, 8))
         self.action_frame = frame
+
+        btn_row = ttk.Frame(frame)
+        btn_row.pack(fill="x")
         self.generate_btn = ttk.Button(
-            frame, text="開始生成字幕", width=16, command=self._on_generate,
+            btn_row, text="開始生成字幕", width=16, command=self._on_generate,
         )
         self.generate_btn.pack(side="left")
         self.auto_btn = ttk.Button(
-            frame, text="一鍵完成（生成＋匯出＋燒錄）", width=26,
+            btn_row, text="一鍵完成（生成＋匯出＋燒錄）", width=26,
             command=self._on_auto_run,
         )
         self.auto_btn.pack(side="left", padx=(6, 0))
 
         # 進度條：可在 determinate（有百分比）與 indeterminate（跑馬燈）兩種模式切換。
         # 預設為 determinate；無法估算時切換為 indeterminate。
+        progress_row = ttk.Frame(frame)
+        progress_row.pack(fill="x", pady=(4, 0))
         self.progress_var = tk.DoubleVar(value=0.0)
         self.progress = ttk.Progressbar(
-            frame, mode="determinate", length=180, maximum=100.0,
+            progress_row, mode="determinate", length=180, maximum=100.0,
             variable=self.progress_var,
         )
-        self.progress.pack(side="left", padx=6)
+        self.progress.pack(side="left")
         self.progress_label_var = tk.StringVar(value="")
-        ttk.Label(frame, textvariable=self.progress_label_var, width=6,
-                 anchor="w").pack(side="left")
+        ttk.Label(progress_row, textvariable=self.progress_label_var, width=6,
+                 anchor="w").pack(side="left", padx=(6, 0))
 
         self.status_var = tk.StringVar(value="就緒。")
         ttk.Label(parent, textvariable=self.status_var, foreground="#1a5fb4",
                  anchor="w").pack(fill="x")
 
     def _build_cue_list(self, parent):
-        """字幕清單（生成結果）。"""
+        """
+        字幕清單（生成結果）。
+
+        v1.52.0：中欄自 v1.52.0 起包在 ScrollableFrame 裡（見
+        `_build_widgets`——只在 minsize 980x560 這種極窄情形才會真的觸
+        發捲動），`expand=True` 對「不受高度限制的捲動內容」沒有作用
+        （它只在父容器本身有固定高度、有剩餘空間可分配時才有效），所以
+        改用固定列數 `height=16`（原本 8）撐出可視高度——1400x800 實測
+        仍完整可見、不需捲動；接近但不強求架構文件原型的 19 列（原型是
+        真的用剩餘空間動態撐滿，這裡改用可預期的固定值換取「minsize 時
+        還是拿得到自動化輸出」的正確性，屬本版明確的偏離規劃記錄）。
+        """
         frame = ttk.LabelFrame(parent, text="字幕清單（雙擊可編輯）", padding=(6, 6))
-        frame.pack(fill="both", expand=True, pady=(8, 0))
+        frame.pack(fill="both", pady=(8, 0))
 
         columns = ("index", "time", "text")
         self.cue_tree = ttk.Treeview(
-            frame, columns=columns, show="headings", height=8,
+            frame, columns=columns, show="headings", height=16,
         )
         self.cue_tree.heading("index", text="#")
         self.cue_tree.heading("time", text="時間")
@@ -504,77 +673,111 @@ class SrtApp(tk.Tk):
         self.cue_tree.bind("<Double-1>", self._on_cue_double_click)
 
     def _build_cue_edit_controls(self, parent):
-        """字幕列操作按鈕：新增、編輯、刪除、上移、下移、清空。"""
+        """
+        字幕列操作按鈕：新增、編輯、刪除、上移、下移、清空、尋找取代、
+        翻譯字幕、匯入字幕、字幕健檢。
+
+        v1.52.0：10 顆按鈕擠一列實測需要約 1068px，中欄在 1400x800 只
+        分到 630px——不只裁切，後面幾顆會被 pack 擠到寬度 1px 形同消失
+        （比裁切更嚴重，等於功能整個不見）。拆成兩列解決，10 顆按鈕、
+        command、對應功能一個不少。
+        """
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(4, 0))
         self.cue_edit_frame = frame
-        ttk.Button(frame, text="新增字幕", width=10,
+
+        row1 = ttk.Frame(frame)
+        row1.pack(fill="x", pady=(0, 2))
+        ttk.Button(row1, text="新增字幕", width=10,
                   command=self._on_add_cue).pack(side="left", padx=2)
-        ttk.Button(frame, text="編輯選取", width=10,
+        ttk.Button(row1, text="編輯選取", width=10,
                   command=self._on_edit_cue).pack(side="left", padx=2)
-        ttk.Button(frame, text="刪除選取", width=10,
+        ttk.Button(row1, text="刪除選取", width=10,
                   command=self._on_delete_cue).pack(side="left", padx=2)
-        ttk.Button(frame, text="上移", width=6,
+        ttk.Button(row1, text="上移", width=6,
                   command=lambda: self._on_move_cue(-1)).pack(side="left", padx=2)
-        ttk.Button(frame, text="下移", width=6,
+        ttk.Button(row1, text="下移", width=6,
                   command=lambda: self._on_move_cue(1)).pack(side="left", padx=2)
-        ttk.Button(frame, text="清空清單", width=10,
+
+        row2 = ttk.Frame(frame)
+        row2.pack(fill="x")
+        ttk.Button(row2, text="清空清單", width=10,
                   command=self._on_clear_cues).pack(side="left", padx=2)
-        ttk.Button(frame, text="尋找取代", width=10,
+        ttk.Button(row2, text="尋找取代", width=10,
                   command=self._on_find_replace).pack(side="left", padx=2)
-        ttk.Button(frame, text="翻譯字幕", width=10,
+        ttk.Button(row2, text="翻譯字幕", width=10,
                   command=self._open_translate_dialog).pack(side="left", padx=2)
-        ttk.Button(frame, text="匯入字幕", width=10,
+        ttk.Button(row2, text="匯入字幕", width=10,
                   command=self._import_subtitles).pack(side="left", padx=2)
-        ttk.Button(frame, text="字幕健檢", width=10,
+        ttk.Button(row2, text="字幕健檢", width=10,
                   command=self._open_subtitle_check_dialog).pack(
             side="left", padx=2)
 
     def _build_export_section(self, parent):
-        """匯出與燒錄區：多格式匯出與影片字幕燒錄。"""
+        """
+        匯出與燒錄區：多格式匯出與影片字幕燒錄。
+
+        v1.52.0：中欄寬度是「視窗寬 - 左欄 330 - 右欄 420」，1400x800 時
+        約 630px，原本 7 顆按鈕擠一列（實測需求約 996px）會超出中欄寬
+        度、被裁掉——這正是 `docs/UI_AUDIT_2.0.md` 點名的水平裁切問題在
+        新版中欄重演。拆成兩列（格式匯出／影片動作）解決，按鈕本身、
+        command、disabled 狀態管理完全不變。
+        """
         frame = ttk.LabelFrame(parent, text="匯出與燒錄", padding=(10, 6))
         frame.pack(fill="x", pady=(8, 0))
         self.export_frame = frame
 
+        row_fmt = ttk.Frame(frame)
+        row_fmt.pack(fill="x", pady=(0, 4))
         self.export_btn_srt = ttk.Button(
-            frame, text="匯出 SRT", width=11,
+            row_fmt, text="匯出 SRT", width=11,
             command=lambda: self._on_export(".srt"), state="disabled",
         )
         self.export_btn_srt.pack(side="left", padx=2)
         self.export_btn_vtt = ttk.Button(
-            frame, text="匯出 VTT", width=11,
+            row_fmt, text="匯出 VTT", width=11,
             command=lambda: self._on_export(".vtt"), state="disabled",
         )
         self.export_btn_vtt.pack(side="left", padx=2)
         self.export_btn_ass = ttk.Button(
-            frame, text="匯出 ASS", width=11,
+            row_fmt, text="匯出 ASS", width=11,
             command=lambda: self._on_export(".ass"), state="disabled",
         )
         self.export_btn_ass.pack(side="left", padx=2)
         self.export_btn_txt = ttk.Button(
-            frame, text="匯出 TXT", width=11,
+            row_fmt, text="匯出 TXT", width=11,
             command=lambda: self._on_export(".txt"), state="disabled",
         )
         self.export_btn_txt.pack(side="left", padx=2)
+
+        row_vid = ttk.Frame(frame)
+        row_vid.pack(fill="x")
         self.burn_btn = ttk.Button(
-            frame, text="燒錄字幕到影片", width=16,
+            row_vid, text="燒錄字幕到影片", width=16,
             command=self._on_burn, state="disabled",
         )
-        self.burn_btn.pack(side="left", padx=(8, 2))
+        self.burn_btn.pack(side="left", padx=2)
         self.jumpcut_btn = ttk.Button(
-            frame, text="自動跳剪停頓", width=13,
+            row_vid, text="自動跳剪停頓", width=13,
             command=self._open_jumpcut_dialog, state="disabled",
         )
         self.jumpcut_btn.pack(side="left", padx=2)
         self.retakes_btn = ttk.Button(
-            frame, text="重複片段偵測", width=13,
+            row_vid, text="重複片段偵測", width=13,
             command=self._open_retakes_dialog, state="disabled",
         )
         self.retakes_btn.pack(side="left", padx=2)
 
     def _build_preview_section(self, parent):
-        """即時字幕預覽。"""
-        frame = ttk.LabelFrame(parent, text="即時字幕預覽", padding=(8, 8))
+        """
+        即時字幕預覽。
+
+        v1.52.0：畫布縮小為 392x200（見 `gui/preview_panel.py`）放進
+        420px 右欄；LabelFrame 水平 padding 從 8 收到 4，避免「畫布寬
+        + 邊框」超出右欄可用寬度（實測差 10px，Xvfb 通用版面掃描量出來
+        的，不是用看的）。
+        """
+        frame = ttk.LabelFrame(parent, text="即時字幕預覽", padding=(4, 8))
         frame.pack(fill="x")
         self.preview = PreviewPanel(frame)
         self.preview.pack()
@@ -631,8 +834,10 @@ class SrtApp(tk.Tk):
             self.generate_btn.configure(text="開始生成字幕")
             self.auto_btn.configure(state="normal")
         elif mode == MODE_ALIGN:
-            self.transcript_frame.pack(
-                fill="both", pady=(0, 8), before=self.automation_frame)
+            # 左欄自 v1.52.0 起只剩設定區塊，transcript_frame 是最後一
+            # 個，append 到 interior 末端即為正確位置（不再需要 before=
+            # 錨定；自動化輸出已搬到中欄，不再是左欄的鄰居）。
+            self.transcript_frame.pack(fill="both", pady=(0, 8))
             self.generate_btn.configure(text="開始生成字幕")
             self.auto_btn.configure(state="normal")
         else:
@@ -1258,9 +1463,10 @@ class SrtApp(tk.Tk):
             self._populate_cue_list(self.cues)
             self._update_export_state()
             self._refresh_preview()
-            # 折疊線問題（docs/UI_AUDIT_2.0.md）：清單在預設視窗高度之外，
-            # 完成後主動把它捲進視野（v1.49.0）。
-            self.scroll_frame.scroll_into_view(self.cue_tree)
+            # v1.49.0 曾在這裡呼叫 scroll_into_view 把清單捲進視野，那是
+            # 折疊線問題（docs/UI_AUDIT_2.0.md）修好前的權宜之計。v1.52.0
+            # 三欄化後字幕清單在中欄永遠可見，不會再被捲出視窗，這個呼叫
+            # 已不需要（結構修好，不必再靠捲動補救）。
 
         lines = []
         for item in succeeded:
@@ -1354,9 +1560,8 @@ class SrtApp(tk.Tk):
             self.cue_tree.selection_set(children[0])
             self.cue_tree.focus(children[0])
         self._refresh_preview()
-        # 折疊線問題（docs/UI_AUDIT_2.0.md）：清單在預設視窗高度之外，
-        # 完成後主動把它捲進視野（v1.49.0）。
-        self.scroll_frame.scroll_into_view(self.cue_tree)
+        # v1.49.0 曾在這裡呼叫 scroll_into_view，理由與 _on_auto_done 同
+        # 一則註解——v1.52.0 三欄化後已不需要，見上方說明。
 
     def _on_generation_error(self, message):
         """生成失敗：顯示原因與解決方法。"""
