@@ -5,6 +5,12 @@
 提供位置（X / Y 與頂部/中部/底部快捷鍵）、字型、字級、文字顏色、
 邊框顏色與邊框寬度的調整控制項。任一項變動時即透過回呼通知主視窗，
 由主視窗負責更新預覽並寫回設定檔（記憶功能）。
+
+v1.52.0：內部重排至 420px 寬（`docs/UI_ARCHITECTURE_2.0.md` B.7）——
+滑桿長度 200、文字/邊框顏色兩欄一列、字級與邊框寬同列；並把 classic
+`tk.Scale` 換成 `ttk.Scale`（規範漏網項：有選取狀態的控件一律 ttk）。
+`ttk.Scale` 沒有 `showvalue` 選項，改用旁邊的數值標籤（`_scale_row`）
+補回原本看得到目前數值的功能。
 """
 
 import tkinter as tk
@@ -44,6 +50,9 @@ DYNAMIC_MODE_LABELS = {
 _DYNAMIC_LABEL_TO_MODE = {label: mode
                           for mode, label in DYNAMIC_MODE_LABELS.items()}
 
+# 滑桿長度（B.7：420px 面板預算下的滑桿長度）。
+_SCALE_LENGTH = 200
+
 
 class StylePanel(tk.LabelFrame):
     """字幕樣式調整面板元件。"""
@@ -67,25 +76,37 @@ class StylePanel(tk.LabelFrame):
     # ------------------------------------------------------------------
     # 介面建構
     # ------------------------------------------------------------------
+    def _scale_row(self, row, label_text, variable):
+        """
+        建立一列「標籤＋ttk.Scale＋數值標籤」，回傳建立好的 Scale。
+
+        `ttk.Scale` 不像 classic `tk.Scale` 有 `showvalue` 選項，這裡用
+        獨立的數值標籤補回同樣的「看得到目前數值」功能。
+        """
+        tk.Label(self, text=label_text).grid(
+            row=row, column=0, sticky="w", pady=3)
+        value_var = tk.StringVar(value=str(int(round(variable.get()))))
+        scale = ttk.Scale(
+            self, from_=0, to=100, orient="horizontal", variable=variable,
+            length=_SCALE_LENGTH,
+            command=lambda v, var=value_var: (
+                var.set(str(int(round(float(v))))), self._emit_change()),
+        )
+        scale.grid(row=row, column=1, sticky="we")
+        tk.Label(self, textvariable=value_var, width=4, anchor="w").grid(
+            row=row, column=2, sticky="w")
+        return scale, value_var
+
     def _build_widgets(self):
-        """建立所有調整控制項。"""
+        """建立所有調整控制項（420px 寬預算，見模組說明的重排理由）。"""
         style = self._style
+        self.columnconfigure(1, weight=1)
 
-        # 水平位置 X。
-        tk.Label(self, text="水平位置 X").grid(row=0, column=0, sticky="w", pady=3)
+        # 水平位置 X／垂直位置 Y：ttk.Scale，長度 200，旁邊補數值標籤。
         self.pos_x_var = tk.DoubleVar(value=style["position_x"] * 100)
-        tk.Scale(
-            self, from_=0, to=100, orient="horizontal", variable=self.pos_x_var,
-            command=lambda _v: self._emit_change(), length=180, showvalue=True,
-        ).grid(row=0, column=1, columnspan=2, sticky="we")
-
-        # 垂直位置 Y。
-        tk.Label(self, text="垂直位置 Y").grid(row=1, column=0, sticky="w", pady=3)
+        _, self._pos_x_display_var = self._scale_row(0, "水平位置 X", self.pos_x_var)
         self.pos_y_var = tk.DoubleVar(value=style["position_y"] * 100)
-        tk.Scale(
-            self, from_=0, to=100, orient="horizontal", variable=self.pos_y_var,
-            command=lambda _v: self._emit_change(), length=180, showvalue=True,
-        ).grid(row=1, column=1, columnspan=2, sticky="we")
+        _, self._pos_y_display_var = self._scale_row(1, "垂直位置 Y", self.pos_y_var)
 
         # 垂直位置快捷鍵。
         preset_frame = tk.Frame(self)
@@ -103,7 +124,7 @@ class StylePanel(tk.LabelFrame):
         font_row = tk.Frame(self)
         font_row.grid(row=3, column=1, columnspan=2, sticky="we")
         self.font_box = ttk.Combobox(
-            font_row, textvariable=self.font_var, values=FONT_CHOICES, width=18,
+            font_row, textvariable=self.font_var, values=FONT_CHOICES, width=16,
         )
         self.font_box.pack(side="left", fill="x", expand=True)
         self.font_box.bind("<<ComboboxSelected>>", lambda _e: self._emit_change())
@@ -114,88 +135,93 @@ class StylePanel(tk.LabelFrame):
             font_row, text="...", width=3, command=self._import_font,
         ).pack(side="left", padx=(4, 0))
 
-        # 字級。
-        tk.Label(self, text="字型大小").grid(row=4, column=0, sticky="w", pady=3)
+        # 字級與邊框寬同列（B.7 排版）。
+        size_row = tk.Frame(self)
+        size_row.grid(row=4, column=0, columnspan=3, sticky="w", pady=3)
+        tk.Label(size_row, text="字級").pack(side="left")
         self.font_size_var = tk.IntVar(value=style["font_size"])
         tk.Spinbox(
-            self, from_=10, to=96, textvariable=self.font_size_var, width=8,
-            command=self._emit_change,
-        ).grid(row=4, column=1, sticky="w")
+            size_row, from_=10, to=96, textvariable=self.font_size_var,
+            width=5, command=self._emit_change,
+        ).pack(side="left", padx=(4, 16))
         # 直接鍵入數值時也即時套用。
         self.font_size_var.trace_add("write", lambda *_a: self._emit_change())
-
-        # 文字顏色。
-        tk.Label(self, text="文字顏色").grid(row=5, column=0, sticky="w", pady=3)
-        self.text_color_swatch = tk.Label(
-            self, width=4, relief="solid", borderwidth=1, bg=style["text_color"],
-        )
-        self.text_color_swatch.grid(row=5, column=1, sticky="w")
-        tk.Button(
-            self, text="選擇顏色", command=self._choose_text_color,
-        ).grid(row=5, column=2, sticky="w")
-
-        # 邊框顏色。
-        tk.Label(self, text="邊框顏色").grid(row=6, column=0, sticky="w", pady=3)
-        self.stroke_color_swatch = tk.Label(
-            self, width=4, relief="solid", borderwidth=1, bg=style["stroke_color"],
-        )
-        self.stroke_color_swatch.grid(row=6, column=1, sticky="w")
-        tk.Button(
-            self, text="選擇顏色", command=self._choose_stroke_color,
-        ).grid(row=6, column=2, sticky="w")
-
-        # 邊框寬度。
-        tk.Label(self, text="邊框寬度").grid(row=7, column=0, sticky="w", pady=3)
+        tk.Label(size_row, text="邊框寬").pack(side="left")
         self.stroke_width_var = tk.IntVar(value=style["stroke_width"])
         tk.Spinbox(
-            self, from_=0, to=6, textvariable=self.stroke_width_var, width=8,
-            command=self._emit_change,
-        ).grid(row=7, column=1, sticky="w")
+            size_row, from_=0, to=6, textvariable=self.stroke_width_var,
+            width=5, command=self._emit_change,
+        ).pack(side="left", padx=(4, 0))
         self.stroke_width_var.trace_add("write", lambda *_a: self._emit_change())
 
+        # 文字顏色與邊框顏色兩欄一列（B.7 排版）。
+        color_row = tk.Frame(self)
+        color_row.grid(row=5, column=0, columnspan=3, sticky="w", pady=3)
+        tk.Label(color_row, text="文字顏色").pack(side="left")
+        self.text_color_swatch = tk.Label(
+            color_row, width=3, relief="solid", borderwidth=1,
+            bg=style["text_color"],
+        )
+        self.text_color_swatch.pack(side="left", padx=(4, 2))
+        tk.Button(
+            color_row, text="選色", width=5, command=self._choose_text_color,
+        ).pack(side="left", padx=(0, 14))
+        tk.Label(color_row, text="邊框顏色").pack(side="left")
+        self.stroke_color_swatch = tk.Label(
+            color_row, width=3, relief="solid", borderwidth=1,
+            bg=style["stroke_color"],
+        )
+        self.stroke_color_swatch.pack(side="left", padx=(4, 2))
+        tk.Button(
+            color_row, text="選色", width=5, command=self._choose_stroke_color,
+        ).pack(side="left")
+
         # 重點字上色（燒錄與 ASS 匯出時，把指定詞彙換色強調）。
+        emphasis_row = tk.Frame(self)
+        emphasis_row.grid(row=6, column=0, columnspan=3, sticky="w", pady=3)
         self.emphasis_var = tk.BooleanVar(
             value=bool(style.get("emphasis_enabled", False)))
         ttk.Checkbutton(
-            self, text="重點字上色", variable=self.emphasis_var,
+            emphasis_row, text="重點字上色", variable=self.emphasis_var,
             command=self._emit_change,
-        ).grid(row=8, column=0, sticky="w", pady=3)
+        ).pack(side="left")
         self.emphasis_swatch = tk.Label(
-            self, width=4, relief="solid", borderwidth=1,
+            emphasis_row, width=3, relief="solid", borderwidth=1,
             bg=style.get("emphasis_color", "#FFD700"),
         )
-        self.emphasis_swatch.grid(row=8, column=1, sticky="w")
+        self.emphasis_swatch.pack(side="left", padx=(10, 2))
         tk.Button(
-            self, text="選擇顏色", command=self._choose_emphasis_color,
-        ).grid(row=8, column=2, sticky="w")
+            emphasis_row, text="選色", width=5,
+            command=self._choose_emphasis_color,
+        ).pack(side="left")
 
-        tk.Label(self, text="重點字詞").grid(row=9, column=0, sticky="w", pady=3)
+        tk.Label(self, text="重點字詞").grid(row=7, column=0, sticky="w", pady=3)
         self.emphasis_words_var = tk.StringVar(
             value=style.get("emphasis_words", ""))
         emphasis_entry = tk.Entry(self, textvariable=self.emphasis_words_var)
-        emphasis_entry.grid(row=9, column=1, columnspan=2, sticky="we")
+        emphasis_entry.grid(row=7, column=1, columnspan=2, sticky="we")
         emphasis_entry.bind("<FocusOut>", lambda _e: self._emit_change())
         emphasis_entry.bind("<Return>", lambda _e: self._emit_change())
         tk.Label(
             self, text="逗號或空白分隔；於燒錄影片與 ASS 匯出時生效",
-            fg="#666666",
-        ).grid(row=10, column=0, columnspan=3, sticky="w")
+            fg="#666666", wraplength=380, justify="left",
+        ).grid(row=8, column=0, columnspan=3, sticky="w")
 
         # 逐字動態字幕（卡拉OK／單字彈出，需逐字時間軸）。
-        tk.Label(self, text="動態字幕").grid(row=11, column=0, sticky="w", pady=3)
+        tk.Label(self, text="動態字幕").grid(row=9, column=0, sticky="w", pady=3)
         self.dynamic_var = tk.StringVar(
             value=DYNAMIC_MODE_LABELS.get(
                 str(style.get("dynamic_mode", "off")),
                 DYNAMIC_MODE_LABELS["off"]))
         dynamic_box = ttk.Combobox(
-            self, textvariable=self.dynamic_var, state="readonly", width=18,
+            self, textvariable=self.dynamic_var, state="readonly", width=16,
             values=list(DYNAMIC_MODE_LABELS.values()))
-        dynamic_box.grid(row=11, column=1, columnspan=2, sticky="w")
+        dynamic_box.grid(row=9, column=1, columnspan=2, sticky="w")
         dynamic_box.bind("<<ComboboxSelected>>", lambda _e: self._emit_change())
         tk.Label(
             self, text="逐字換色或單字彈出；模式一（音訊轉錄）燒錄與 ASS 匯出時生效",
-            fg="#666666",
-        ).grid(row=12, column=0, columnspan=3, sticky="w")
+            fg="#666666", wraplength=380, justify="left",
+        ).grid(row=10, column=0, columnspan=3, sticky="w")
 
     # ------------------------------------------------------------------
     # 事件處理
@@ -203,6 +229,7 @@ class StylePanel(tk.LabelFrame):
     def _apply_vertical_preset(self, value):
         """套用垂直位置快捷鍵。"""
         self.pos_y_var.set(value * 100)
+        self._pos_y_display_var.set(str(int(round(value * 100))))
         self._emit_change()
 
     def _import_font(self):
@@ -291,6 +318,8 @@ class StylePanel(tk.LabelFrame):
             self._style = dict(style)
             self.pos_x_var.set(style["position_x"] * 100)
             self.pos_y_var.set(style["position_y"] * 100)
+            self._pos_x_display_var.set(str(int(round(style["position_x"] * 100))))
+            self._pos_y_display_var.set(str(int(round(style["position_y"] * 100))))
             self.font_var.set(style["font_family"])
             self.font_size_var.set(style["font_size"])
             self.stroke_width_var.set(style["stroke_width"])

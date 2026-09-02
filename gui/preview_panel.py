@@ -11,9 +11,12 @@ import tkinter.font as tkfont
 
 from subtitle.exporter import parse_emphasis_words, split_emphasis_segments
 
-# 預覽畫布尺寸，採 16:9 比例。
-PREVIEW_WIDTH = 560
-PREVIEW_HEIGHT = 315
+# 預覽畫布尺寸。v1.52.0 三欄化前為 560x315（16:9）；右欄自 v1.52.0 起
+# 固定寬 420px（`docs/UI_ARCHITECTURE_2.0.md` B.2/B.3），畫布縮小成
+# 392x200 才放得下（原型已實測驗證右欄總高收在頁面內，見架構文件 B.3
+# 表格），比例隨之不再是嚴格 16:9。
+PREVIEW_WIDTH = 392
+PREVIEW_HEIGHT = 200
 
 
 class PreviewPanel(tk.Frame):
