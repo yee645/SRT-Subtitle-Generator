@@ -170,6 +170,11 @@ else:
         # 第二輪 D：首次啟動的新版介面速覽。
         "_maybe_show_whatsnew",
         "remember",  # ↑ 之內的巢狀 callback，不是新的公開方法
+        # v1.52.2：產出匯流排（稽核 ④「產出端與檢查端斷鏈」）。
+        "adopt_media", "adopt_publish", "adopt_thumbnails",
+        "_refresh_publish_card", "_build_publish_section",
+        "_on_send_publish_to_health", "_on_clear_publish",
+        "on_media_fixed",  # ↑ _open_health_center_dialog 之內的巢狀 callback
     }
     unexpected = added_methods - expected_new_methods
     check("新增的方法都在本版白名單內，沒有夾帶計畫外的新邏輯",
@@ -213,21 +218,36 @@ check("gui/*.py 沒有殘留 classic tk.Checkbutton/Radiobutton/Scale"
 # ===== 4. subtitle/ 公開介面零改動（動態比對 v1.51.0） =================
 
 if old_app_src is not None:
-    old_subtitle_files = subprocess.run(
-        ["git", "ls-tree", "-r", "--name-only", OLD_REF, "subtitle/"],
-        cwd=REPO_ROOT, capture_output=True, text=True).stdout.split()
-    new_subtitle_files = subprocess.run(
-        ["git", "ls-tree", "-r", "--name-only", "HEAD", "subtitle/"],
-        cwd=REPO_ROOT, capture_output=True, text=True).stdout.split()
-    diff = subprocess.run(
-        ["git", "diff", "--name-only", OLD_REF, "--", "subtitle/"],
-        cwd=REPO_ROOT, capture_output=True, text=True).stdout.split()
+    # v1.52.2 修正：原本用 `git ls-tree HEAD` 取新版檔案清單，但 ls-tree
+    # 讀的是**已 commit** 的樹，而下面的 `git diff OLD_REF` 比的是**工作
+    # 目錄**。兩者基準不同，結果是「還沒 commit 就刪掉一個 subtitle/ 檔
+    # 案」這件事，檔案清單那一項完全看不出來（實測探針證實會漏）。改成
+    # 一律由 `git diff --name-status OLD_REF`（ref → 工作目錄）推導，基
+    # 準統一，未 commit 的增刪也擋得住。
+    status = subprocess.run(
+        ["git", "diff", "--name-status", OLD_REF, "--", "subtitle/"],
+        cwd=REPO_ROOT, capture_output=True, text=True).stdout.splitlines()
+    diff, added_files, removed_files = [], set(), set()
+    for line in status:
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        code, path = parts[0], parts[-1]
+        diff.append(path)
+        if code.startswith("A"):
+            added_files.add(path)
+        elif code.startswith("D"):
+            removed_files.add(path)
     # v1.52.0 與 v1.52.1 第一輪是純版面工程，這裡斷言 subtitle/ 零改動。
     # 第二輪必須動 subtitle/pipeline.py（新增 `describe_output_plan`——階段
     # ④那句「這次會輸出什麼」的文字產生器，刻意放在核心層與
     # `export_and_burn` 同檔，兩者才不會各說各話）。斷言因此改成**只准純
     # 新增**：允許改動的檔案逐一列名，且舊版有過的公開名稱一個都不能少。
-    allowed_touched = {"subtitle/pipeline.py"}
+    allowed_touched = {
+        "subtitle/pipeline.py",     # v1.52.1：describe_output_plan
+        "subtitle/generations.py",  # v1.52.2：世代鏈（全新檔案）
+        "subtitle/publisher.py",    # v1.52.2：build_publish_fields
+    }
     unexpected_touched = set(diff) - allowed_touched
     check("subtitle/ 只有白名單內的檔案被改動（公開介面只准加、不准改）",
           not unexpected_touched, str(unexpected_touched))
@@ -247,9 +267,11 @@ if old_app_src is not None:
                 changed_sigs.append(name)
         check(f"{rel} 既有函式的簽名沒有被改動", not changed_sigs,
               str(changed_sigs))
-    check("subtitle/ 檔案清單也沒有增減",
-          set(old_subtitle_files) == set(new_subtitle_files),
-          str(set(old_subtitle_files) ^ set(new_subtitle_files)))
+    # v1.52.2：核心層新增了 generations.py。斷言改成「只准新增、不准刪」
+    # ——舊版有過的檔案一個都不能消失，新檔案要在白名單裡。
+    check("subtitle/ 沒有任何檔案被刪掉", not removed_files, str(removed_files))
+    check("subtitle/ 新增的檔案都在白名單內",
+          added_files <= allowed_touched, str(added_files - allowed_touched))
 
 
 # ===== 5. Xvfb 下的真實視窗：核心驗收條件 + 通用版面掃描 + minsize 退化 ===

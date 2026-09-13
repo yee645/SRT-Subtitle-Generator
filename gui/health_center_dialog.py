@@ -75,7 +75,7 @@ class HealthCenterDialog(tk.Toplevel):
     """健檢中心視窗：選對象→勾選檢查→開始健檢→分級清單＋逐項修復。"""
 
     def __init__(self, master, config_data, media_path="", cues=None,
-                on_fixed=None):
+                on_fixed=None, on_media_fixed=None, publish=None):
         super().__init__(master)
         self.title("健檢中心：影片、字幕、封面與發佈資訊的所有健檢，一次跑完")
         # 高度刻意壓在 900 而不是把所有內容一次攤開所需的 1020：1080p
@@ -89,6 +89,8 @@ class HealthCenterDialog(tk.Toplevel):
 
         self.config_data = config_data
         self.on_fixed = on_fixed
+        # v1.52.2：修復版做出來之後回報給主視窗接手（稽核 ④ 斷鏈修復）。
+        self.on_media_fixed = on_media_fixed
         self.result_queue = queue.Queue()
         self.is_processing = False
         self.is_fixing = False
@@ -121,6 +123,10 @@ class HealthCenterDialog(tk.Toplevel):
 
         self._build_ffmpeg_banner(top)
         self._build_object_row(top, media_path)
+        # v1.52.2：階段④〔送健檢中心〕帶進來的發佈資料直接填好，使用者不
+        # 必再把審片助手產生的章節與發佈包複製貼上一次。
+        if publish:
+            self._prefill_publish(publish)
         self._build_checklist(top)
         self._build_run_row(body)
         self._build_result_area(body)
@@ -701,6 +707,71 @@ class HealthCenterDialog(tk.Toplevel):
         self.status_var.set(f"{message}重新健檢中...")
         self._on_run()
 
+    def _prefill_publish(self, publish):
+        """
+        把主視窗帶來的發佈資料填進對象區（v1.52.2）。
+
+        只填有值的欄位，不覆蓋使用者已經在這裡打的字；有內容時順手把「發
+        佈文字」摺疊區展開——資料填進去了卻收在摺疊區裡，跟沒填一樣。
+        """
+        filled = False
+        if publish.get("title"):
+            self.publish_title_var.set(publish["title"])
+            filled = True
+        for widget, key in ((self.publish_desc, "description"),
+                            (self.publish_chapters, "chapters")):
+            value = publish.get(key)
+            if value:
+                widget.delete("1.0", "end")
+                widget.insert("1.0", value)
+                filled = True
+        if publish.get("tags"):
+            self.publish_tags_var.set(publish["tags"])
+            filled = True
+        for path in publish.get("thumbs") or []:
+            if path not in self._thumb_paths:
+                self._thumb_paths.append(path)
+                self.thumb_list.insert("end", os.path.basename(path))
+                filled = True
+        if filled and not self._publish_expanded:
+            self._toggle_publish()
+        return filled
+
+    def _offer_adopt_fixed(self, path):
+        """
+        修復版做好了，問使用者要不要直接接手為「目前影片」（v1.52.2）。
+
+        舊版只跳一個訊息框報路徑、外加一句「也可對輸出版再跑一次健檢比
+        對」——但介面沒有任何做得到那件事的路徑，使用者得自己記住路徑、
+        回主視窗重選檔案。這正是稽核 ④「產出端與檢查端斷鏈」點名的情形。
+
+        用詢問而不是自動接手，是因為修復是「可能改壞」的處理（音訊被動過
+        濾鏡），使用者本來就該先試聽再決定要不要沿用；自動換掉會讓沒聽過
+        的版本悄悄變成後續所有步驟的輸入。
+        """
+        if not self.on_media_fixed:
+            messagebox.showinfo(
+                "修復完成", f"已輸出：\n{path}\n\n建議播放／試聽確認結果。",
+                parent=self)
+            return
+        source = self.media_var.get().strip()
+        adopt = messagebox.askyesno(
+            "修復完成",
+            f"已輸出：\n{path}\n\n"
+            "要把它設為「目前影片」嗎？\n"
+            "設為目前影片之後，這裡的對象會換成修復版——再按一次"
+            "〔開始健檢〕就是修復前後的比對，不必自己回主視窗重選檔案。\n\n"
+            "（建議先播放／試聽確認結果再決定。選「否」則只是輸出檔案，"
+            "不改變目前影片。）",
+            parent=self)
+        if not adopt:
+            return
+        self.on_media_fixed(path, source)
+        # 對象區同步換成修復版，否則使用者按〔開始健檢〕還是在檢查舊檔。
+        self.media_var.set(path)
+        self.status_var.set(
+            "已接手修復版為目前影片，按〔開始健檢〕即可比對修復前後。")
+
     def _run_media_fix(self, fix_key):
         media_path = self.media_var.get().strip()
         if not media_path or not os.path.exists(media_path):
@@ -765,11 +836,7 @@ class HealthCenterDialog(tk.Toplevel):
                 elif kind == "fix_done":
                     self._set_fixing(False)
                     self.status_var.set(f"修復版已輸出：{payload}")
-                    messagebox.showinfo(
-                        "修復完成",
-                        f"已輸出：\n{payload}\n\n"
-                        "建議播放／試聽確認結果，也可對輸出版再跑一次健檢"
-                        "比對。", parent=self)
+                    self._offer_adopt_fixed(payload)
                 elif kind == "fix_notice":
                     self._set_fixing(False)
                     messagebox.showinfo("提示", payload, parent=self)
