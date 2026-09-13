@@ -38,6 +38,7 @@ v1.52.0 把它轉九十度：左欄（330px，`ScrollableFrame` 自帶垂直捲�
   7. `subtitle/` 公開介面零改動（比對套件的 `__init__.py`／函式簽名與
      上一版一致，動態比對而非手寫清單）。
 """
+import io
 import os
 import re
 import subprocess
@@ -111,7 +112,19 @@ else:
     # 這裡不是「放過檢查」——舊名允許消失，但**新名必須存在**，能力有沒有
     # 被搬走照樣守得住。
     planned_renames = {"自動跳剪停頓": "剪停頓（依字幕）",
-                       "重複片段偵測": "剪重複片段"}
+                       "重複片段偵測": "剪重複片段",
+                       # v1.52.1 第二輪：C-4 併三個輸出面，兩個區塊改名。
+                       "自動化輸出（一鍵完成用）": "輸出設定",
+                       "匯出與燒錄": "只做單獨一件事"}
+    # C-3 拆掉「一鍵完成」是**一顆變三顆**，不是改名，所以單獨核對：舊按
+    # 鈕的三項能力（生成、依設定輸出、批次全自動）新版都要找得到入口，
+    # 少一項就是能力真的不見了。
+    split_targets = {"開始生成字幕", "完成輸出（依輸出設定）", "批次一鍵完成"}
+    split_ok = split_targets <= new_texts
+    check("C-3「一鍵完成」拆開後三個入口都在（生成／依設定輸出／批次）",
+          split_ok, f"缺少：{split_targets - new_texts}")
+    if split_ok:
+        planned_renames["一鍵完成（生成＋匯出＋燒錄）"] = "批次一鍵完成"
     renamed_ok = {old: new for old, new in planned_renames.items()
                   if new in new_texts}
     truly_missing = {t for t in truly_missing if t not in renamed_ok}
@@ -136,15 +149,31 @@ else:
     check(f"v1.51.0 的所有方法（共 {len(old_methods)} 個）在 v1.52.0 "
           "一個不少", not missing_methods, str(missing_methods))
     added_methods = new_methods - old_methods
-    # v1.52.0 時這裡斷言「只新增兩個方法」，用來防範圍擴散。v1.52.1 加上
-    # 四階段頁籤層必然要新增建構方法，該斷言已過期。改為斷言新增的方法都
-    # 是**版面建構類**（_build_* / _apply_* / _on_*_configure / _refresh_*），
-    # 仍然擋得住「偷偷加了業務邏輯」這件事。
-    import re as _re
-    unexpected = {m for m in added_methods
-                  if not _re.match(r"_(build|apply|on|refresh)_", m)}
-    check("新增的方法都是版面建構類，沒有夾帶非版面的新邏輯",
-          not unexpected, f"非版面類新方法：{unexpected}；全部新增：{added_methods}")
+    # v1.52.0 時這裡斷言「只新增兩個方法」；v1.52.1 第一輪改成「名字必須
+    # 像版面建構類」的正則。第二輪發現那個正則其實鬆掉了——`_on_*` 是事
+    # 件處理器，是不折不扣的邏輯，卻照樣通過。改成**逐一列名的白名單**：
+    # 比正則嚴格（多一個沒列到的方法就失敗），而且每一項都得寫出它為什麼
+    # 在這一版出現，範圍擴散無所遁形。
+    expected_new_methods = {
+        # 第一輪：四階段頁籤骨架（純版面）。
+        "_build_notebook", "_build_workfile_bar", "_build_status_bar",
+        "_build_stage_source_tab", "_build_stage_health_tab",
+        "_build_stage_output_tab", "_build_trim_actions_section",
+        "_refresh_workfile_bar",
+        # v1.52.0：三欄退化規則。
+        "_apply_body_layout", "_on_root_configure",
+        # 第二輪 C-3：拆「一鍵完成」後半段的「完成輸出」一條路徑。
+        "_on_finish_output", "_finish_output_worker", "_on_finish_output_done",
+        "_refresh_action_buttons",
+        # 第二輪 C-4：階段④那句「這次會輸出什麼」。
+        "_refresh_output_plan",
+        # 第二輪 D：首次啟動的新版介面速覽。
+        "_maybe_show_whatsnew",
+        "remember",  # ↑ 之內的巢狀 callback，不是新的公開方法
+    }
+    unexpected = added_methods - expected_new_methods
+    check("新增的方法都在本版白名單內，沒有夾帶計畫外的新邏輯",
+          not unexpected, f"白名單外的新方法：{unexpected}")
 
 
 # ===== 1. style_panel.py：ttk.Scale 取代 tk.Scale =====================
@@ -193,8 +222,31 @@ if old_app_src is not None:
     diff = subprocess.run(
         ["git", "diff", "--name-only", OLD_REF, "--", "subtitle/"],
         cwd=REPO_ROOT, capture_output=True, text=True).stdout.split()
-    check("subtitle/ 目錄相對上一版沒有任何檔案被改動（硬性要求：公開"
-          "介面零改動）", not diff, str(diff))
+    # v1.52.0 與 v1.52.1 第一輪是純版面工程，這裡斷言 subtitle/ 零改動。
+    # 第二輪必須動 subtitle/pipeline.py（新增 `describe_output_plan`——階段
+    # ④那句「這次會輸出什麼」的文字產生器，刻意放在核心層與
+    # `export_and_burn` 同檔，兩者才不會各說各話）。斷言因此改成**只准純
+    # 新增**：允許改動的檔案逐一列名，且舊版有過的公開名稱一個都不能少。
+    allowed_touched = {"subtitle/pipeline.py"}
+    unexpected_touched = set(diff) - allowed_touched
+    check("subtitle/ 只有白名單內的檔案被改動（公開介面只准加、不准改）",
+          not unexpected_touched, str(unexpected_touched))
+    for rel in sorted(set(diff) & allowed_touched):
+        old_src = _git_show(OLD_REF, rel) or ""
+        new_src = io.open(os.path.join(REPO_ROOT, rel), encoding="utf-8").read()
+        old_names = set(re.findall(r"^def (\w+)\(", old_src, re.M))
+        new_names = set(re.findall(r"^def (\w+)\(", new_src, re.M))
+        check(f"{rel} 的公開函式一個沒少（只增不改）",
+              not (old_names - new_names), str(old_names - new_names))
+        # 既有函式的簽名也不能被動過——只加新函式才算「純新增」。
+        changed_sigs = []
+        for name in sorted(old_names & new_names):
+            o = re.search(rf"^def {name}\((.*?)\)", old_src, re.M | re.S)
+            n = re.search(rf"^def {name}\((.*?)\)", new_src, re.M | re.S)
+            if o and n and o.group(1) != n.group(1):
+                changed_sigs.append(name)
+        check(f"{rel} 既有函式的簽名沒有被改動", not changed_sigs,
+              str(changed_sigs))
     check("subtitle/ 檔案清單也沒有增減",
           set(old_subtitle_files) == set(new_subtitle_files),
           str(set(old_subtitle_files) ^ set(new_subtitle_files)))
@@ -341,17 +393,62 @@ try:
 
     # ---- 核心驗收條件：主鈕與字幕清單的 y 都 < 視窗高度 ----
     gen_y = app.generate_btn.winfo_rooty() - app.winfo_rooty()
-    auto_y = app.auto_btn.winfo_rooty() - app.winfo_rooty()
+    # v1.52.1 第二輪起主動作列的第二顆是「完成輸出」（「一鍵完成」已拆），
+    # 核心驗收條件改量它——`auto_btn` 單檔時刻意不在畫面上，量它會量到
+    # 上一次 map 的殘值，那是假數字。
+    finish_y = app.finish_btn.winfo_rooty() - app.winfo_rooty()
     cue_y = app.cue_tree.winfo_rooty() - app.winfo_rooty()
     check(f"【核心驗收】「開始生成字幕」y={gen_y} < 視窗高 {win_h}",
           gen_y < win_h, gen_y)
-    check(f"【核心驗收】「一鍵完成」y={auto_y} < 視窗高 {win_h}",
-          auto_y < win_h, auto_y)
+    check(f"【核心驗收】「完成輸出（依輸出設定）」y={finish_y} < 視窗高 {win_h}",
+          finish_y < win_h, finish_y)
+    check("【核心驗收】兩顆主鈕真的並排在同一列（y 相同、不是上下堆疊）",
+          gen_y == finish_y and app.finish_btn.winfo_ismapped() == 1,
+          f"gen_y={gen_y} finish_y={finish_y}")
     check(f"【核心驗收】字幕清單 y={cue_y} < 視窗高 {win_h}",
           cue_y < win_h, cue_y)
     check("主鈕與字幕清單同屏可見（不必捲動）",
           app.generate_btn.winfo_ismapped() == 1
           and app.cue_tree.winfo_ismapped() == 1)
+
+    # ---- C-3：批次鈕只在多檔時出現（上面的消失掃描排除它的配套斷言）----
+    check("單檔（或未選檔）時〔批次一鍵完成〕不在畫面上",
+          not app.auto_btn.winfo_manager(),
+          f"manager={app.auto_btn.winfo_manager()!r}")
+    app.file_var.set("/tmp/一.mp4;/tmp/二.mp4")
+    pump(app)
+    check("選兩個檔案時〔批次一鍵完成〕自己長出來、而且真的 mapped",
+          app.auto_btn.winfo_ismapped() == 1,
+          f"manager={app.auto_btn.winfo_manager()!r}")
+    batch_right = (app.auto_btn.winfo_rootx() - app.winfo_rootx()
+                   + app.auto_btn.winfo_width())
+    check(f"三顆並排時最右緣 {batch_right} 仍在視窗寬 {win_w} 內",
+          batch_right <= win_w, batch_right)
+    app.file_var.set("")
+    pump(app)
+    check("選回單檔後〔批次一鍵完成〕又收起來", not app.auto_btn.winfo_manager())
+
+    # ---- C-4：階段④那句「這次會輸出什麼」跟著設定走 ----
+    app.auto_burn_var.set(False)
+    for key, var in app.auto_export_vars.items():
+        var.set(key == "export_srt")
+    app._collect_automation_config()
+    pump(app)
+    plan_srt = app.output_plan_var.get()
+    app.auto_burn_var.set(True)
+    app._collect_automation_config()
+    pump(app)
+    plan_burn = app.output_plan_var.get()
+    check("輸出說明文字有跟著勾選改變（不是寫死的靜態字串）",
+          plan_srt != plan_burn and "SRT" in plan_srt, f"{plan_srt!r} / {plan_burn!r}")
+    check("勾了燒錄後說明文字確實提到燒錄", "燒錄" in plan_burn, plan_burn)
+    for key, var in app.auto_export_vars.items():
+        var.set(False)
+    app.auto_burn_var.set(False)
+    app._collect_automation_config()
+    pump(app)
+    check("什麼都沒勾時說明文字會講清楚「還沒決定要輸出什麼」",
+          "尚未勾選" in app.output_plan_var.get(), app.output_plan_var.get())
 
     # ---- 通用版面掃描：1400x800 下不可有裁切/溢出/整個消失 ----
     clipped, overflow = scan(app, win_w)
@@ -361,7 +458,13 @@ try:
           not overflow, str(overflow))
     # 逐頁籤掃：未選中頁籤上的控件本來就 unmapped，只有「切到自己那一頁
     # 仍然沒出現」才算被版面擠掉。
-    unmapped = scan_unmapped_all_tabs(app, excluded_roots=(app.transcript_frame,))
+    # `auto_btn`（批次一鍵完成）是本視窗唯一一個**刻意**不 map 的互動控
+    # 件：v1.52.1 第二輪起它只在選到兩個以上檔案時才 pack（見
+    # `_refresh_action_buttons`），單檔情境下不在畫面上是正確行為。這裡
+    # 排除它不是放過檢查——它的存在與位置由下面「多檔時批次鈕會出現」
+    # 那一組斷言單獨守住。
+    unmapped = scan_unmapped_all_tabs(
+        app, excluded_roots=(app.transcript_frame, app.auto_btn))
     check("1400x800：沒有互動控件因版面擠不下而整個消失（逐頁籤檢查；比"
           "裁切更嚴重，施工時真的踩過——10 顆按鈕擠一列時後 4 顆被 pack "
           "擠到寬度 1px/未 map）",

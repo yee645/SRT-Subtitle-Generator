@@ -35,11 +35,14 @@ from subtitle.aligner import align_transcript
 from subtitle.burner import burn_subtitles, ffmpeg_available
 from subtitle.exporter import FORMAT_FILETYPES, export, format_srt_timestamp
 from subtitle.importer import load_subtitle_file
-from subtitle.pipeline import run_batch
+from subtitle.pipeline import describe_output_plan, export_and_burn, run_batch
 from subtitle.segmenter import build_cues_from_words
 from subtitle.textedit import apply_corrections
 from subtitle.transcriber import transcribe
 from gui.audiovis_dialog import AudioVisDialog
+from gui.whatsnew_dialog import (NEVER_SHOW as NEVER_SHOW_WHATSNEW,
+                                 WhatsNewDialog,
+                                 should_show as should_show_whatsnew)
 from gui.branding_dialog import BrandingDialog
 from gui.health_center_dialog import HealthCenterDialog
 from gui.error_dialog import show_friendly_error
@@ -116,6 +119,30 @@ class SrtApp(tk.Tk):
         # 清除上次更新遺留的舊檔，並於背景檢查是否有新版本。
         cleanup_old_version()
         self.after(1500, self._start_update_check)
+        # 介面大改版後第一次啟動：跳出舊位置→新位置對照表（v1.52.1）。
+        # 排在主視窗建好之後才開，這樣速覽關掉時後面就是它描述的那個介面。
+        self.after(400, self._maybe_show_whatsnew)
+
+    def _maybe_show_whatsnew(self):
+        """
+        首次啟動時跳出「新版介面速覽」（v1.52.1 第二輪，架構文件 D）。
+
+        v1.52 把 11 顆工具列按鈕換成四個階段頁籤，老用戶的肌肉記憶會整
+        個落空——功能都在，但第一眼看起來像不見了。這張對照表是那個風
+        險的正面處理，不是行銷頁。
+
+        「該不該跳」的規則放在 `gui/whatsnew_dialog.should_show`，這裡
+        只負責開窗與把選擇寫回 config。
+        """
+        if not should_show_whatsnew(self.config_data, APP_VERSION):
+            return
+
+        def remember(never):
+            self.config_data["whatsnew_seen"] = (
+                NEVER_SHOW_WHATSNEW if never else APP_VERSION)
+            self._save_config_silently()
+
+        WhatsNewDialog(self, APP_VERSION, on_close=remember)
 
     # ==================================================================
     # 主題（dark / light）
@@ -375,6 +402,45 @@ class SrtApp(tk.Tk):
         else:
             self.workfile_video_var.set("（尚未選擇）")
         self.workfile_subtitle_var.set(f"{len(self.cues)} 句")
+        self._refresh_action_buttons()
+        self._refresh_output_plan()
+
+    def _refresh_action_buttons(self):
+        """
+        依目前選檔數決定〔批次一鍵完成〕出不出現（v1.52.1 第二輪）。
+
+        架構文件 C-3：拆掉舊「一鍵完成」是為了在生成與輸出之間留出校對
+        的位置，但多檔批次本來就不逐支校對，所以保留舊行為、只在真的選
+        多檔時才長出來。單檔時完全 `pack_forget`（不是 disable），理由
+        是一顆永遠灰著的按鈕只會讓人一直想「我要怎樣才能按它」。
+
+        由 `_refresh_workfile_bar` 統一呼叫，沿用它既有的呼叫點（選檔
+        變動的 trace ＋ 字幕清單變動），不必逐處再補一次。
+        """
+        if not hasattr(self, "auto_btn"):
+            return  # 建構期尚未跑到 `_build_action_section`。
+        multi = len(self._selected_files()) > 1
+        mapped = bool(self.auto_btn.winfo_manager())
+        if multi and not mapped:
+            self.auto_btn.pack(side="left", padx=(6, 0))
+        elif not multi and mapped:
+            self.auto_btn.pack_forget()
+
+    def _refresh_output_plan(self):
+        """
+        更新階段④「完成輸出會做什麼」那一句話（v1.52.1 第二輪）。
+
+        文字由 `subtitle.pipeline.describe_output_plan` 產生——與
+        `export_and_burn` 同一個模組，設定改了兩邊一起改，不會出現「說
+        明寫的跟實際做的不一樣」。呼叫點：每個輸出設定控件的 command
+        （`_collect_automation_config`）＋選檔變動（`_refresh_workfile_bar`），
+        所以勾選當下就會看到那句話跟著變。
+        """
+        if not hasattr(self, "output_plan_var"):
+            return  # 建構期尚未跑到 `_build_stage_output_tab`。
+        files = self._selected_files()
+        self.output_plan_var.set(describe_output_plan(
+            self.config_data, files[0] if files else None))
 
     def _build_status_bar(self):
         """
@@ -498,22 +564,56 @@ class SrtApp(tk.Tk):
 
     def _build_stage_output_tab(self, parent):
         """
-        階段④「輸出與發佈」（`docs/UI_ARCHITECTURE_2.0.md` B.6）：字幕檔
-        匯出＋燒錄（原「匯出與燒錄」，見 `_build_export_section`）、自動
-        化輸出（原左欄／中欄深處的「自動化輸出（一鍵完成用）」整區，見
-        `_build_automation_section`）、成品加工（配樂助手／品牌套版）。
-        三個輸出面合併成單一輸出區是下一輪的範圍（C-4，本輪不做），這
-        裡只是把既有的兩個區塊原樣搬進同一個頁籤、緊鄰擺放。
+        階段④「輸出與發佈」（`docs/UI_ARCHITECTURE_2.0.md` B.6）。
+
+        v1.52.1 第一輪只是把「匯出與燒錄」「自動化輸出」兩個既有區塊原
+        樣搬進同一個頁籤、緊鄰擺放。第二輪做架構文件 C-4 真正要的事：
+        **併成單一輸出區**。稽核 ④ 點名「同一個『輸出 SRT』概念出現三
+        處、行為各不同」，其中主視窗佔兩處——一處要你勾選、按了不問路
+        徑，一處是按鈕、按了跳存檔對話框，而介面從來沒說過它們差在哪。
+
+        合併後是一個「輸出」框、由上而下三段，順序就是使用者的決策順序：
+
+        1. **這次會輸出什麼**——`describe_output_plan` 產生的一句話
+           （設定改了立刻跟著變）＋主動作〔完成輸出（依輸出設定）〕。
+        2. **輸出設定**——原「自動化輸出（一鍵完成用）」整區，是上面
+           那句話的來源。
+        3. **只做單獨一件事**——原「匯出與燒錄」的逐格式按鈕，明確標
+           示「會另外問你要存到哪裡」，兩種行為的差別第一次寫在介面上。
+
+        偏離 B.6 的記錄：B.6 原本規劃把輸出設定收進〔輸出設定⚙〕對話
+        框。這裡不收——2.0 的整條主軸就是把常開視窗從 17–19 個壓到 3–5
+        個，為了省幾列高度再開一個對話框與那個目標相反；而且設定與它產
+        生的那句話必須同框才看得出因果。
         """
         container = ttk.Frame(parent, padding=14)
         container.pack(fill="both", expand=True)
 
-        # 「匯出與燒錄」（格式匯出＋燒錄）與「自動化輸出」直接以這個頁
-        # 籤為 parent 建構——不是搬移既有元件，是把它們原本要 pack 的
-        # 目的地從中欄改成這裡（方法本身完全不變，只換呼叫時傳入的
-        # parent）。
-        self._build_export_section(container)
-        self._build_automation_section(container)
+        output_card = ttk.LabelFrame(container, text="輸出", padding=(10, 8))
+        output_card.pack(fill="x", pady=(0, 8))
+        self.output_card = output_card
+
+        # ① 這次會輸出什麼 ＋ 主動作。
+        self.output_plan_var = tk.StringVar(value="")
+        ttk.Label(
+            output_card, textvariable=self.output_plan_var,
+            justify="left", wraplength=900,
+            font=("Microsoft JhengHei", 10, "bold"),
+        ).pack(anchor="w", pady=(0, 6))
+        self.finish_btn_stage4 = ttk.Button(
+            output_card, text="完成輸出（依輸出設定）", width=22,
+            command=self._on_finish_output, state="disabled",
+        )
+        self.finish_btn_stage4.pack(anchor="w")
+
+        # ②③ 輸出設定與單格式按鈕——不是搬移既有元件，是把它們原本要
+        # pack 的目的地改成這個框（方法本身只換 parent 與標題樣式）。
+        ttk.Separator(output_card, orient="horizontal").pack(
+            fill="x", pady=(10, 8))
+        self._build_automation_section(output_card)
+        ttk.Separator(output_card, orient="horizontal").pack(
+            fill="x", pady=(10, 8))
+        self._build_export_section(output_card)
 
         finishing_card = ttk.LabelFrame(container, text="成品加工", padding=(10, 8))
         finishing_card.pack(fill="x")
@@ -748,10 +848,20 @@ class SrtApp(tk.Tk):
         v1.52.1：呼叫者從中欄改為階段④（`_build_stage_output_tab`，B.6
         「輸出相關 → 階段④」），方法本身、控制項、config 欄位不變，只
         是傳入的 `parent` 換了。
+
+        v1.52.1 第二輪：併進階段④單一「輸出」框（C-4），所以自己不再
+        是 LabelFrame（三層方框太吵），改成一行小標題＋內容的段落；標題
+        也從「自動化輸出（一鍵完成用）」改為「輸出設定」——「一鍵完成」
+        這顆按鈕已經不存在了，再指向它會找不到人。控制項、command、
+        config 欄位仍然一個沒動，`self.automation_frame` 也還在（測試用
+        它量位置）。
         """
-        frame = ttk.LabelFrame(parent, text="自動化輸出（一鍵完成用）", padding=(10, 6))
-        frame.pack(fill="x", pady=(0, 8))
+        frame = ttk.Frame(parent)
+        frame.pack(fill="x")
         self.automation_frame = frame
+        ttk.Label(frame, text="輸出設定",
+                  font=("Microsoft JhengHei", 10, "bold")).pack(
+            anchor="w", pady=(0, 4))
         automation = self.config_data["automation"]
 
         row1 = ttk.Frame(frame)
@@ -824,6 +934,19 @@ class SrtApp(tk.Tk):
         （`_build_status_bar`，B.1），本方法不再自己建立它；
         `self.status_var` 在 `_build_status_bar` 建立（本方法呼叫時已
         存在），所有既有 `self.status_var.set(...)` 呼叫點不必改動。
+
+        v1.52.1 第二輪：拆掉「一鍵完成（生成＋匯出＋燒錄）」（架構文件
+        C-3）。稽核 1.2 實測舊按鈕「生成後直接匯出＋燒錄、不留校對機
+        會」——旗艦捷徑與品質流程互斥，那是把錯字燒進影片的設計。改成
+        並排兩顆〔開始生成字幕〕〔完成輸出（依輸出設定）〕，中間天然留
+        出校對的位置；不在乎校對的人連按兩顆，效果等同舊按鈕。
+
+        **多檔批次是例外**：一次十支影片本來就不會逐支校對，所以選到兩
+        個以上檔案時才長出第三顆〔批次一鍵完成〕，行為與舊按鈕完全一致
+        （`_on_auto_run` 一行沒改）。它由 `_refresh_action_buttons`
+        依選檔數 pack／pack_forget，這也是本視窗唯一一個「會刻意不 map」
+        的互動控件，故 `tests/test_v1520.py` 的「控件整個消失」掃描必須
+        把它排除，否則單檔情境下會被誤判成版面破損。
         """
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(0, 8))
@@ -831,15 +954,21 @@ class SrtApp(tk.Tk):
 
         btn_row = ttk.Frame(frame)
         btn_row.pack(fill="x")
+        self.action_btn_row = btn_row
         self.generate_btn = ttk.Button(
             btn_row, text="開始生成字幕", width=16, command=self._on_generate,
         )
         self.generate_btn.pack(side="left")
+        self.finish_btn = ttk.Button(
+            btn_row, text="完成輸出（依輸出設定）", width=22,
+            command=self._on_finish_output, state="disabled",
+        )
+        self.finish_btn.pack(side="left", padx=(6, 0))
+        # 批次鈕預設不 pack；`_refresh_action_buttons` 會在選到多檔時補上。
         self.auto_btn = ttk.Button(
-            btn_row, text="一鍵完成（生成＋匯出＋燒錄）", width=26,
+            btn_row, text="批次一鍵完成", width=14,
             command=self._on_auto_run,
         )
-        self.auto_btn.pack(side="left", padx=(6, 0))
 
         # 進度條：可在 determinate（有百分比）與 indeterminate（跑馬燈）兩種模式切換。
         # 預設為 determinate；無法估算時切換為 indeterminate。
@@ -946,10 +1075,26 @@ class SrtApp(tk.Tk):
         （見 `_build_trim_actions_section`），此區只剩格式匯出＋燒錄；
         呼叫者也從中欄改為階段④（見 `_build_stage_output_tab`），方法
         本身、按鈕、command 都不變，只是傳入的 `parent` 換了。
+
+        v1.52.1 第二輪：併進階段④單一「輸出」框（C-4），與上面的
+        〔完成輸出〕同框。標題從「匯出與燒錄」改成「只做單獨一件事」並
+        補上「會另外問你要存到哪裡」——稽核 ④ 抱怨的「同一個匯出 SRT
+        行為各不同」，差別就在這句話，以前介面從來沒寫出來過。按鈕、
+        command、disabled 狀態管理一律不變。
         """
-        frame = ttk.LabelFrame(parent, text="匯出與燒錄", padding=(10, 6))
-        frame.pack(fill="x", pady=(8, 0))
+        frame = ttk.Frame(parent)
+        frame.pack(fill="x")
         self.export_frame = frame
+        ttk.Label(frame, text="只做單獨一件事",
+                  font=("Microsoft JhengHei", 10, "bold")).pack(anchor="w")
+        # wraplength 900 是量出來的：整句實測 868px，設 860 會剛好把句號
+        # 擠到第二行變成孤字（截圖看出來的）；而 minsize 980 時這一欄的
+        # 可用寬約 930px，900 仍然放得下，不會反過來造成溢出。
+        ttk.Label(
+            frame, foreground="#666666", justify="left", wraplength=900,
+            text="這一列的按鈕一次只做一件事，並且會另外跳出對話框問你要存到哪裡；"
+                 "上面的〔完成輸出〕則是照「輸出設定」一次做完、全程不問路徑。",
+        ).pack(anchor="w", pady=(0, 6))
 
         row_fmt = ttk.Frame(frame)
         row_fmt.pack(fill="x", pady=(0, 4))
@@ -1555,6 +1700,8 @@ class SrtApp(tk.Tk):
         automation["output_dir"] = self.auto_output_dir_var.get().strip()
         self.config_data["automation"] = automation
         self._save_config_silently()
+        # 設定一改，階段④「完成輸出會做什麼」那句話立刻跟著變（v1.52.1）。
+        self._refresh_output_plan()
 
     def _on_generate(self):
         """按下「開始生成字幕」（模式三則為清空進入手動編輯）。"""
@@ -1603,8 +1750,102 @@ class SrtApp(tk.Tk):
         )
         worker.start()
 
+    def _on_finish_output(self):
+        """
+        按下「完成輸出（依輸出設定）」：把手上這份字幕依輸出設定送出去。
+
+        v1.52.1 第二輪新增（架構文件 C-3）。這是舊「一鍵完成」的後半
+        段——前半段（生成）已經獨立成〔開始生成字幕〕，中間那段空白就
+        是校對的位置。因為它吃的是 `self.cues`，校對／健檢／翻譯改過的
+        內容全都會一起輸出，不像舊按鈕那樣一路衝到底把錯字燒進影片。
+
+        實際的匯出與燒錄呼叫 `subtitle.pipeline.export_and_burn`，與批
+        次路徑（`run_batch`）走的是同一個函式，行為不會分岔。
+        """
+        if self.is_processing:
+            return
+        if not self.cues:
+            messagebox.showinfo(
+                "提示",
+                "目前沒有字幕可以輸出。請先按「開始生成字幕」，"
+                "或在階段①「素材與剪輯」匯入既有字幕檔。")
+            return
+
+        files = self._selected_files()
+        if not files:
+            messagebox.showerror("錯誤", "請先選擇影片或音訊檔案。")
+            return
+        media_path = files[0]
+        if not os.path.exists(media_path):
+            messagebox.showerror("錯誤", f"找不到檔案：{media_path}")
+            return
+        if len(files) > 1:
+            # 多檔時這顆只處理目前這份字幕；要整批重跑請用〔批次一鍵完成〕。
+            self.status_var.set(
+                "已選多個檔案：「完成輸出」只輸出目前這份字幕（"
+                f"{os.path.basename(media_path)}）；整批請用「批次一鍵完成」。")
+
+        self._collect_automation_config()
+        self.config_data["subtitle_style"] = self.style_panel.get_style()
+
+        automation = self.config_data["automation"]
+        wants_export = any(
+            automation.get(f"export_{ext}") for ext in ("srt", "vtt", "ass", "txt"))
+        if not wants_export and not automation.get("burn_video"):
+            messagebox.showerror(
+                "錯誤",
+                "還沒決定要輸出什麼。請到階段④「輸出與發佈」的「輸出設定」"
+                "勾選至少一種匯出格式，或勾選「燒錄硬字幕影片」。")
+            return
+        if automation.get("burn_video") and not ffmpeg_available():
+            messagebox.showerror(
+                "找不到 ffmpeg",
+                "燒錄字幕需要 ffmpeg。請依說明安裝 ffmpeg 並加入系統 PATH，"
+                "或取消勾選「燒錄硬字幕影片」。")
+            return
+
+        self._set_processing(True)
+        threading.Thread(
+            target=self._finish_output_worker,
+            args=(media_path, list(self.cues)),
+            daemon=True,
+        ).start()
+
+    def _finish_output_worker(self, media_path, cues):
+        """背景執行緒：依輸出設定匯出／燒錄目前的字幕。"""
+        try:
+            def report(message, ratio=None):
+                self.result_queue.put(("status", (message, ratio)))
+
+            exports, burned = export_and_burn(
+                cues, media_path, self.config_data, report=report)
+            self.result_queue.put(
+                ("finish_output_done", (media_path, exports, burned)))
+        except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
+            logger.exception("完成輸出流程發生錯誤")
+            self.result_queue.put(("error", exc))
+
+    def _on_finish_output_done(self, payload):
+        """完成輸出結束：列出實際產生的檔案。"""
+        media_path, exports, burned = payload
+        self._set_processing(False)
+        outputs = list(exports)
+        if burned:
+            outputs.append(burned)
+        summary = f"完成輸出：{os.path.basename(media_path)} 共產生 {len(outputs)} 個檔案。"
+        self.status_var.set(summary)
+        messagebox.showinfo(
+            "完成輸出",
+            summary + "\n\n" + "\n".join(f"→ {path}" for path in outputs))
+
     def _on_auto_run(self):
-        """按下「一鍵完成」：對所有選取檔案自動跑生成 → 匯出 → 燒錄。"""
+        """
+        按下「批次一鍵完成」：對所有選取檔案自動跑生成 → 匯出 → 燒錄。
+
+        v1.52.1 第二輪：按鈕改名為「批次一鍵完成」、且只在選到兩個以上
+        檔案時才出現（見 `_refresh_action_buttons`）；**行為本身完全沒
+        動**——批次本來就不會逐支校對，這條路徑維持舊語意是刻意的。
+        """
         if self.is_processing:
             return
         mode = self.mode_var.get()
@@ -1746,6 +1987,8 @@ class SrtApp(tk.Tk):
                     self._on_generation_done(payload)
                 elif kind == "auto_done":
                     self._on_auto_done(payload)
+                elif kind == "finish_output_done":
+                    self._on_finish_output_done(payload)
                 elif kind == "error":
                     self._on_generation_error(payload)
                 elif kind == "burn_done":
@@ -1863,6 +2106,8 @@ class SrtApp(tk.Tk):
         if processing:
             self.generate_btn.configure(state="disabled", text="處理中...")
             self.auto_btn.configure(state="disabled")
+            self.finish_btn.configure(state="disabled")
+            self.finish_btn_stage4.configure(state="disabled")
             # 起始時先進入 indeterminate 模式並啟動跑馬燈，待收到 ratio 後改 determinate。
             self.progress.configure(mode="indeterminate")
             self.progress.start(12)
@@ -1876,6 +2121,8 @@ class SrtApp(tk.Tk):
             else:
                 self.generate_btn.configure(state="normal", text="開始生成字幕")
                 self.auto_btn.configure(state="normal")
+            # 「完成輸出」與匯出鈕同一條規則：有字幕才能按。
+            self._update_export_state()
             self.progress.stop()
             self.progress.configure(mode="determinate")
             self.progress_var.set(0.0)
@@ -1902,11 +2149,19 @@ class SrtApp(tk.Tk):
     # 匯出與燒錄
     # ==================================================================
     def _update_export_state(self):
-        """依目前是否有字幕，啟用或停用匯出 / 燒錄按鈕。"""
+        """
+        依目前是否有字幕，啟用或停用匯出 / 燒錄按鈕。
+
+        v1.52.1 第二輪：〔完成輸出（依輸出設定）〕的兩個入口（動作列與
+        階段④）也走這條規則——它吃的就是 `self.cues`，沒有字幕就沒有
+        東西可輸出，與逐格式匯出鈕的條件完全相同。處理中另由
+        `_set_processing` 壓成 disabled。
+        """
         state = "normal" if self.cues else "disabled"
         for btn in (self.export_btn_srt, self.export_btn_vtt,
                     self.export_btn_ass, self.export_btn_txt, self.burn_btn,
-                    self.jumpcut_btn, self.retakes_btn):
+                    self.jumpcut_btn, self.retakes_btn,
+                    self.finish_btn, self.finish_btn_stage4):
             btn.configure(state=state)
 
     def _default_export_name(self, ext):

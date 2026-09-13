@@ -53,8 +53,29 @@ audio.ffmpeg_available = orig_avail
 # 1e. normalize_video 指令組裝（替身 Popen + 量測）
 captured = {}
 class FakeProc:
+    """
+    Popen 替身。
+
+    注意這一行替身打的是 `audio.subprocess.Popen`，而 `audio.subprocess`
+    就是全域的 subprocess 模組——所以替身會一併攔到 `normalize_video`
+    途中 `media.probe_duration()` 走的 `subprocess.run()`（後者內部是
+    `with Popen(...) as p:`）。因此替身除了 `wait()` 還必須支援 context
+    manager 與 `communicate()`／`poll()`，否則會拋 TypeError，而
+    `probe_duration` 的 except 只攔 OSError/ValueError/SubprocessError，
+    攔不住它，整份測試就此中斷（本檔案曾因此在 Python 3.12 上掛掉）。
+
+    `communicate()` 回空 stdout，`probe_duration` 會退回保底時長——這一
+    段本來就不是這個測試要驗的東西，只要別炸掉即可。
+    """
     stdout = None; stderr = None
+    args = ()
+    returncode = 0
     def wait(self): return 0
+    def poll(self): return 0
+    def communicate(self, input=None, timeout=None): return (b"", b"")
+    def kill(self): pass
+    def __enter__(self): return self
+    def __exit__(self, *exc): return False
 audio.ffmpeg_available = lambda: True
 audio.measure_loudness = lambda p, timeout=600: measured
 audio.subprocess.Popen = lambda cmd, **k: captured.update(cmd=cmd) or FakeProc()
@@ -75,9 +96,11 @@ with tempfile.TemporaryDirectory() as tmp:
     cues = [{"start": 0.0, "end": 2.0, "text": "哈囉"}]
 
     burn_captured = {}
-    class BurnProc:
-        stdout = None; stderr = None
-        def wait(self): return 0
+    class BurnProc(FakeProc):
+        # 同 FakeProc：替身打在全域 subprocess.Popen 上，會一併攔到
+        # burner.probe_duration() 的 subprocess.run()，故需 context
+        # manager 支援（理由見 FakeProc 的說明）。
+        pass
     orig_popen = burner.subprocess.Popen
     orig_bavail = burner.ffmpeg_available
     burner.subprocess.Popen = lambda cmd, **k: burn_captured.update(cmd=cmd) or BurnProc()
