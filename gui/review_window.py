@@ -30,7 +30,8 @@ from subtitle.chaptercheck import (LEVEL_BAD, fix_chapters, format_timestamp,
 from subtitle.exporter import export as export_subtitle
 from subtitle.media import probe_duration
 from subtitle.pipeline import resolve_output_dir, unique_path
-from subtitle.publisher import build_publish_pack, resolve_publish_settings
+from subtitle.publisher import (build_publish_fields, build_publish_pack,
+                                resolve_publish_settings)
 from subtitle.segmenter import build_cues_from_words
 from subtitle.clipplan import (format_clip_plan_report, plan_clips,
                                resolve_clipplan_settings)
@@ -52,7 +53,8 @@ logger = logging.getLogger(__name__)
 class ReviewWindow(tk.Toplevel):
     """審片助手：以逐字稿審素材、標記可剪片段、輸出粗剪與剪輯清單。"""
 
-    def __init__(self, master, config_data, media_path):
+    def __init__(self, master, config_data, media_path,
+                 on_media=None, on_publish=None, on_thumbnails=None):
         super().__init__(master)
         self.title("審片助手：快速找可用片段")
         # 預設尺寸需容納偵測設定（4 列，含訊號權重）、時間軸與 5 排輸出按鈕。
@@ -61,6 +63,13 @@ class ReviewWindow(tk.Toplevel):
 
         self.config_data = config_data
         self.media_path = media_path
+        # v1.52.2：產出回流主視窗的三條線（稽核 ④「產出端與檢查端斷鏈」）。
+        # 在此之前這個視窗做出來的每一樣東西都只跳一個訊息框報路徑就結
+        # 束——它藏著半個發佈工作台，卻沒有任何一條路通往主視窗。
+        self.on_media = on_media              # 粗剪／精彩合輯 → 目前影片
+        self.on_publish = on_publish          # 章節／發佈包 → 階段④發佈資料
+        self.on_thumbnails = on_thumbnails    # 封面候選 → 階段④發佈資料
+        self._pending_cut_kind = "roughcut"   # 目前這次剪輯的產出種類
         self.items = []              # analyze() 的段落清單
         self.words = []              # 轉錄的逐字時間軸（供短片字幕重建）
         self.media_duration = 0.0    # 素材總長（分析完成後更新）
@@ -510,9 +519,7 @@ class ReviewWindow(tk.Toplevel):
                     self._on_analyze_done(payload)
                 elif kind == "cut_done":
                     self._set_processing(False)
-                    self.status_var.set(f"粗剪完成：{payload}")
-                    messagebox.showinfo(
-                        "粗剪完成", f"已輸出影片：\n{payload}", parent=self)
+                    self._on_cut_done(payload)
                 elif kind == "shorts_done":
                     self._set_processing(False)
                     self.status_var.set(
@@ -530,9 +537,16 @@ class ReviewWindow(tk.Toplevel):
                          f"（{int(item['time']) // 60:02d}:"
                          f"{int(item['time']) % 60:02d} 處）")
                         for item in payload]
+                    extra = ""
+                    if self.on_thumbnails:
+                        self.on_thumbnails([item["path"] for item in payload])
+                        extra = ("\n\n這些圖已自動收進主視窗階段④「發佈資"
+                                 "料」，在那裡按〔送健檢中心〕就能檢查手機"
+                                 "上讀不讀得清楚，不必再一張張加檔案。")
                     messagebox.showinfo(
                         "封面候選完成",
-                        "已依畫面清晰度排序輸出候選圖：\n" + "\n".join(lines),
+                        "已依畫面清晰度排序輸出候選圖：\n" + "\n".join(lines)
+                        + extra,
                         parent=self)
                 elif kind == "error":
                     self._set_processing(False)
@@ -728,6 +742,7 @@ class ReviewWindow(tk.Toplevel):
         if not self._require_ffmpeg("粗剪輸出"):
             return
         output = self._default_path("_粗剪", ".mp4")
+        self._pending_cut_kind = "roughcut"
         self._set_processing(True)
         threading.Thread(
             target=self._cut_worker,
@@ -749,6 +764,7 @@ class ReviewWindow(tk.Toplevel):
         if not self._require_ffmpeg("輸出合輯"):
             return
         output = self._default_path("_精彩合輯", ".mp4")
+        self._pending_cut_kind = "highlight"
         self._set_processing(True)
         threading.Thread(
             target=self._cut_worker,
@@ -778,6 +794,45 @@ class ReviewWindow(tk.Toplevel):
         except Exception as exc:
             logger.exception("剪輯輸出失敗")
             self.result_queue.put(("error", exc))
+
+    def _on_cut_done(self, path):
+        """
+        粗剪／精彩合輯輸出完成：問使用者要不要把它設為「目前影片」。
+
+        v1.52.2（稽核 ④ 斷鏈修復）。舊版只跳一個訊息框報路徑就結束，接下
+        來想替粗剪版上字幕、跑健檢，全都得自己記住路徑、回主視窗重選檔
+        案——而這正是審片助手最常見的下一步。
+
+        用詢問而不是自動接手：使用者可能只是想先輸出一支合輯留著、手上還
+        在審原始素材，直接把目前影片換掉會打斷他正在做的事。
+        """
+        label = "粗剪" if self._pending_cut_kind == "roughcut" else "精彩合輯"
+        self.status_var.set(f"{label}完成：{path}")
+        if not self.on_media:
+            messagebox.showinfo(
+                f"{label}完成", f"已輸出影片：\n{path}", parent=self)
+            return
+        if messagebox.askyesno(
+                f"{label}完成",
+                f"已輸出影片：\n{path}\n\n"
+                f"要把它設為「目前影片」嗎？\n"
+                f"設為目前影片之後，就能直接替這支{label}上字幕、跑健檢或"
+                f"接著輸出，不必自己回主視窗重選檔案。\n\n"
+                f"（選「否」則只是輸出檔案，目前影片維持不變。）",
+                parent=self):
+            self.on_media(path, self._pending_cut_kind)
+            self.status_var.set(
+                f"已把{label}設為主視窗的目前影片：{os.path.basename(path)}")
+
+    def _send_publish_to_main(self, **fields):
+        """
+        把章節／發佈包帶回主視窗階段④「發佈資料」（v1.52.2）。
+
+        回傳是否真的送出去了，讓呼叫端決定訊息框要不要加那段說明。
+        """
+        if not self.on_publish:
+            return False
+        return bool(self.on_publish(**fields))
 
     def _collect_shorts_settings(self):
         """把介面上的短片設定寫回設定並存檔，回傳解析後的 settings。"""
@@ -1151,7 +1206,17 @@ class ReviewWindow(tk.Toplevel):
                          for c in chapters)
         self.clipboard_clear()
         self.clipboard_append(text)
-        self.status_var.set("YouTube 章節草稿已複製到剪貼簿，可直接貼上說明欄。")
+        # v1.52.2：除了剪貼簿，也直接送進主視窗階段④「發佈資料」。剪貼簿
+        # 仍然保留——使用者的下一步很可能就是貼到 YouTube 後台，那條路不
+        # 該因為多了一條內部通道就被拿掉（稽核 ④ 統計的四次剪貼簿轉手，
+        # 要消滅的是「程式內部還得靠剪貼簿轉手」那幾次，不是對外的複製）。
+        if self._send_publish_to_main(chapters=text):
+            self.status_var.set(
+                "章節草稿已複製到剪貼簿，並帶入主視窗階段④「發佈資料」"
+                "（可在那裡按〔送健檢中心〕檢查）。")
+        else:
+            self.status_var.set(
+                "YouTube 章節草稿已複製到剪貼簿，可直接貼上說明欄。")
 
     def _on_export_publish_pack(self):
         """匯出發佈包：建議標題＋描述草稿＋標籤，上傳時直接取用。"""
@@ -1177,11 +1242,27 @@ class ReviewWindow(tk.Toplevel):
             messagebox.showerror("匯出失敗", str(exc), parent=self)
             return
         self.status_var.set(f"已匯出發佈包：{path}")
+        # v1.52.2：同一份素材另外取結構化版本送回主視窗，讓發佈健檢不必再
+        # 靠使用者把 .txt 裡的標題、標籤、章節一段一段剪貼出來（稽核 ④）。
+        # 兩者共用 build_publish_fields 的計算結果，不會各說各話。
+        fields = build_publish_fields(
+            self.items,
+            settings=resolve_publish_settings(self.config_data),
+            chapters=chapters,
+            extra_words=settings["extra_excite_words"])
+        flowed = self._send_publish_to_main(
+            title=fields["title"], description=fields["description"],
+            tags=fields["tags"], chapters=fields["chapters"])
+        extra = ""
+        if flowed:
+            extra = ("\n\n建議標題、說明欄、標籤與章節已同時帶入主視窗階段④"
+                     "「發佈資料」，在那裡按〔送健檢中心〕就能檢查，"
+                     "不必再一段一段複製貼上。")
         messagebox.showinfo(
             "匯出完成",
             f"發佈包已儲存至：\n{path}\n\n"
             "內含建議標題、描述草稿（含章節）與建議標籤，"
-            "上傳 YouTube 時直接取用、自行潤飾。", parent=self)
+            "上傳 YouTube 時直接取用、自行潤飾。" + extra, parent=self)
 
     # ==================================================================
     # 狀態

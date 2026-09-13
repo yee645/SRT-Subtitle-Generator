@@ -36,6 +36,8 @@ from subtitle.burner import burn_subtitles, ffmpeg_available
 from subtitle.exporter import FORMAT_FILETYPES, export, format_srt_timestamp
 from subtitle.importer import load_subtitle_file
 from subtitle.pipeline import describe_output_plan, export_and_burn, run_batch
+from subtitle.generations import (describe_lineage, kind_label,
+                                  new_chain, record as record_generation)
 from subtitle.segmenter import build_cues_from_words
 from subtitle.textedit import apply_corrections
 from subtitle.transcriber import transcribe
@@ -108,6 +110,15 @@ class SrtApp(tk.Tk):
         self.cues = []
         self.result_queue = queue.Queue()
         self.is_processing = False
+        # v1.52.2：跨階段的產出匯流排。稽核 ④ 的「產出端與檢查端斷鏈」就
+        # 是因為主視窗沒有任何地方接得住各個對話框做出來的東西——粗剪、
+        # 修復版、章節、封面候選產生完只跳一個訊息框報路徑就結束了。這兩
+        # 個欄位是它們的落點，`adopt_*` 系列方法是入口。
+        self.generations = new_chain()      # 世代鏈：哪支檔案是誰生的
+        self.publish_data = {               # 階段④「發佈資料」的內容
+            "title": "", "description": "", "tags": "", "chapters": "",
+            "thumbs": [],
+        }
 
         self._build_widgets()
         self._update_mode_state()
@@ -395,15 +406,121 @@ class SrtApp(tk.Tk):
             return  # 建構期尚未跑到這裡（trace 可能提前觸發一次）。
         files = self._selected_files()
         if files:
-            name = os.path.basename(files[0])
+            # v1.52.2：單檔時顯示世代鏈（「原始素材 訪談.mp4 → 粗剪 →
+            # 修復版（目前）」），使用者一眼看得出手上這支是怎麼來的；
+            # 鏈上只有它自己時 describe_lineage 就等於「原始素材 檔名」。
+            name = describe_lineage(self.generations, files[0])
             if len(files) > 1:
-                name += f"（等 {len(files)} 個檔案）"
+                name = (os.path.basename(files[0])
+                        + f"（等 {len(files)} 個檔案）")
             self.workfile_video_var.set(name)
         else:
             self.workfile_video_var.set("（尚未選擇）")
         self.workfile_subtitle_var.set(f"{len(self.cues)} 句")
         self._refresh_action_buttons()
         self._refresh_output_plan()
+        self._refresh_publish_card()
+
+    # ==================================================================
+    # 產出匯流排（v1.52.2）：各對話框做出來的東西回流到這裡
+    # ==================================================================
+    def adopt_media(self, path, kind, source=None, announce=True):
+        """
+        把新產生的影音檔接手為「目前影片」，並在世代鏈上記一筆。
+
+        這是稽核 ④「產出端與檢查端斷鏈」的正面修法。在此之前，粗剪／精彩
+        合輯／修復版／燒錄版做完都只跳一個訊息框報路徑就結束——健檢中心
+        的修復完成訊息甚至寫著「也可對輸出版再跑一次健檢比對」，卻沒給任
+        何做得到這件事的路徑，使用者得自己記住路徑、回主視窗重選檔案。
+
+        接手之後「目前影片」就是新產出，緊接著要健檢、要上字幕、要再剪都
+        直接可用，工作檔案列也會顯示它是怎麼來的（`describe_lineage`）。
+
+        **刻意不動字幕清單**：換的是影片，手上那份字幕未必還對得上新的時
+        間軸（粗剪剪掉了片段尤其明顯）。硬清掉會弄丟使用者的校對成果，硬
+        留著又可能對不上，所以只提醒、不代為決定。
+        """
+        if not path or not os.path.exists(path):
+            return False
+        source = source or (self._selected_files() or [None])[0]
+        record_generation(self.generations, path, kind, source)
+        self.file_var.set(path)
+        if announce:
+            label = kind_label(kind)
+            note = f"已接手{label}為目前影片：{os.path.basename(path)}"
+            if self.cues:
+                # 時間軸可能已經對不上，這件事一定要講，不能默默換掉。
+                note += "（字幕清單維持原樣；若新影片長度已改變，請重新生成字幕）"
+            self.status_var.set(note)
+        self._refresh_workfile_bar()
+        return True
+
+    def adopt_publish(self, **fields):
+        """
+        把審片助手產生的發佈素材寫進階段④「發佈資料」。
+
+        對應稽核 ④ 的「產章節→章節健檢要手動貼、產發佈包→發佈健檢要手動
+        貼」。可傳 title／description／tags／chapters，只寫有給值的欄位。
+        """
+        changed = []
+        for key in ("title", "description", "tags", "chapters"):
+            value = fields.get(key)
+            if value:
+                self.publish_data[key] = value
+                changed.append(key)
+        if changed:
+            self._refresh_publish_card()
+            self.status_var.set(
+                "審片結果已帶入階段④「發佈資料」，可直接按〔送健檢中心〕檢查。")
+        return changed
+
+    def adopt_thumbnails(self, paths):
+        """把審片助手輸出的封面候選圖收進發佈資料（對應稽核 ④ 的第三條斷鏈）。"""
+        added = [p for p in paths
+                 if p and p not in self.publish_data["thumbs"]]
+        self.publish_data["thumbs"].extend(added)
+        if added:
+            self._refresh_publish_card()
+            self.status_var.set(
+                f"已收下 {len(added)} 張封面候選圖，可直接按〔送健檢中心〕檢查。")
+        return added
+
+    def _refresh_publish_card(self):
+        """更新階段④「發佈資料」卡片上的摘要文字。"""
+        if not hasattr(self, "publish_summary_var"):
+            return  # 建構期尚未跑到 `_build_publish_section`。
+        data = self.publish_data
+        parts = []
+        if data["title"]:
+            parts.append("標題")
+        if data["description"]:
+            parts.append("說明欄")
+        if data["tags"]:
+            parts.append("標籤")
+        if data["chapters"]:
+            count = len([ln for ln in data["chapters"].splitlines() if ln.strip()])
+            parts.append(f"章節 {count} 行")
+        if data["thumbs"]:
+            parts.append(f"封面候選 {len(data['thumbs'])} 張")
+        if parts:
+            self.publish_summary_var.set("已帶入：" + "、".join(parts))
+        else:
+            self.publish_summary_var.set(
+                "還沒有內容。到階段①跑審片助手，產生的章節、發佈包與封面候選會自動流到這裡。")
+        state = "normal" if parts else "disabled"
+        self.publish_send_btn.configure(state=state)
+        self.publish_clear_btn.configure(state=state)
+
+    def _on_send_publish_to_health(self):
+        """把發佈資料整包送進健檢中心的對象區（一鍵，不必再貼一次）。"""
+        self._open_health_center_dialog(publish=dict(self.publish_data))
+
+    def _on_clear_publish(self):
+        """清空發佈資料。"""
+        self.publish_data = {"title": "", "description": "", "tags": "",
+                            "chapters": "", "thumbs": []}
+        self._refresh_publish_card()
+        self.status_var.set("已清空發佈資料。")
 
     def _refresh_action_buttons(self):
         """
@@ -631,6 +748,44 @@ class SrtApp(tk.Tk):
             row, text="品牌套版", width=12,
             command=self._open_branding_dialog,
         ).pack(side="left")
+
+        self._build_publish_section(container)
+
+    def _build_publish_section(self, parent):
+        """
+        階段④「發佈資料」（`docs/UI_ARCHITECTURE_2.0.md` B.6 的第四張卡）。
+
+        v1.52.1 只做了前三張卡，這一張留到 v1.52.2——它的意義完全在於
+        「有東西會自動流進來」，在產出匯流排（`adopt_publish`／
+        `adopt_thumbnails`）存在之前先做出空殼，只會多一個要使用者自己填
+        的表單，那正是 2.0 想消滅的東西。
+
+        所以這裡刻意**不放編輯欄位**，只放摘要與去向：內容由審片助手產生
+        後自動落進來，使用者要改就在健檢中心的對象區改（那裡本來就有完整
+        的標題／說明欄／標籤／章節貼上框，再做一份就是第二個輸出面重演）。
+        """
+        card = ttk.LabelFrame(parent, text="發佈資料", padding=(10, 8))
+        card.pack(fill="x", pady=(8, 0))
+        self.publish_card = card
+
+        self.publish_summary_var = tk.StringVar(value="")
+        ttk.Label(
+            card, textvariable=self.publish_summary_var,
+            justify="left", wraplength=900, foreground="#666666",
+        ).pack(anchor="w", pady=(0, 6))
+
+        row = ttk.Frame(card)
+        row.pack(anchor="w")
+        self.publish_send_btn = ttk.Button(
+            row, text="送健檢中心", width=14, state="disabled",
+            command=self._on_send_publish_to_health,
+        )
+        self.publish_send_btn.pack(side="left")
+        self.publish_clear_btn = ttk.Button(
+            row, text="清空", width=8, state="disabled",
+            command=self._on_clear_publish,
+        )
+        self.publish_clear_btn.pack(side="left", padx=(6, 0))
 
     def _build_mode_section(self, parent):
         """模式切換區。"""
@@ -1219,7 +1374,14 @@ class SrtApp(tk.Tk):
             self.file_var.set(media_path)
         # 帶入最新的轉寫設定（模型、語言、API 等），與主流程共用。
         self._collect_transcription_config()
-        ReviewWindow(self, self.config_data, media_path)
+        # v1.52.2：三條回流線（稽核 ④）。審片助手裡藏著半個發佈工作台，
+        # 在此之前它做出來的每一樣東西都只跳訊息框報路徑就結束。
+        ReviewWindow(
+            self, self.config_data, media_path,
+            on_media=lambda path, kind: self.adopt_media(path, kind, media_path),
+            on_publish=self.adopt_publish,
+            on_thumbnails=self.adopt_thumbnails,
+        )
 
     def _open_music_dialog(self):
         """開啟配樂助手：以第一個選取檔案為預設影片（可留空自行選擇）。"""
@@ -1227,16 +1389,22 @@ class SrtApp(tk.Tk):
         video_path = files[0] if files and os.path.exists(files[0]) else ""
         MusicDuckingDialog(self, self.config_data, video_path)
 
-    def _open_health_center_dialog(self):
+    def _open_health_center_dialog(self, publish=None):
         """
         健檢中心：v1.50.0 併音訊／字幕／總體檢三窗，v1.51.0 再併發佈資訊／
         封面／章節三窗（工具列 11→6，見 `_build_toolbar` 的說明）。
 
         字幕直接沿用主視窗已經有的那一份，使用者不必再挑一次檔案；
-        沒有字幕、沒有選影片時對話框會自動略過對應的檢查——健檢中心對
-        象區的封面圖／發佈文字／系列影片仍要在對話框內另外加入，因為
-        那些對象與主視窗的「目前選取檔案」語意不同（一個是影片，一個
-        是圖片或純文字）。
+        沒有字幕、沒有選影片時對話框會自動略過對應的檢查。
+
+        v1.52.2 兩處接通（稽核 ④ 的斷鏈）：
+
+        - ``publish`` 有給時（階段④〔送健檢中心〕按下來的），標題／說明欄
+          ／標籤／章節／封面候選直接填進對象區——以前這些全都要使用者自
+          己複製貼上，那正是「產出端與檢查端斷鏈」最實際的痛點。
+        - ``on_media_fixed`` 讓健檢中心修出來的修復版直接回流成「目前影
+          片」。舊版只跳訊息框說「也可對輸出版再跑一次健檢比對」，卻沒給
+          任何做得到的路徑；現在接手後再按一次〔開始健檢〕就是比對。
         """
         files = self._selected_files()
         media_path = files[0] if files and os.path.exists(files[0]) else ""
@@ -1245,9 +1413,14 @@ class SrtApp(tk.Tk):
             self.cues = new_cues
             self.apply_text_edits()
 
+        def on_media_fixed(path, source):
+            self.adopt_media(path, "audiofix", source)
+
         HealthCenterDialog(self, self.config_data, media_path=media_path,
                            cues=list(getattr(self, "cues", []) or []),
-                           on_fixed=on_fixed)
+                           on_fixed=on_fixed,
+                           on_media_fixed=on_media_fixed,
+                           publish=publish)
 
     def _open_branding_dialog(self):
         """開啟品牌套版：以第一個選取檔案為預設影片（可留空自行選擇）。"""
@@ -1834,9 +2007,22 @@ class SrtApp(tk.Tk):
             outputs.append(burned)
         summary = f"完成輸出：{os.path.basename(media_path)} 共產生 {len(outputs)} 個檔案。"
         self.status_var.set(summary)
+        extra = ""
+        if burned:
+            # v1.52.2：燒錄版記進世代鏈，工作檔案列看得出它是從哪一支來
+            # 的；並問要不要接手——接著要配樂、套版的人下一步就是它。
+            record_generation(self.generations, burned, "burned", media_path)
+            if messagebox.askyesno(
+                    "完成輸出",
+                    summary + "\n\n" + "\n".join(f"→ {path}" for path in outputs)
+                    + "\n\n要把燒錄版設為「目前影片」嗎？\n"
+                      "設為目前影片之後，階段④的〔配樂助手〕〔品牌套版〕"
+                      "就會直接吃這支燒錄版（建議順序：燒錄→配樂→套版）。"):
+                self.adopt_media(burned, "burned", media_path)
+            return
         messagebox.showinfo(
             "完成輸出",
-            summary + "\n\n" + "\n".join(f"→ {path}" for path in outputs))
+            summary + "\n\n" + "\n".join(f"→ {path}" for path in outputs) + extra)
 
     def _on_auto_run(self):
         """

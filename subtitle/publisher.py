@@ -404,6 +404,34 @@ def _format_chapters(chapters) -> str:
     return "\n".join(lines)
 
 
+def build_publish_fields(items, settings: Optional[dict] = None,
+                         chapters=None, extra_words: str = "") -> dict:
+    """
+    回傳發佈素材的**結構化**版本：``{"titles", "title", "description",
+    "tags", "chapters"}``。
+
+    v1.52.2 新增。`build_publish_pack` 產的是一整塊給人讀、給人複製的文
+    字；但稽核 ④ 要修的斷鏈（「產發佈包 → 發佈健檢要手動貼」）需要的是
+    各欄位分開的資料——標題填標題欄、標籤填標籤欄、章節填章節欄。硬去切
+    那塊文字等於自己寫一個剖析器來解析自己剛印出來的東西，所以改成兩者共
+    用同一組計算結果：這個函式算，`build_publish_pack` 負責排版。
+
+    ``title`` 是候選中的第一個（建議值）；完整候選清單在 ``titles``。
+    """
+    settings = settings or resolve_publish_settings()
+    titles = suggest_titles(items, settings["title_candidates"],
+                            settings["title_max_chars"], extra_words)
+    tags = suggest_tags(items, settings["tag_count"], extra_words)
+    return {
+        "titles": titles,
+        "title": titles[0] if titles else "",
+        "description": build_description(items, chapters, tags,
+                                         extra_words=extra_words),
+        "tags": ", ".join(tags),
+        "chapters": _format_chapters(chapters) if chapters else "",
+    }
+
+
 def build_publish_pack(items, settings: Optional[dict] = None,
                        chapters=None, source_name: str = "",
                        extra_words: str = "", ad_breaks=None) -> str:
@@ -420,9 +448,11 @@ def build_publish_pack(items, settings: Optional[dict] = None,
                    8 分鐘時本來就是空清單，該區塊自動略去）。
     """
     settings = settings or resolve_publish_settings()
-    titles = suggest_titles(items, settings["title_candidates"],
-                            settings["title_max_chars"], extra_words)
-    tags = suggest_tags(items, settings["tag_count"], extra_words)
+    # v1.52.2：標題／標籤／描述改由 build_publish_fields 統一算，這裡只負
+    # 責排版。兩邊各算一次遲早會走鐘（結構化那份與文字那份說法不一致）。
+    fields = build_publish_fields(items, settings, chapters, extra_words)
+    titles = fields["titles"]
+    tags = [tag for tag in fields["tags"].split(", ") if tag]
 
     lines = [f"===== 發佈包：{source_name or '素材'} =====", ""]
 
@@ -436,9 +466,7 @@ def build_publish_pack(items, settings: Optional[dict] = None,
     lines.append("")
 
     lines.append("【描述草稿（複製後自行潤飾）】")
-    description = build_description(items, chapters, tags,
-                                    extra_words=extra_words)
-    lines.append(description or "（沒有可用的段落文字，請先完成分析）")
+    lines.append(fields["description"] or "（沒有可用的段落文字，請先完成分析）")
     lines.append("")
 
     lines.append(f"【建議標籤（{len(tags)} 個，取自素材中實際講到的高頻詞，"
