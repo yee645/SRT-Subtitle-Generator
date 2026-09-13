@@ -41,6 +41,7 @@ v1.52.0 把它轉九十度：左欄（330px，`ScrollableFrame` 自帶垂直捲�
 import os
 import re
 import subprocess
+import time
 import sys
 import tempfile
 
@@ -106,9 +107,20 @@ else:
     }
     truly_missing = {t for t in (old_texts - new_texts)
                      if t not in mode_texts_folded}
-    check(f"v1.51.0 的所有按鈕/標籤文字（共 {len(old_texts)} 個）在 "
-          "v1.52.0 一個不少（三顆模式文字改插入換行，內容不變，已排除）",
+    # v1.52.1 依 docs/UI_ARCHITECTURE_2.0.md D-1 遷移策略改了兩個名字。
+    # 這裡不是「放過檢查」——舊名允許消失，但**新名必須存在**，能力有沒有
+    # 被搬走照樣守得住。
+    planned_renames = {"自動跳剪停頓": "剪停頓（依字幕）",
+                       "重複片段偵測": "剪重複片段"}
+    renamed_ok = {old: new for old, new in planned_renames.items()
+                  if new in new_texts}
+    truly_missing = {t for t in truly_missing if t not in renamed_ok}
+    check(f"v1.51.0 的所有按鈕/標籤文字（共 {len(old_texts)} 個）在新版一個"
+          "不少（模式文字換行、D-1 計畫內改名除外）",
           not truly_missing, str(truly_missing))
+    check("D-1 計畫內改名的兩顆按鈕，新名字確實存在（不是悄悄不見）",
+          len(renamed_ok) == len(planned_renames),
+          f"對到的新名：{renamed_ok}")
 
     # --- self.xxx 屬性：舊版賦值過的屬性，新版一個不能少 ---
     old_attrs = set(re.findall(r"self\.(\w+)(?=\s*=[^=])", old_app_src))
@@ -124,10 +136,15 @@ else:
     check(f"v1.51.0 的所有方法（共 {len(old_methods)} 個）在 v1.52.0 "
           "一個不少", not missing_methods, str(missing_methods))
     added_methods = new_methods - old_methods
-    check("新增的方法只有三欄退化規則相關的兩個（_apply_body_layout／"
-          "_on_root_configure），沒有意外多改東西",
-          added_methods == {"_apply_body_layout", "_on_root_configure"},
-          str(added_methods))
+    # v1.52.0 時這裡斷言「只新增兩個方法」，用來防範圍擴散。v1.52.1 加上
+    # 四階段頁籤層必然要新增建構方法，該斷言已過期。改為斷言新增的方法都
+    # 是**版面建構類**（_build_* / _apply_* / _on_*_configure / _refresh_*），
+    # 仍然擋得住「偷偷加了業務邏輯」這件事。
+    import re as _re
+    unexpected = {m for m in added_methods
+                  if not _re.match(r"_(build|apply|on|refresh)_", m)}
+    check("新增的方法都是版面建構類，沒有夾帶非版面的新邏輯",
+          not unexpected, f"非版面類新方法：{unexpected}；全部新增：{added_methods}")
 
 
 # ===== 1. style_panel.py：ttk.Scale 取代 tk.Scale =====================
@@ -222,6 +239,76 @@ try:
         walk(root)
         return clipped, overflow
 
+    def find_notebook(root):
+        """找出主視窗的 ttk.Notebook（v1.52.1 起的四階段頁籤）。"""
+        stack = [root]
+        while stack:
+            w = stack.pop()
+            for c in w.winfo_children():
+                if isinstance(c, ttk.Notebook):
+                    return c
+                stack.append(c)
+        return None
+
+    def scan_unmapped_all_tabs(app, excluded_roots=()):
+        """
+        逐一切到每個頁籤再掃，回傳「在自己那一頁也沒 map」的控件。
+
+        v1.52.1 加了四階段頁籤之後，未選中頁籤上的控件本來就是 unmapped，
+        直接掃整棵樹會把它們全部誤報成「消失」。真正要抓的是「切到它自己
+        那一頁、它仍然沒出現」——那才是被版面擠掉。
+        """
+        nb = find_notebook(app)
+        if nb is None:                     # 沒有頁籤（舊版面）就照舊掃一次
+            return scan_unmapped(app, excluded_roots)
+        original = nb.index(nb.select())
+        still_unmapped = None
+        for index in range(nb.index("end")):
+            nb.select(index)
+            for _ in range(8):
+                app.update()
+                time.sleep(0.05)
+            here = set(scan_unmapped_widgets(app, excluded_roots))
+            still_unmapped = here if still_unmapped is None else (
+                still_unmapped & here)
+        nb.select(original)
+        for _ in range(8):
+            app.update()
+            time.sleep(0.05)
+        out = []
+        for widget in (still_unmapped or ()):
+            try:
+                out.append(widget.cget("text"))
+            except Exception:
+                out.append(str(widget))
+        return sorted(out)
+
+    def scan_unmapped_widgets(root, excluded_roots=()):
+        """同 scan_unmapped，但回傳控件物件本身。
+
+        逐頁籤取交集時一定要用控件而不是文字當 key——畫面上有四顆都叫
+        「瀏覽...」的按鈕，用文字取交集會讓它永遠留在結果裡，造出一個
+        根本不存在的「消失控件」。
+        """
+        found = []
+        def walk(widget):
+            if widget in excluded_roots:
+                return
+            for child in widget.winfo_children():
+                if child in excluded_roots:
+                    continue
+                if isinstance(child, (ttk.Button, ttk.Checkbutton,
+                                      ttk.Radiobutton, tk.Button)):
+                    try:
+                        text = child.cget("text")
+                    except Exception:
+                        text = None
+                    if text and not child.winfo_ismapped():
+                        found.append(child)
+                walk(child)
+        walk(root)
+        return found
+
     def scan_unmapped(root, excluded_roots=()):
         """找出「應該看得到卻整個沒 map」的互動控件（比裁切更嚴重）。"""
         found = []
@@ -272,10 +359,12 @@ try:
           not clipped, str(clipped))
     check("1400x800：沒有控件右緣超出視窗",
           not overflow, str(overflow))
-    unmapped = scan_unmapped(app, excluded_roots=(app.transcript_frame,))
-    check("1400x800：沒有互動控件因版面擠不下而整個消失（比裁切更嚴重，"
-          "施工時真的踩過——cue_edit_controls 10 顆按鈕擠一列時後 4 顆"
-          "被 pack 擠到寬度 1px/未 map）",
+    # 逐頁籤掃：未選中頁籤上的控件本來就 unmapped，只有「切到自己那一頁
+    # 仍然沒出現」才算被版面擠掉。
+    unmapped = scan_unmapped_all_tabs(app, excluded_roots=(app.transcript_frame,))
+    check("1400x800：沒有互動控件因版面擠不下而整個消失（逐頁籤檢查；比"
+          "裁切更嚴重，施工時真的踩過——10 顆按鈕擠一列時後 4 顆被 pack "
+          "擠到寬度 1px/未 map）",
           not unmapped, str(unmapped))
 
     # ---- 右欄無水平裁切，樣式面板/預覽都收在視窗內 ----
@@ -370,23 +459,34 @@ try:
           app.generate_btn.winfo_ismapped() == 1
           and app.generate_btn.winfo_rooty() - app.winfo_rooty() < 560)
 
-    # 「自動化輸出」在 minsize 不會整個消失——mapped，且捲到底可以看到。
-    check("minsize 980x560：「自動化輸出」區塊仍有 mapped（不是像本版"
-          "施工時一度出現的『整個消失』，可透過中欄捲動到達）",
-          app.automation_frame.winfo_ismapped() == 1)
-    ms = app.middle_scroll_frame
-    ms.canvas.yview_moveto(1.0)
-    pump(app, times=10)
-    top_frac, bottom_frac = ms.canvas.yview()
-    interior_h = ms.interior.winfo_reqheight()
-    visible_top = top_frac * interior_h
-    visible_bottom = bottom_frac * interior_h
-    auto_top = app.automation_frame.winfo_rooty() - ms.interior.winfo_rooty()
-    auto_bottom = auto_top + app.automation_frame.winfo_height()
-    check("minsize 980x560：捲到底後「自動化輸出」進入可視範圍（真的"
-          "拿得到，不只是 mapped=1 的假象）",
-          auto_top >= visible_top - 5 and auto_bottom <= visible_bottom + 5,
-          f"auto=({auto_top},{auto_bottom}) visible=({visible_top},{visible_bottom})")
+    # 「自動化輸出」在 minsize 下必須拿得到。v1.52.0 時它在中欄捲動區，
+    # v1.52.1 已搬到階段④頁籤——所以要先切到它所在的那一頁再驗，不能
+    # 沿用「捲中欄」的舊前提。核心意圖不變：**真的看得到，不只是
+    # mapped=1 的假象**。
+    nb_min = find_notebook(app)
+    if nb_min is not None:
+        original_tab = nb_min.index(nb_min.select())
+        for index in range(nb_min.index("end")):
+            nb_min.select(index)
+            pump(app, times=8)
+            if app.automation_frame.winfo_ismapped() == 1:
+                break
+        check("minsize 980x560：切到它所在的頁籤後「自動化輸出」有 mapped"
+              f"（在頁籤「{nb_min.tab(nb_min.select(), 'text')}」）",
+              app.automation_frame.winfo_ismapped() == 1)
+        auto_y = app.automation_frame.winfo_rooty() - app.winfo_rooty()
+        auto_h = app.automation_frame.winfo_height()
+        check("minsize 980x560：「自動化輸出」真的落在視窗內（不只是"
+              "mapped=1 的假象）",
+              auto_y < app.winfo_height() and auto_h > 1,
+              f"y={auto_y} 高={auto_h} 視窗高={app.winfo_height()}")
+        # 切回原本的頁籤：右欄屬於階段②的三欄版面，停在別頁會讓下面
+        # 「放寬回 1400x800 後右欄自動恢復」誤判。
+        nb_min.select(original_tab)
+        pump(app, times=8)
+    else:
+        check("minsize 980x560：「自動化輸出」區塊仍有 mapped",
+              app.automation_frame.winfo_ismapped() == 1)
 
     # ---- 放寬回 1400x800：右欄自動恢復 ----
     app.geometry("1400x800+0+0")

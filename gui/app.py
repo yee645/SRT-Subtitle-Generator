@@ -74,8 +74,6 @@ IMPORT_FILETYPES = [
 MODE_TRANSCRIBE = "transcribe"
 MODE_ALIGN = "align"
 MODE_MANUAL = "manual"
-# 工具列每一列最多放幾個功能按鈕（超過就換行，避免被視窗寬度切掉）。
-_TOOLS_PER_ROW = 4
 # 三欄主體版面（v1.52.0，修折疊線：docs/UI_AUDIT_2.0.md 1.3-①、
 # docs/UI_ARCHITECTURE_2.0.md B.2/B.3）：左欄固定寬（自帶垂直捲動，只
 # 捲設定）、右欄固定寬（外觀：樣式組合／預覽／樣式面板），中欄吃剩餘
@@ -161,20 +159,28 @@ class SrtApp(tk.Tk):
     # ==================================================================
     def _build_widgets(self):
         """
-        建立整體版面：頂部工具列＋三欄主體。
+        建立整體版面：頂列＋工作檔案列＋四階段頁籤＋狀態列（v1.52.1）。
 
-        v1.52.0 三欄化（`docs/UI_ARCHITECTURE_2.0.md` B.2/B.3）：把 v1.x
-        「1240px 高的設定長表單」轉九十度——左欄（`_LEFT_COLUMN_WIDTH`，
-        自帶垂直捲動）收生成前設定，中欄放主動作＋字幕清單＋清單編輯
-        列＋匯出燒錄＋自動化輸出（永遠可見，不隨左欄捲動），右欄（
-        `_RIGHT_COLUMN_WIDTH`）收外觀（樣式組合／預覽／樣式面板）。這一
-        步只換容器：控件本身、事件處理、config 欄位一概不變（不做頁
-        籤、不拆一鍵完成，那些是 v1.53）。
+        v1.52.1 頁籤化（`docs/UI_ARCHITECTURE_2.0.md` B.1、B.3–B.7）：主
+        視窗骨架改成「頂列（標題＋即時查譯＋主題切換，常駐）／工作檔案
+        列（目前影片＋字幕句數，常駐，B.1 樞紐）／`ttk.Notebook` 四階段
+        頁籤／狀態列（常駐）」。階段②「字幕」＝v1.52.0 三欄化的成果
+        **整塊搬進來、內部結構不變**，預設選中；階段①③④收納原本工具列
+        與「匯出與燒錄」深處的對話框入口（見 `_build_stage_source_tab`／
+        `_build_stage_health_tab`／`_build_stage_output_tab`）。主視窗工
+        具列（11→6 顆的功能按鈕列）整個消失，頂列只留「即時查譯」「主
+        題切換」兩顆常駐鈕（B 節）。本輪**不**拆一鍵完成、**不**合併三
+        個輸出面、**不**做首次啟動導覽——見 `docs/ROADMAP_2.0.md`
+        v1.52.1 的拆分說明，那些排到下一輪。
         """
-        # 頂部工具列：主題切換等全域控制。
         self._build_toolbar()
+        self._build_workfile_bar()
+        self._build_status_bar()
+        self._build_notebook()
 
-        body = ttk.Frame(self)
+        # 階段②「字幕」：v1.52.0 三欄化成果整塊搬進這個頁籤，內部左／
+        # 中／右欄結構與各 `_build_*_section` 呼叫完全不變。
+        body = ttk.Frame(self.stage_subtitle_tab)
         body.pack(fill="both", expand=True)
         self.body_frame = body
 
@@ -226,18 +232,25 @@ class SrtApp(tk.Tk):
         self._build_action_section(middle)
         self._build_cue_list(middle)
         self._build_cue_edit_controls(middle)
-        self._build_export_section(middle)
-        # 「自動化輸出」原本在左欄最深處；v1.52.0 移出左欄設定表單，暫放
-        # 中欄「匯出與燒錄」附近（見 docs/ROADMAP_2.0.md v1.52 項：v1.53
-        # 加頁籤後才是它的最終位置——階段④「輸出與發佈」）。
-        self._build_automation_section(middle)
+        # 「匯出與燒錄」「自動化輸出」「自動跳剪停頓／重複片段偵測」依
+        # B.4/B.6「輸出相關 → 階段④」「自動修剪 → 階段①」搬出中欄，改
+        # 由 `_build_stage_source_tab`／`_build_stage_output_tab` 呼叫
+        # `_build_export_section`／`_build_automation_section`／
+        # `_build_trim_actions_section`（方法本身不變，只換 parent）。
 
         self._build_preset_section(right)
         self._build_preview_section(right)
         self._build_style_section(right)
 
+        # 階段①③④：對話框入口依 B.4/B.6 搬入對應頁籤。
+        self._build_stage_source_tab(self.stage_source_tab)
+        self._build_stage_health_tab(self.stage_health_tab)
+        self._build_stage_output_tab(self.stage_output_tab)
+
         # 視窗寬度變化時（含 minsize 980x560）即時套用三欄退化規則。
         self.bind("<Configure>", self._on_root_configure)
+        # 工作檔案列的初始文字（此時 file_var／cues 已可讀）。
+        self._refresh_workfile_bar()
 
     def _apply_body_layout(self, collapsed):
         """
@@ -279,18 +292,15 @@ class SrtApp(tk.Tk):
 
     def _build_toolbar(self):
         """
-        頂部工具列：標題／版本一列，功能按鈕另起一列並自動換行。
+        頂列：標題／版本＋兩顆常駐鈕（即時查譯／主題切換）。
 
-        v1.51.0：11 顆收成 6 顆。「上片前健檢」「上片前總體檢」（v1.50.0
-        起原位保留一版轉址）依當時的承諾本版正式移除，改由一顆真正的
-        「健檢中心」入口取代；「系列一致性」「章節健檢」「封面健檢」
-        「發佈健檢」四顆也一併併入健檢中心——但併入的入口不是留在工具
-        列上（那樣工具列會變成 10 顆，直接牴觸本版「11→6」的目標），而
-        是搬進健檢中心自己的「檢查對象」區（見
-        `gui/health_center_dialog.py` 的封面圖／發佈文字／系列影片三
-        區）。這是相對 `docs/UI_ARCHITECTURE_2.0.md` D-3「舊按鈕原位保
-        留一版」慣例的一個明確偏離，理由與其他做法記在
-        `docs/ROADMAP_2.0.md` v1.51 項。
+        v1.52.1（`docs/UI_ARCHITECTURE_2.0.md` B 節、C-5）：v1.51.0 收成
+        6 顆的功能按鈕「工具列」本版**整個消失**，改由 4 個階段頁籤＋頂
+        列 2 顆常駐鈕取代。舊工具列開的 5 個對話框——審片助手、配樂助
+        手、健檢中心、品牌套版、音訊轉影片——依 B.4/B.6 搬進對應頁籤
+        （見 `_build_stage_source_tab`／`_build_stage_health_tab`／
+        `_build_stage_output_tab`）；即時查譯與主題切換是唯二「跨階段都
+        用得到、不屬於任何單一流程階段」的功能，維持常駐頂列。
         """
         toolbar = ttk.Frame(self, padding=(10, 6))
         toolbar.pack(fill="x")
@@ -300,6 +310,10 @@ class SrtApp(tk.Tk):
             toolbar, text=label, width=14, command=self._toggle_theme,
         )
         self.theme_btn.pack(side="right")
+        ttk.Button(
+            toolbar, text="即時查譯", width=12,
+            command=self._open_quicktranslate_panel,
+        ).pack(side="right", padx=(0, 8))
         ttk.Label(
             toolbar, text=f"v{APP_VERSION}", foreground="#888888",
         ).pack(side="right", padx=(0, 10))
@@ -308,20 +322,215 @@ class SrtApp(tk.Tk):
             font=("Microsoft JhengHei", 11, "bold"),
         ).pack(side="left")
 
-        # 功能按鈕區：以 grid 排列並自動換行，靠左對齊。
-        tools = ttk.Frame(self, padding=(10, 0))
-        tools.pack(fill="x", pady=(0, 6))
-        for index, (text, width, command) in enumerate((
-                ("審片助手（找片段）", 18, self._open_review_window),
-                ("配樂助手（自動閃避）", 18, self._open_music_dialog),
-                ("健檢中心", 12, self._open_health_center_dialog),
-                ("品牌套版", 12, self._open_branding_dialog),
-                ("音訊轉影片", 12, self._open_audiovis_dialog),
-                ("即時查譯", 12, self._open_quicktranslate_panel))):
-            ttk.Button(tools, text=text, width=width, command=command).grid(
-                row=index // _TOOLS_PER_ROW, column=index % _TOOLS_PER_ROW,
-                sticky="w", padx=(0, 8), pady=(0, 4))
+    def _build_workfile_bar(self):
+        """
+        跨階段工作檔案列（v1.52.1 新增，`docs/UI_ARCHITECTURE_2.0.md`
+        B.1）：顯示「目前影片」與「字幕句數」，是 2.0 的樞紐——全部是
+        `SrtApp` 層的記憶體狀態，直接沿用既有的 `self.file_var`／
+        `self.cues`，不新增 `subtitle/` 依賴、不改其公開介面。
+
+        本版只做「顯示＋一顆瀏覽鈕」；審片／修復產物完成時「自動設為目
+        前影片」的世代鏈是下一輪（ROADMAP v1.52.2）才做的範圍，這裡先
+        把樞紐狀態列的容器與顯示邏輯建好。
+        """
+        bar = ttk.Frame(self, padding=(10, 4))
+        bar.pack(fill="x")
+        self.workfile_bar = bar
+
+        ttk.Label(bar, text="目前影片:").pack(side="left")
+        self.workfile_video_var = tk.StringVar(value="（尚未選擇）")
+        ttk.Label(
+            bar, textvariable=self.workfile_video_var, foreground="#1a5fb4",
+        ).pack(side="left", padx=(4, 8))
+        ttk.Button(
+            bar, text="瀏覽...", width=8, command=self._choose_file,
+        ).pack(side="left")
+
+        ttk.Label(bar, text="字幕:").pack(side="left", padx=(20, 0))
+        self.workfile_subtitle_var = tk.StringVar(value="0 句")
+        ttk.Label(
+            bar, textvariable=self.workfile_subtitle_var,
+        ).pack(side="left", padx=(4, 0))
+
         ttk.Separator(self, orient="horizontal").pack(fill="x")
+
+    def _refresh_workfile_bar(self):
+        """
+        依目前的 `self.file_var`／`self.cues` 更新工作檔案列文字。
+
+        呼叫點：`file_var` 的 write trace（見 `_build_file_section`）＋
+        `_populate_cue_list`（字幕清單所有變動路徑都會經過它——新增／
+        編輯／刪除／上移／下移／清空／匯入／生成完成／一鍵完成／翻譯／
+        健檢修復／自動跳剪／重複片段剪除，見各呼叫點），不必逐一在每個
+        方法裡各補一次。
+        """
+        if not hasattr(self, "workfile_video_var"):
+            return  # 建構期尚未跑到這裡（trace 可能提前觸發一次）。
+        files = self._selected_files()
+        if files:
+            name = os.path.basename(files[0])
+            if len(files) > 1:
+                name += f"（等 {len(files)} 個檔案）"
+            self.workfile_video_var.set(name)
+        else:
+            self.workfile_video_var.set("（尚未選擇）")
+        self.workfile_subtitle_var.set(f"{len(self.cues)} 句")
+
+    def _build_status_bar(self):
+        """
+        跨階段狀態列（v1.52.1 新增，B.1）：常駐於視窗最底部，切換頁籤
+        時不會跟著消失。狀態文字本身（`self.status_var`）與既有所有
+        `self.status_var.set(...)` 呼叫點完全沿用；只是把顯示它的 Label
+        從原本嵌在階段②動作區裡的位置，搬到這條跨階段常駐的底列——
+        `_build_action_section` 不再自己建立這個 Label（見該方法）。
+        """
+        self.status_var = tk.StringVar(value="就緒。")
+        ttk.Separator(self, orient="horizontal").pack(side="bottom", fill="x")
+        bar = ttk.Frame(self, padding=(10, 4))
+        bar.pack(side="bottom", fill="x")
+        ttk.Label(
+            bar, textvariable=self.status_var, foreground="#1a5fb4",
+            anchor="w",
+        ).pack(fill="x")
+
+    def _build_notebook(self):
+        """
+        四階段頁籤（v1.52.1 新增，`docs/UI_ARCHITECTURE_2.0.md` A、B.1）：
+        ①素材與剪輯 ②字幕 ③健檢中心 ④輸出與發佈。頁籤是純容器，四階段
+        隨時可直接點進去——不是精靈（wizard），沒有「必須先完成上一步」
+        的鎖；②「字幕」是預設選中頁籤（生成字幕仍是最高頻動作）。
+        """
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill="both", expand=True)
+        self.notebook = notebook
+
+        self.stage_source_tab = ttk.Frame(notebook)
+        self.stage_subtitle_tab = ttk.Frame(notebook)
+        self.stage_health_tab = ttk.Frame(notebook)
+        self.stage_output_tab = ttk.Frame(notebook)
+
+        notebook.add(self.stage_source_tab, text="① 素材與剪輯")
+        notebook.add(self.stage_subtitle_tab, text="② 字幕")
+        notebook.add(self.stage_health_tab, text="③ 健檢中心")
+        notebook.add(self.stage_output_tab, text="④ 輸出與發佈")
+        notebook.select(self.stage_subtitle_tab)
+
+    def _build_stage_source_tab(self, parent):
+        """
+        階段①「素材與剪輯」（`docs/UI_ARCHITECTURE_2.0.md` B.4）：生成
+        字幕之前對素材做的事——審片與粗剪／自動修剪／素材準備三張卡片。
+        審片助手保留為獨立 Toplevel（它是第二工作台，不硬塞進頁籤，見
+        架構文件 F-1）；自動跳剪停頓／重複片段偵測從「匯出與燒錄」深處
+        搬來改名（D-1：「自動跳剪停頓」→「剪停頓（依字幕）」、「重複
+        片段偵測」→「剪重複片段」），消除與審片粗剪的同名混淆（稽核
+        ②）；音訊轉影片補副標移入。
+        """
+        container = ttk.Frame(parent, padding=14)
+        container.pack(fill="both", expand=True)
+
+        review_card = ttk.LabelFrame(container, text="審片與粗剪", padding=(10, 8))
+        review_card.pack(fill="x", pady=(0, 10))
+        ttk.Label(
+            review_card, foreground="#666666", justify="left", wraplength=900,
+            text="以審片助手在冷場／重複／口頭禪中挑出可用片段，輸出粗剪或精彩合輯。",
+        ).pack(anchor="w", pady=(0, 6))
+        ttk.Button(
+            review_card, text="審片助手（找片段）", width=18,
+            command=self._open_review_window,
+        ).pack(anchor="w")
+
+        trim_card = ttk.LabelFrame(container, text="自動修剪", padding=(10, 8))
+        trim_card.pack(fill="x", pady=(0, 10))
+        ttk.Label(
+            trim_card, foreground="#666666", justify="left", wraplength=900,
+            text="依目前字幕自動找出可剪掉的停頓或重複片段（需先在②字幕頁生成或匯入字幕）。",
+        ).pack(anchor="w", pady=(0, 6))
+        self._build_trim_actions_section(trim_card)
+
+        prep_card = ttk.LabelFrame(container, text="素材準備", padding=(10, 8))
+        prep_card.pack(fill="x")
+        ttk.Button(
+            prep_card, text="音訊轉影片（波形／頻譜）", width=22,
+            command=self._open_audiovis_dialog,
+        ).pack(anchor="w")
+
+    def _build_trim_actions_section(self, parent):
+        """
+        「剪停頓（依字幕）」「剪重複片段」兩顆按鈕（v1.52.1 從原本的
+        「匯出與燒錄」區搬到階段①，見 `_build_stage_source_tab`）。啟用
+        狀態沿用既有規則：沒有字幕時停用，`_update_export_state` 統一
+        管理（該方法本身不需要知道這兩顆按鈕現在放在哪個頁籤）。
+        """
+        row = ttk.Frame(parent)
+        row.pack(anchor="w")
+        self.jumpcut_btn = ttk.Button(
+            row, text="剪停頓（依字幕）", width=14,
+            command=self._open_jumpcut_dialog, state="disabled",
+        )
+        self.jumpcut_btn.pack(side="left", padx=(0, 6))
+        self.retakes_btn = ttk.Button(
+            row, text="剪重複片段", width=12,
+            command=self._open_retakes_dialog, state="disabled",
+        )
+        self.retakes_btn.pack(side="left")
+
+    def _build_stage_health_tab(self, parent):
+        """
+        階段③「健檢中心」（`docs/UI_ARCHITECTURE_2.0.md` B.5）：本版只
+        搬入口（Toplevel 對話框開法不變，`subtitle/` 與
+        `gui/health_center_dialog.py` 零改動）；B.5 描述的「健檢中心整
+        個內嵌成頁籤內容」是後續版本才做的骨架級大改，本輪範圍只做
+        「對話框入口依 B.4/B.6 搬到對應階段」，見 ROADMAP v1.52.1。
+        """
+        container = ttk.Frame(parent, padding=14)
+        container.pack(fill="both", expand=True)
+        card = ttk.LabelFrame(container, text="健檢中心", padding=(10, 8))
+        card.pack(fill="x")
+        ttk.Label(
+            card, foreground="#666666", justify="left", wraplength=900,
+            text=("一次檢查影片、字幕、封面圖、發佈文字、系列影片，產出單一分級報告，"
+                  "每條可修的發現旁邊就是修復按鈕。"),
+        ).pack(anchor="w", pady=(0, 6))
+        ttk.Button(
+            card, text="健檢中心", width=14,
+            command=self._open_health_center_dialog,
+        ).pack(anchor="w")
+
+    def _build_stage_output_tab(self, parent):
+        """
+        階段④「輸出與發佈」（`docs/UI_ARCHITECTURE_2.0.md` B.6）：字幕檔
+        匯出＋燒錄（原「匯出與燒錄」，見 `_build_export_section`）、自動
+        化輸出（原左欄／中欄深處的「自動化輸出（一鍵完成用）」整區，見
+        `_build_automation_section`）、成品加工（配樂助手／品牌套版）。
+        三個輸出面合併成單一輸出區是下一輪的範圍（C-4，本輪不做），這
+        裡只是把既有的兩個區塊原樣搬進同一個頁籤、緊鄰擺放。
+        """
+        container = ttk.Frame(parent, padding=14)
+        container.pack(fill="both", expand=True)
+
+        # 「匯出與燒錄」（格式匯出＋燒錄）與「自動化輸出」直接以這個頁
+        # 籤為 parent 建構——不是搬移既有元件，是把它們原本要 pack 的
+        # 目的地從中欄改成這裡（方法本身完全不變，只換呼叫時傳入的
+        # parent）。
+        self._build_export_section(container)
+        self._build_automation_section(container)
+
+        finishing_card = ttk.LabelFrame(container, text="成品加工", padding=(10, 8))
+        finishing_card.pack(fill="x")
+        ttk.Label(
+            finishing_card, foreground="#666666", justify="left", wraplength=900,
+            text="建議順序：燒錄→配樂→套版，響度正規化留到最後一步。",
+        ).pack(anchor="w", pady=(0, 6))
+        row = ttk.Frame(finishing_card)
+        row.pack(anchor="w")
+        ttk.Button(
+            row, text="配樂助手（自動閃避）", width=18,
+            command=self._open_music_dialog,
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            row, text="品牌套版", width=12,
+            command=self._open_branding_dialog,
+        ).pack(side="left")
 
     def _build_mode_section(self, parent):
         """模式切換區。"""
@@ -348,6 +557,11 @@ class SrtApp(tk.Tk):
             parent, text="影片 / 音訊檔案（可多選，以 ; 分隔）", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.file_var = tk.StringVar()
+        # v1.52.1：工作檔案列（`_build_workfile_bar`）跟著這個欄位即時更
+        # 新「目前影片」顯示——這裡選檔（或直接打字）就是唯一的真相來
+        # 源，工作檔案列只是另一處顯示，不是另一份狀態。
+        self.file_var.trace_add(
+            "write", lambda *_args: self._refresh_workfile_bar())
         ttk.Entry(frame, textvariable=self.file_var).pack(
             side="left", fill="x", expand=True, padx=(0, 6))
         ttk.Button(frame, text="瀏覽...", command=self._choose_file).pack(side="left")
@@ -530,6 +744,10 @@ class SrtApp(tk.Tk):
         v1.52.0：原本擠在中欄一列的內容改拆成多列，理由同
         `_build_export_section`（中欄寬度只剩約 630px，不再是 v1.x 的
         整頁寬）；控制項本身、config 欄位完全不變。
+
+        v1.52.1：呼叫者從中欄改為階段④（`_build_stage_output_tab`，B.6
+        「輸出相關 → 階段④」），方法本身、控制項、config 欄位不變，只
+        是傳入的 `parent` 換了。
         """
         frame = ttk.LabelFrame(parent, text="自動化輸出（一鍵完成用）", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
@@ -595,12 +813,17 @@ class SrtApp(tk.Tk):
 
     def _build_action_section(self, parent):
         """
-        生成 / 匯出 / 燒錄按鈕與狀態列。
+        生成 / 匯出 / 燒錄按鈕與進度條。
 
         v1.52.0：主鈕、進度條、狀態列原本擠一列，中欄在 minsize
         980x560（右欄收合後仍只有約 650px 寬，扣掉此時中欄自己的垂直
         捲軸又更窄）放不下這一整列（實測「一鍵完成」按鈕本身文字就要
         不少寬度）；拆成兩列讓兩顆主鈕永遠不必跟進度條搶寬度。
+
+        v1.52.1：狀態列 Label 搬到跨階段常駐的底部狀態列
+        （`_build_status_bar`，B.1），本方法不再自己建立它；
+        `self.status_var` 在 `_build_status_bar` 建立（本方法呼叫時已
+        存在），所有既有 `self.status_var.set(...)` 呼叫點不必改動。
         """
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(0, 8))
@@ -631,10 +854,6 @@ class SrtApp(tk.Tk):
         self.progress_label_var = tk.StringVar(value="")
         ttk.Label(progress_row, textvariable=self.progress_label_var, width=6,
                  anchor="w").pack(side="left", padx=(6, 0))
-
-        self.status_var = tk.StringVar(value="就緒。")
-        ttk.Label(parent, textvariable=self.status_var, foreground="#1a5fb4",
-                 anchor="w").pack(fill="x")
 
     def _build_cue_list(self, parent):
         """
@@ -722,6 +941,11 @@ class SrtApp(tk.Tk):
         度、被裁掉——這正是 `docs/UI_AUDIT_2.0.md` 點名的水平裁切問題在
         新版中欄重演。拆成兩列（格式匯出／影片動作）解決，按鈕本身、
         command、disabled 狀態管理完全不變。
+
+        v1.52.1：「自動跳剪停頓」「重複片段偵測」兩顆依 B.4 搬到階段①
+        （見 `_build_trim_actions_section`），此區只剩格式匯出＋燒錄；
+        呼叫者也從中欄改為階段④（見 `_build_stage_output_tab`），方法
+        本身、按鈕、command 都不變，只是傳入的 `parent` 換了。
         """
         frame = ttk.LabelFrame(parent, text="匯出與燒錄", padding=(10, 6))
         frame.pack(fill="x", pady=(8, 0))
@@ -757,16 +981,6 @@ class SrtApp(tk.Tk):
             command=self._on_burn, state="disabled",
         )
         self.burn_btn.pack(side="left", padx=2)
-        self.jumpcut_btn = ttk.Button(
-            row_vid, text="自動跳剪停頓", width=13,
-            command=self._open_jumpcut_dialog, state="disabled",
-        )
-        self.jumpcut_btn.pack(side="left", padx=2)
-        self.retakes_btn = ttk.Button(
-            row_vid, text="重複片段偵測", width=13,
-            command=self._open_retakes_dialog, state="disabled",
-        )
-        self.retakes_btn.pack(side="left", padx=2)
 
     def _build_preview_section(self, parent):
         """
@@ -1639,6 +1853,9 @@ class SrtApp(tk.Tk):
                 "", "end",
                 values=(number, time_label, cue["text"]),
             )
+        # 字幕清單所有變動路徑都會經過這裡，工作檔案列的「字幕: N 句」
+        # 跟著一次更新即可，不必在每個呼叫端各補一次。
+        self._refresh_workfile_bar()
 
     def _set_processing(self, processing):
         """切換處理中狀態（鎖定按鈕、進度條）。"""
