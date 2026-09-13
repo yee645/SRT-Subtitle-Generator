@@ -265,3 +265,43 @@ def run_batch(
                 {"path": path, "ok": False, "result": None, "error": str(exc)})
             file_report(f"失敗：{exc}", 1.0)
     return results
+
+
+def describe_output_plan(config: dict, media_path: Optional[str] = None) -> str:
+    """
+    用一句話說明「完成輸出」按下去會做什麼。
+
+    v1.52.1 併三個輸出面時補的：稽核指出「同一個匯出 SRT 概念出現三處、
+    行為各不同」，其中最難查的是自動化這一路——設定藏在勾選框裡，按鈕
+    上只寫「一鍵完成」，使用者按之前無從得知它會產出什麼、放到哪裡。
+    這個函式把 automation 設定翻成人看得懂的一句話，讓介面可以直接顯示。
+
+    放在 pipeline 而不是 GUI，是因為它描述的就是 `export_and_burn` 的行
+    為，兩者必須同步；同一份設定 CLI 也能拿去印出來確認。
+
+    ``media_path`` 有給時，輸出資料夾會解析成實際路徑（與
+    ``resolve_output_dir`` 同一套規則）；沒給時只說「來源檔所在資料夾」。
+    """
+    automation = config.get("automation", {})
+    formats = enabled_export_formats(automation)
+    burn = bool(automation.get("burn_video"))
+
+    if not formats and not burn:
+        return "尚未勾選任何輸出：請在下方勾選要匯出的字幕格式，或勾選「燒錄硬字幕影片」。"
+
+    parts = []
+    if formats:
+        parts.append("匯出 " + "、".join(ext.lstrip(".").upper() for ext in formats))
+    if burn:
+        burn_text = "燒錄硬字幕影片"
+        if automation.get("loudnorm"):
+            from .audio import clamp_target
+            burn_text += f"（含響度正規化 {clamp_target(automation.get('loudnorm_target')):.1f} LUFS）"
+        parts.append(burn_text)
+
+    if media_path:
+        where = resolve_output_dir(media_path, automation)
+    else:
+        configured = (automation.get("output_dir") or "").strip()
+        where = configured or "來源檔所在資料夾"
+    return "＋".join(parts) + " → " + where

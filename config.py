@@ -66,6 +66,10 @@ _DEFAULT_SEGMENTATION = {
 DEFAULT_CONFIG = {
     # 介面外觀主題：'light' 或 'dark'，預設為 light。
     "theme": "light",
+    # 已看過「新版介面速覽」的版本字串（v1.52.1 新增）。空字串＝沒看過。
+    # 存版本而不是布林，是為了讓日後又一次大改介面時能再導覽一次；使用者
+    # 勾「不再顯示」則寫入 NEVER_SHOW_WHATSNEW，之後任何版本都不再跳。
+    "whatsnew_seen": "",
     # 目前作用中的字幕樣式與斷句設定（記憶功能保存的即時狀態）。
     "subtitle_style": dict(_DEFAULT_STYLE),
     "segmentation": dict(_DEFAULT_SEGMENTATION),
