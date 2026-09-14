@@ -99,11 +99,11 @@ class AudioVisDialog(tk.Toplevel):
         row_size.pack(fill="x", pady=2)
         ttk.Label(row_size, text="解析度：").pack(side="left")
         self.width_var = tk.IntVar(value=settings["width"])
-        tk.Spinbox(row_size, from_=640, to=3840, increment=160, width=6,
+        ttk.Spinbox(row_size, from_=640, to=3840, increment=160, width=6,
                    textvariable=self.width_var).pack(side="left", padx=(2, 2))
         ttk.Label(row_size, text="x").pack(side="left")
         self.height_var = tk.IntVar(value=settings["height"])
-        tk.Spinbox(row_size, from_=360, to=2160, increment=90, width=6,
+        ttk.Spinbox(row_size, from_=360, to=2160, increment=90, width=6,
                    textvariable=self.height_var).pack(side="left", padx=(2, 2))
 
         bg_frame = ttk.LabelFrame(

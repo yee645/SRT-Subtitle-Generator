@@ -50,8 +50,8 @@ from gui.health_center_dialog import HealthCenterDialog
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
 from gui.cue_editor import CueEditDialog
-from gui.jumpcut_dialog import JumpCutDialog
-from gui.retakes_dialog import RetakesDialog
+from gui.autotrim_dialog import (TAB_GAPS, TAB_RETAKES,
+                                 AutoTrimDialog)
 from gui.music_dialog import MusicDuckingDialog
 from gui.preview_panel import PreviewPanel
 from gui.quicktranslate_panel import QuickTranslatePanel
@@ -924,7 +924,7 @@ class SrtApp(tk.Tk):
         row1.pack(fill="x", pady=2)
         ttk.Label(row1, text="中文單行上限:").pack(side="left")
         self.cjk_limit_var = tk.IntVar(value=seg["max_chars_cjk"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row1, from_=4, to=40, width=6, textvariable=self.cjk_limit_var,
         ).pack(side="left", padx=(4, 4))
         ttk.Label(row1, text="字").pack(side="left")
@@ -933,7 +933,7 @@ class SrtApp(tk.Tk):
         row1b.pack(fill="x", pady=2)
         ttk.Label(row1b, text="英文單行上限:").pack(side="left")
         self.latin_limit_var = tk.IntVar(value=seg["max_chars_latin"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row1b, from_=10, to=90, width=6, textvariable=self.latin_limit_var,
         ).pack(side="left", padx=(4, 4))
         ttk.Label(row1b, text="字母").pack(side="left")
@@ -942,7 +942,7 @@ class SrtApp(tk.Tk):
         row2.pack(fill="x", pady=2)
         ttk.Label(row2, text="最短秒數:").pack(side="left")
         self.min_dur_var = tk.DoubleVar(value=seg["min_duration"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row2, from_=0.3, to=5.0, increment=0.1, width=5,
             textvariable=self.min_dur_var, format="%.1f",
         ).pack(side="left", padx=(4, 0))
@@ -951,7 +951,7 @@ class SrtApp(tk.Tk):
         row2b.pack(fill="x", pady=2)
         ttk.Label(row2b, text="最長秒數:").pack(side="left")
         self.max_dur_var = tk.DoubleVar(value=seg["max_duration"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row2b, from_=2.0, to=15.0, increment=0.5, width=5,
             textvariable=self.max_dur_var, format="%.1f",
         ).pack(side="left", padx=(4, 0))
@@ -960,7 +960,7 @@ class SrtApp(tk.Tk):
         row2c.pack(fill="x", pady=2)
         ttk.Label(row2c, text="停頓秒數:").pack(side="left")
         self.pause_gap_var = tk.DoubleVar(value=seg["pause_gap"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row2c, from_=0.2, to=2.0, increment=0.1, width=5,
             textvariable=self.pause_gap_var, format="%.1f",
         ).pack(side="left", padx=(4, 0))
@@ -969,7 +969,7 @@ class SrtApp(tk.Tk):
         row3.pack(fill="x", pady=2)
         ttk.Label(row3, text="時間軸微調:").pack(side="left")
         self.time_offset_var = tk.DoubleVar(value=seg.get("time_offset", 0.0))
-        tk.Spinbox(
+        ttk.Spinbox(
             row3, from_=-10.0, to=10.0, increment=0.1, width=6,
             textvariable=self.time_offset_var, format="%.1f",
         ).pack(side="left", padx=(4, 0))
@@ -1051,7 +1051,7 @@ class SrtApp(tk.Tk):
         ttk.Label(row_ln, text="目標:").pack(side="left", padx=(8, 2))
         self.auto_loudnorm_target_var = tk.DoubleVar(
             value=float(automation.get("loudnorm_target", -14.0)))
-        tk.Spinbox(
+        ttk.Spinbox(
             row_ln, from_=-30.0, to=-8.0, increment=0.5, width=6,
             textvariable=self.auto_loudnorm_target_var, format="%.1f",
             command=self._collect_automation_config,
@@ -1162,9 +1162,13 @@ class SrtApp(tk.Tk):
         self.cue_tree.heading("index", text="#")
         self.cue_tree.heading("time", text="時間")
         self.cue_tree.heading("text", text="字幕內容")
-        self.cue_tree.column("index", width=40, anchor="center")
-        self.cue_tree.column("time", width=180, anchor="center")
-        self.cue_tree.column("text", width=320, anchor="w")
+        self.cue_tree.column("index", width=40, minwidth=40, anchor="center")
+        # v1.52.3：時間欄原本 180px，但「00:00:00,000 → 00:00:02,000」實測
+        # 需要 210px，每一列的結束時間都被截掉（v1.52.1 的截圖看得到，是
+        # 既有問題不是當時造成的）。226 = 210 量測值 + 儲存格左右內距的餘
+        # 裕；minwidth 一併設上，避免使用者拖窄後又變回讀不到完整時間碼。
+        self.cue_tree.column("time", width=226, minwidth=210, anchor="center")
+        self.cue_tree.column("text", width=300, minwidth=160, anchor="w")
 
         scrollbar = ttk.Scrollbar(
             frame, orient="vertical", command=self.cue_tree.yview)
@@ -1632,22 +1636,21 @@ class SrtApp(tk.Tk):
         self.status_var.set("「字幕健檢」已整併至健檢中心。")
 
     def _open_jumpcut_dialog(self):
-        """開啟自動跳剪：依目前字幕找出句間停頓，一次剪掉整支影片的冷場。"""
-        if not self.cues:
-            messagebox.showinfo("提示", "目前沒有字幕，請先生成或匯入字幕。")
-            return
-        files = self._selected_files()
-        media_path = files[0] if files else ""
-
-        def on_done(new_cues):
-            self.cues = new_cues
-            self.apply_text_edits()
-
-        JumpCutDialog(self, self.config_data, self.cues,
-                     media_path=media_path, on_done=on_done)
+        """開啟自動修剪並停在「剪停頓（依字幕）」分頁。"""
+        self._open_autotrim_dialog(TAB_GAPS)
 
     def _open_retakes_dialog(self):
-        """開啟重複片段偵測：找出同一句話講了好幾次的候選，勾選後剪掉。"""
+        """開啟自動修剪並停在「剪重複片段」分頁。"""
+        self._open_autotrim_dialog(TAB_RETAKES)
+
+    def _open_autotrim_dialog(self, tab):
+        """
+        開啟自動修剪對話框（v1.52.3 併自跳剪與重複片段兩個視窗）。
+
+        兩顆入口都保留、各自開到對應分頁：使用者按下按鈕時想做的事是明確
+        的，先開一個通用視窗再叫他選分頁是多一步。合併要省的是重複的程式
+        碼與不一致的行為（兩邊七個方法本來是同一份東西抄兩次），不是入口。
+        """
         if not self.cues:
             messagebox.showinfo("提示", "目前沒有字幕，請先生成或匯入字幕。")
             return
@@ -1658,8 +1661,9 @@ class SrtApp(tk.Tk):
             self.cues = new_cues
             self.apply_text_edits()
 
-        RetakesDialog(self, self.config_data, self.cues,
-                     media_path=media_path, on_done=on_done)
+        AutoTrimDialog(self, self.config_data, self.cues,
+                       media_path=media_path, on_done=on_done,
+                       on_media=self.adopt_media, tab=tab)
 
     def apply_text_edits(self):
         """字幕文字被批次修改後刷新清單與預覽（時間軸不變，不需重排序）。"""

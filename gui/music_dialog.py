@@ -72,14 +72,14 @@ class MusicDuckingDialog(tk.Toplevel):
         ttk.Label(body, text="音樂音量：").grid(
             row=2, column=0, sticky="w", pady=(10, 3))
         self.volume_var = tk.DoubleVar(value=settings["music_volume"])
-        tk.Spinbox(
+        ttk.Spinbox(
             body, from_=0.05, to=1.0, increment=0.05, width=6,
             textvariable=self.volume_var, format="%.2f",
         ).grid(row=2, column=1, sticky="w", padx=(6, 0))
 
         ttk.Label(body, text="閃避強度：").grid(row=3, column=0, sticky="w", pady=3)
         self.strength_var = tk.DoubleVar(value=settings["duck_strength"])
-        tk.Spinbox(
+        ttk.Spinbox(
             body, from_=1.0, to=20.0, increment=0.5, width=6,
             textvariable=self.strength_var, format="%.1f",
         ).grid(row=3, column=1, sticky="w", padx=(6, 0))
@@ -93,7 +93,7 @@ class MusicDuckingDialog(tk.Toplevel):
 
         ttk.Label(body, text="閃避靈敏度：").grid(row=5, column=0, sticky="w", pady=3)
         self.sensitivity_var = tk.DoubleVar(value=settings["duck_sensitivity"])
-        self.sensitivity_spin = tk.Spinbox(
+        self.sensitivity_spin = ttk.Spinbox(
             body, from_=0.01, to=0.5, increment=0.01, width=6,
             textvariable=self.sensitivity_var, format="%.2f",
         )

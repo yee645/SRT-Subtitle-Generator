@@ -136,17 +136,32 @@ with open(os.path.join(root, "cli.py"), encoding="utf-8") as fp:
     cli_src = fp.read()
 check("cli.py 有 --jumpcut 旗標", "--jumpcut" in cli_src)
 
-with open(os.path.join(root, "gui", "jumpcut_dialog.py"),
+# v1.52.3：gui/jumpcut_dialog.py 併入 gui/autotrim_dialog.py 的「剪停頓
+# （依字幕）」分頁（兩邊七個方法本來是同一份東西抄兩次）。檢查跟著搬家，
+# 不是放棄檢查。
+with open(os.path.join(root, "gui", "autotrim_dialog.py"),
           encoding="utf-8") as fp:
     dialog_src = fp.read()
-check("對話框無 classic tk.Checkbutton/Radiobutton 殘留",
+check("自動修剪對話框無 classic tk.Checkbutton/Radiobutton/Spinbox 殘留",
       "tk.Checkbutton(" not in dialog_src.replace("ttk.Checkbutton(", "")
-      and "tk.Radiobutton(" not in dialog_src.replace("ttk.Radiobutton(", ""))
+      and "tk.Radiobutton(" not in dialog_src.replace("ttk.Radiobutton(", "")
+      and "tk.Spinbox(" not in dialog_src.replace("ttk.Spinbox(", ""))
+check("跳剪能力確實在自動修剪對話框裡（不是併掉時弄丟了）",
+      all(name in dialog_src for name in
+          ("apply_jumpcut", "find_cut_gaps", "compute_keep_segments",
+           "format_jumpcut_report", "resolve_jumpcut_settings")))
 
 with open(os.path.join(root, "gui", "app.py"), encoding="utf-8") as fp:
     app_src = fp.read()
-check("app.py 有自動跳剪按鈕與 handler",
-      "自動跳剪停頓" in app_src and "_open_jumpcut_dialog" in app_src)
+# 舊斷言寫的是 `"自動跳剪停頓" in app_src`，但 D-1 改名後那個字串只剩在
+# **註解**裡，測試照樣通過——等於在驗證註解而不是按鈕。改為驗證改名後的
+# 按鈕文字真的出現在 ttk.Button 的 text= 上。
+import re as _re
+_button_texts = set(_re.findall(r'text="([^"]*)"', app_src))
+check("app.py 有「剪停頓（依字幕）」按鈕（D-1 改名後的名字，且是真的控件"
+      "文字不是註解）", "剪停頓（依字幕）" in _button_texts,
+      str(sorted(t for t in _button_texts if "停頓" in t)))
+check("app.py 有開啟它的 handler", "_open_jumpcut_dialog" in app_src)
 
 # ===== 10. media.py 共用 has_video_stream／has_audio_stream =====
 from subtitle import media, audiofix

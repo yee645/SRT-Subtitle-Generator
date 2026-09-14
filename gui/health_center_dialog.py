@@ -958,7 +958,7 @@ class HealthSettingsDialog(tk.Toplevel):
         ttk.Label(row, text=label).pack(side="left")
         unit = kwargs.pop("unit", "")
         width = kwargs.pop("width", 7)
-        tk.Spinbox(row, textvariable=var, width=width, **kwargs).pack(
+        ttk.Spinbox(row, textvariable=var, width=width, **kwargs).pack(
             side="left", padx=(4, 4))
         if unit:
             ttk.Label(row, text=unit).pack(side="left")
@@ -1050,7 +1050,7 @@ class HealthSettingsDialog(tk.Toplevel):
         ttk.Checkbutton(row, text="降噪", variable=self.fix_denoise_var
                        ).pack(side="left")
         self.fix_strength_var = tk.DoubleVar(value=s["denoise_strength"])
-        tk.Spinbox(row, from_=6.0, to=40.0, increment=1.0, width=4,
+        ttk.Spinbox(row, from_=6.0, to=40.0, increment=1.0, width=4,
                   textvariable=self.fix_strength_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row, text="dB").pack(side="left", padx=(0, 10))
@@ -1058,7 +1058,7 @@ class HealthSettingsDialog(tk.Toplevel):
         ttk.Checkbutton(row, text="去低頻隆隆", variable=self.fix_highpass_var
                        ).pack(side="left")
         self.fix_hz_var = tk.DoubleVar(value=s["highpass_hz"])
-        tk.Spinbox(row, from_=40.0, to=200.0, increment=10.0, width=5,
+        ttk.Spinbox(row, from_=40.0, to=200.0, increment=10.0, width=5,
                   textvariable=self.fix_hz_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row, text="Hz").pack(side="left", padx=(0, 10))

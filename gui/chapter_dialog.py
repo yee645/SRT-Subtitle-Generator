@@ -98,13 +98,13 @@ class ChapterCheckDialog(tk.Toplevel):
         ttk.Label(row, text="每章最短:").pack(side="left")
         self.min_seconds_var = tk.DoubleVar(
             value=settings["min_chapter_seconds"])
-        tk.Spinbox(row, from_=1, to=120, increment=1, width=5,
+        ttk.Spinbox(row, from_=1, to=120, increment=1, width=5,
                    textvariable=self.min_seconds_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row, text="秒").pack(side="left", padx=(0, 12))
         ttk.Label(row, text="最少章節數:").pack(side="left")
         self.min_count_var = tk.IntVar(value=settings["min_chapter_count"])
-        tk.Spinbox(row, from_=2, to=10, increment=1, width=5,
+        ttk.Spinbox(row, from_=2, to=10, increment=1, width=5,
                    textvariable=self.min_count_var).pack(
             side="left", padx=(2, 2))
         ttk.Label(row, text="章").pack(side="left")

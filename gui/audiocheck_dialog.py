@@ -98,13 +98,13 @@ class AudioCheckDialog(tk.Toplevel):
         row1.pack(fill="x", pady=2)
         ttk.Label(row1, text="太小聲門檻:").pack(side="left")
         self.quiet_var = tk.DoubleVar(value=settings["quiet_lufs"])
-        tk.Spinbox(row1, from_=-30.0, to=-10.0, increment=0.5, width=7,
+        ttk.Spinbox(row1, from_=-30.0, to=-10.0, increment=0.5, width=7,
                    textvariable=self.quiet_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row1, text="LUFS").pack(side="left", padx=(0, 14))
         ttk.Label(row1, text="底噪門檻:").pack(side="left")
         self.noise_var = tk.DoubleVar(value=settings["noise_floor_db"])
-        tk.Spinbox(row1, from_=-90.0, to=-20.0, increment=1.0, width=7,
+        ttk.Spinbox(row1, from_=-90.0, to=-20.0, increment=1.0, width=7,
                    textvariable=self.noise_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row1, text="dB").pack(side="left")
@@ -112,13 +112,13 @@ class AudioCheckDialog(tk.Toplevel):
         row2.pack(fill="x", pady=2)
         ttk.Label(row2, text="爆音峰值門檻:").pack(side="left")
         self.clip_var = tk.DoubleVar(value=settings["clip_peak_db"])
-        tk.Spinbox(row2, from_=-6.0, to=0.0, increment=0.1, width=7,
+        ttk.Spinbox(row2, from_=-6.0, to=0.0, increment=0.1, width=7,
                    textvariable=self.clip_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row2, text="dB").pack(side="left", padx=(0, 14))
         ttk.Label(row2, text="聲道差異門檻:").pack(side="left")
         self.balance_var = tk.DoubleVar(value=settings["balance_db"])
-        tk.Spinbox(row2, from_=2.0, to=20.0, increment=0.5, width=7,
+        ttk.Spinbox(row2, from_=2.0, to=20.0, increment=0.5, width=7,
                    textvariable=self.balance_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row2, text="dB").pack(side="left")
@@ -129,7 +129,7 @@ class AudioCheckDialog(tk.Toplevel):
         ttk.Label(row3, text="位元率寬嚴:").pack(side="left")
         self.bitrate_margin_var = tk.DoubleVar(
             value=vc_settings["bitrate_margin"])
-        tk.Spinbox(row3, from_=0.5, to=2.0, increment=0.1, width=7,
+        ttk.Spinbox(row3, from_=0.5, to=2.0, increment=0.1, width=7,
                    textvariable=self.bitrate_margin_var,
                    format="%.1f").pack(side="left", padx=(2, 2))
         ttk.Label(row3, text="× YouTube 建議值").pack(
@@ -137,14 +137,14 @@ class AudioCheckDialog(tk.Toplevel):
         ttk.Label(row3, text="開頭廢秒門檻:").pack(side="left")
         self.head_max_var = tk.DoubleVar(
             value=vc_settings["head_max_seconds"])
-        tk.Spinbox(row3, from_=0.3, to=10.0, increment=0.1, width=7,
+        ttk.Spinbox(row3, from_=0.3, to=10.0, increment=0.1, width=7,
                    textvariable=self.head_max_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row3, text="秒").pack(side="left", padx=(0, 14))
         ttk.Label(row3, text="凍結判定秒數:").pack(side="left")
         self.freeze_min_var = tk.DoubleVar(
             value=vc_settings["freeze_min_seconds"])
-        tk.Spinbox(row3, from_=0.5, to=5.0, increment=0.1, width=7,
+        ttk.Spinbox(row3, from_=0.5, to=5.0, increment=0.1, width=7,
                    textvariable=self.freeze_min_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row3, text="秒").pack(side="left")
@@ -155,14 +155,14 @@ class AudioCheckDialog(tk.Toplevel):
         ttk.Label(row4, text="音量分段秒數:").pack(side="left")
         self.vol_segment_var = tk.DoubleVar(
             value=volc_settings["segment_seconds"])
-        tk.Spinbox(row4, from_=10.0, to=60.0, increment=5.0, width=7,
+        ttk.Spinbox(row4, from_=10.0, to=60.0, increment=5.0, width=7,
                    textvariable=self.vol_segment_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row4, text="秒").pack(side="left", padx=(0, 14))
         ttk.Label(row4, text="音量落差門檻:").pack(side="left")
         self.vol_deviation_var = tk.DoubleVar(
             value=volc_settings["deviation_lu"])
-        tk.Spinbox(row4, from_=1.5, to=8.0, increment=0.5, width=7,
+        ttk.Spinbox(row4, from_=1.5, to=8.0, increment=0.5, width=7,
                    textvariable=self.vol_deviation_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row4, text="LU").pack(side="left")
@@ -172,18 +172,18 @@ class AudioCheckDialog(tk.Toplevel):
         row5.pack(fill="x", pady=2)
         ttk.Label(row5, text="過暗門檻:").pack(side="left")
         self.dark_luma_var = tk.DoubleVar(value=cc_settings["dark_luma"])
-        tk.Spinbox(row5, from_=20, to=100, increment=5, width=7,
+        ttk.Spinbox(row5, from_=20, to=100, increment=5, width=7,
                    textvariable=self.dark_luma_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row5, text="過曝門檻:").pack(side="left", padx=(12, 0))
         self.bright_luma_var = tk.DoubleVar(value=cc_settings["bright_luma"])
-        tk.Spinbox(row5, from_=160, to=240, increment=5, width=7,
+        ttk.Spinbox(row5, from_=160, to=240, increment=5, width=7,
                    textvariable=self.bright_luma_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row5, text="色偏門檻:").pack(side="left", padx=(12, 0))
         self.color_cast_var = tk.DoubleVar(
             value=cc_settings["cast_threshold"])
-        tk.Spinbox(row5, from_=5, to=25, increment=1, width=7,
+        ttk.Spinbox(row5, from_=5, to=25, increment=1, width=7,
                    textvariable=self.color_cast_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row5, text="（0~255 亮度值）", foreground="#666666").pack(
@@ -195,14 +195,14 @@ class AudioCheckDialog(tk.Toplevel):
         ttk.Label(row6, text="畫面不變上限:").pack(side="left")
         self.pace_static_var = tk.DoubleVar(
             value=pc_settings["max_static_seconds"])
-        tk.Spinbox(row6, from_=5, to=300, increment=5, width=7,
+        ttk.Spinbox(row6, from_=5, to=300, increment=5, width=7,
                    textvariable=self.pace_static_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row6, text="秒").pack(side="left", padx=(0, 14))
         ttk.Label(row6, text="剪接偵測靈敏度:").pack(side="left")
         self.pace_threshold_var = tk.DoubleVar(
             value=pc_settings["scene_threshold"])
-        tk.Spinbox(row6, from_=0.05, to=0.90, increment=0.05, width=7,
+        ttk.Spinbox(row6, from_=0.05, to=0.90, increment=0.05, width=7,
                    textvariable=self.pace_threshold_var, format="%.2f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row6, text="（越小越敏感）", foreground="#666666").pack(
@@ -241,7 +241,7 @@ class AudioCheckDialog(tk.Toplevel):
                        variable=self.fix_denoise_var).pack(side="left")
         self.fix_strength_var = tk.DoubleVar(
             value=fix_settings["denoise_strength"])
-        tk.Spinbox(fix_row, from_=6.0, to=40.0, increment=1.0, width=4,
+        ttk.Spinbox(fix_row, from_=6.0, to=40.0, increment=1.0, width=4,
                    textvariable=self.fix_strength_var,
                    format="%.0f").pack(side="left", padx=(2, 2))
         ttk.Label(fix_row, text="dB").pack(side="left", padx=(0, 10))
@@ -249,7 +249,7 @@ class AudioCheckDialog(tk.Toplevel):
         ttk.Checkbutton(fix_row, text="去低頻隆隆",
                        variable=self.fix_highpass_var).pack(side="left")
         self.fix_hz_var = tk.DoubleVar(value=fix_settings["highpass_hz"])
-        tk.Spinbox(fix_row, from_=40.0, to=200.0, increment=10.0, width=5,
+        ttk.Spinbox(fix_row, from_=40.0, to=200.0, increment=10.0, width=5,
                    textvariable=self.fix_hz_var,
                    format="%.0f").pack(side="left", padx=(2, 2))
         ttk.Label(fix_row, text="Hz").pack(side="left", padx=(0, 10))
@@ -274,13 +274,13 @@ class AudioCheckDialog(tk.Toplevel):
         trim_row.pack(fill="x")
         ttk.Label(trim_row, text="去頭:").pack(side="left")
         self.trim_head_var = tk.DoubleVar(value=0.0)
-        tk.Spinbox(trim_row, from_=0.0, to=600.0, increment=0.1, width=6,
+        ttk.Spinbox(trim_row, from_=0.0, to=600.0, increment=0.1, width=6,
                    textvariable=self.trim_head_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(trim_row, text="秒").pack(side="left", padx=(0, 10))
         ttk.Label(trim_row, text="去尾:").pack(side="left")
         self.trim_tail_var = tk.DoubleVar(value=0.0)
-        tk.Spinbox(trim_row, from_=0.0, to=600.0, increment=0.1, width=6,
+        ttk.Spinbox(trim_row, from_=0.0, to=600.0, increment=0.1, width=6,
                    textvariable=self.trim_tail_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(trim_row, text="秒").pack(side="left", padx=(0, 10))

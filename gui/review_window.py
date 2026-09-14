@@ -119,14 +119,14 @@ class ReviewWindow(tk.Toplevel):
         row1.pack(fill="x", pady=2)
         ttk.Label(row1, text="冷場門檻:").pack(side="left")
         self.silence_var = tk.DoubleVar(value=settings["silence_gap"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row1, from_=0.5, to=10.0, increment=0.5, width=5,
             textvariable=self.silence_var, format="%.1f",
         ).pack(side="left", padx=(2, 2))
         ttk.Label(row1, text="秒").pack(side="left", padx=(0, 12))
         ttk.Label(row1, text="段落切分停頓:").pack(side="left")
         self.gap_var = tk.DoubleVar(value=settings["segment_gap"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row1, from_=0.4, to=5.0, increment=0.2, width=5,
             textvariable=self.gap_var, format="%.1f",
         ).pack(side="left", padx=(2, 2))
@@ -134,14 +134,14 @@ class ReviewWindow(tk.Toplevel):
         ttk.Label(row1, text="精彩敏感度:").pack(side="left")
         self.sensitivity_var = tk.DoubleVar(
             value=settings["highlight_sensitivity"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row1, from_=0.2, to=3.0, increment=0.1, width=5,
             textvariable=self.sensitivity_var, format="%.1f",
         ).pack(side="left", padx=(2, 2))
         ttk.Label(row1, text="倍", foreground="#666666").pack(side="left", padx=(0, 12))
         ttk.Label(row1, text="重複判定相似度:").pack(side="left")
         self.similarity_var = tk.DoubleVar(value=settings["take_similarity"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row1, from_=0.5, to=0.95, increment=0.05, width=5,
             textvariable=self.similarity_var, format="%.2f",
         ).pack(side="left", padx=(2, 0))
@@ -160,7 +160,7 @@ class ReviewWindow(tk.Toplevel):
         ttk.Label(row2, text="章節最短:").pack(side="left")
         self.chapter_min_var = tk.DoubleVar(
             value=settings["chapter_min_seconds"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row2, from_=10, to=600, increment=10, width=5,
             textvariable=self.chapter_min_var, format="%.0f",
         ).pack(side="left", padx=(2, 0))
@@ -177,7 +177,7 @@ class ReviewWindow(tk.Toplevel):
                            ("weight_exclaim", "驚嘆句")):
             ttk.Label(row_w, text=label).pack(side="left", padx=(10, 2))
             var = tk.DoubleVar(value=settings[key])
-            tk.Spinbox(
+            ttk.Spinbox(
                 row_w, from_=0.0, to=3.0, increment=0.1, width=4,
                 textvariable=var, format="%.1f",
             ).pack(side="left")
@@ -328,7 +328,7 @@ class ReviewWindow(tk.Toplevel):
         ).pack(side="left")
         ttk.Label(row3, text="焦點").pack(side="left", padx=(8, 2))
         self.shorts_focus_var = tk.DoubleVar(value=shorts_cfg["focus_x"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row3, from_=0.0, to=1.0, increment=0.05, width=5,
             textvariable=self.shorts_focus_var, format="%.2f",
         ).pack(side="left")
@@ -364,21 +364,21 @@ class ReviewWindow(tk.Toplevel):
         ttk.Label(row3b, text="頂端保留%").pack(side="left", padx=(8, 2))
         self.shorts_safezone_top_var = tk.DoubleVar(
             value=round(shorts_cfg["safe_zone_top"] * 100, 1))
-        tk.Spinbox(
+        ttk.Spinbox(
             row3b, from_=0, to=20, increment=1, width=4,
             textvariable=self.shorts_safezone_top_var,
         ).pack(side="left")
         ttk.Label(row3b, text="底部保留%").pack(side="left", padx=(8, 2))
         self.shorts_safezone_bottom_var = tk.DoubleVar(
             value=round(shorts_cfg["safe_zone_bottom"] * 100, 1))
-        tk.Spinbox(
+        ttk.Spinbox(
             row3b, from_=10, to=35, increment=1, width=4,
             textvariable=self.shorts_safezone_bottom_var,
         ).pack(side="left")
         ttk.Label(row3b, text="左右保留%").pack(side="left", padx=(8, 2))
         self.shorts_safezone_side_var = tk.DoubleVar(
             value=round(shorts_cfg["safe_zone_side"] * 100, 1))
-        tk.Spinbox(
+        ttk.Spinbox(
             row3b, from_=0, to=15, increment=1, width=4,
             textvariable=self.shorts_safezone_side_var,
         ).pack(side="left")
@@ -390,13 +390,13 @@ class ReviewWindow(tk.Toplevel):
         ttk.Label(row4, text="封面候選:").pack(side="left")
         ttk.Label(row4, text="張數").pack(side="left", padx=(6, 2))
         self.thumb_count_var = tk.IntVar(value=thumbs_cfg["count"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row4, from_=2, to=12, increment=1, width=4,
             textvariable=self.thumb_count_var).pack(side="left")
         ttk.Label(row4, text="最小間隔").pack(side="left", padx=(8, 2))
         self.thumb_spacing_var = tk.DoubleVar(
             value=thumbs_cfg["min_spacing"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row4, from_=1.0, to=120.0, increment=1.0, width=5,
             textvariable=self.thumb_spacing_var, format="%.0f",
         ).pack(side="left")
@@ -422,14 +422,14 @@ class ReviewWindow(tk.Toplevel):
         ttk.Label(row5, text="最小間隔").pack(side="left", padx=(6, 2))
         self.ad_spacing_var = tk.DoubleVar(
             value=ad_cfg["min_spacing_minutes"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row5, from_=2.0, to=15.0, increment=0.5, width=5,
             textvariable=self.ad_spacing_var, format="%.1f",
         ).pack(side="left")
         ttk.Label(row5, text="分").pack(side="left")
         ttk.Label(row5, text="最多").pack(side="left", padx=(8, 2))
         self.ad_max_var = tk.IntVar(value=ad_cfg["max_breaks"])
-        tk.Spinbox(
+        ttk.Spinbox(
             row5, from_=1, to=20, increment=1, width=4,
             textvariable=self.ad_max_var).pack(side="left")
         ttk.Label(row5, text="個").pack(side="left")

@@ -126,7 +126,7 @@ class BrandingDialog(tk.Toplevel):
         ttk.Label(row_wm2, text="大小(佔畫面寬%):").pack(side="left")
         self.scale_var = tk.DoubleVar(
             value=round(settings["watermark_scale"] * 100))
-        tk.Spinbox(row_wm2, from_=5, to=50, increment=1, width=4,
+        ttk.Spinbox(row_wm2, from_=5, to=50, increment=1, width=4,
                    textvariable=self.scale_var).pack(side="left", padx=(2, 2))
         ttk.Label(row_wm2, text="%").pack(side="left")
 
@@ -134,12 +134,12 @@ class BrandingDialog(tk.Toplevel):
         row_wm3.pack(fill="x", pady=2)
         ttk.Label(row_wm3, text="透明度:").pack(side="left")
         self.opacity_var = tk.DoubleVar(value=settings["watermark_opacity"])
-        tk.Spinbox(row_wm3, from_=0.1, to=1.0, increment=0.05, width=5,
+        ttk.Spinbox(row_wm3, from_=0.1, to=1.0, increment=0.05, width=5,
                    textvariable=self.opacity_var, format="%.2f").pack(
             side="left", padx=(2, 14))
         ttk.Label(row_wm3, text="邊緣留白(px):").pack(side="left")
         self.margin_var = tk.DoubleVar(value=settings["watermark_margin"])
-        tk.Spinbox(row_wm3, from_=0, to=200, increment=4, width=5,
+        ttk.Spinbox(row_wm3, from_=0, to=200, increment=4, width=5,
                    textvariable=self.margin_var, format="%.0f").pack(
             side="left", padx=(2, 2))
 
