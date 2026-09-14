@@ -97,19 +97,19 @@ class SeriesCheckDialog(tk.Toplevel):
         row.pack(fill="x", pady=2)
         ttk.Label(row, text="響度差異:").pack(side="left")
         self.loudness_var = tk.DoubleVar(value=settings["loudness_tolerance"])
-        tk.Spinbox(row, from_=0.5, to=8.0, increment=0.5, width=5,
+        ttk.Spinbox(row, from_=0.5, to=8.0, increment=0.5, width=5,
                    textvariable=self.loudness_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row, text="LU").pack(side="left", padx=(0, 12))
         ttk.Label(row, text="亮度差異:").pack(side="left")
         self.luma_var = tk.DoubleVar(value=settings["luma_tolerance"])
-        tk.Spinbox(row, from_=10, to=80, increment=5, width=5,
+        ttk.Spinbox(row, from_=10, to=80, increment=5, width=5,
                    textvariable=self.luma_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row, text="（0~255）").pack(side="left", padx=(0, 12))
         ttk.Label(row, text="色調差異:").pack(side="left")
         self.cast_var = tk.DoubleVar(value=settings["cast_tolerance"])
-        tk.Spinbox(row, from_=3, to=30, increment=1, width=5,
+        ttk.Spinbox(row, from_=3, to=30, increment=1, width=5,
                    textvariable=self.cast_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(

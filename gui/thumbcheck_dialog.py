@@ -109,29 +109,29 @@ class ThumbCheckDialog(tk.Toplevel):
         row1.pack(fill="x", pady=2)
         ttk.Label(row1, text="手機縮圖寬度:").pack(side="left")
         self.width_var = tk.IntVar(value=settings["mobile_width"])
-        tk.Spinbox(row1, from_=80, to=640, increment=20, width=6,
+        ttk.Spinbox(row1, from_=80, to=640, increment=20, width=6,
                    textvariable=self.width_var).pack(side="left", padx=(2, 2))
         ttk.Label(row1, text="像素").pack(side="left", padx=(0, 12))
         ttk.Label(row1, text="細節保留下限:").pack(side="left")
         self.detail_var = tk.DoubleVar(value=settings["min_detail_keep"])
-        tk.Spinbox(row1, from_=0.05, to=1.0, increment=0.05, width=6,
+        ttk.Spinbox(row1, from_=0.05, to=1.0, increment=0.05, width=6,
                    textvariable=self.detail_var, format="%.2f").pack(
             side="left", padx=(2, 2))
         row2 = ttk.Frame(options)
         row2.pack(fill="x", pady=2)
         ttk.Label(row2, text="對比下限:").pack(side="left")
         self.contrast_var = tk.DoubleVar(value=settings["min_contrast"])
-        tk.Spinbox(row2, from_=10, to=200, increment=5, width=6,
+        ttk.Spinbox(row2, from_=10, to=200, increment=5, width=6,
                    textvariable=self.contrast_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row2, text="飽和度下限:").pack(side="left", padx=(12, 0))
         self.saturation_var = tk.DoubleVar(value=settings["min_saturation"])
-        tk.Spinbox(row2, from_=0, to=120, increment=5, width=6,
+        ttk.Spinbox(row2, from_=0, to=120, increment=5, width=6,
                    textvariable=self.saturation_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row2, text="檔案上限:").pack(side="left", padx=(12, 0))
         self.filesize_var = tk.DoubleVar(value=settings["max_file_mb"])
-        tk.Spinbox(row2, from_=0.5, to=10.0, increment=0.5, width=6,
+        ttk.Spinbox(row2, from_=0.5, to=10.0, increment=0.5, width=6,
                    textvariable=self.filesize_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row2, text="MB").pack(side="left")

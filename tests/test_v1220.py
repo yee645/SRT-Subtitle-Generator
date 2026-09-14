@@ -133,19 +133,34 @@ with open(os.path.join(root, "cli.py"), encoding="utf-8") as fp:
 check("cli.py 有 --retakes 旗標", "--retakes" in cli_src)
 check("cli.py 有 --retakes-cut 旗標", "--retakes-cut" in cli_src)
 
-with open(os.path.join(root, "gui", "retakes_dialog.py"),
+# v1.52.3：gui/retakes_dialog.py 併入 gui/autotrim_dialog.py 的「剪重複
+# 片段」分頁。檢查跟著搬家，不是放棄檢查。
+with open(os.path.join(root, "gui", "autotrim_dialog.py"),
           encoding="utf-8") as fp:
     dialog_src = fp.read()
-check("對話框無 classic tk.Radiobutton 殘留",
+check("自動修剪對話框無 classic tk.Radiobutton 殘留",
       "tk.Radiobutton(" not in dialog_src.replace("ttk.Radiobutton(", ""))
-check("對話框的勾選候選項目使用 ttk.Checkbutton",
+check("勾選候選項目使用 ttk.Checkbutton",
       "ttk.Checkbutton(" in dialog_src and "tk.Checkbutton(" not in
       dialog_src.replace("ttk.Checkbutton(", ""))
+check("重複片段能力確實在自動修剪對話框裡（不是併掉時弄丟了）",
+      all(name in dialog_src for name in
+          ("apply_retake_removal", "find_retakes",
+           "format_retake_removal_report", "resolve_retake_settings")))
+check("「逐項勾選確認才剪」這個保護沒有被併掉——它與跳剪的差別就在這裡"
+      "（動的是實際講話內容，假陽性風險高）",
+      "_selected_retakes" in dialog_src and "_check_vars" in dialog_src)
 
 with open(os.path.join(root, "gui", "app.py"), encoding="utf-8") as fp:
     app_src = fp.read()
-check("app.py 有重複片段偵測按鈕與 handler",
-      "重複片段偵測" in app_src and "_open_retakes_dialog" in app_src)
+# 舊斷言的 `"重複片段偵測" in app_src` 在 D-1 改名後只剩在註解裡仍會通過
+# ——等於驗證註解不是按鈕。改為驗證改名後的按鈕文字真的是控件文字。
+import re as _re
+_button_texts = set(_re.findall(r'text="([^"]*)"', app_src))
+check("app.py 有「剪重複片段」按鈕（D-1 改名後的名字，且是真的控件文字"
+      "不是註解）", "剪重複片段" in _button_texts,
+      str(sorted(t for t in _button_texts if "重複" in t)))
+check("app.py 有開啟它的 handler", "_open_retakes_dialog" in app_src)
 
 # ===== 9. 真實 CLI 端到端（合成測試媒體＋重複片段偵測與剪除＋字幕同步對齊） =====
 import shutil

@@ -83,13 +83,13 @@ class SubtitleCheckDialog(tk.Toplevel):
         row1.pack(fill="x", pady=2)
         ttk.Label(row1, text="閱讀速度上限:").pack(side="left")
         self.cps_var = tk.DoubleVar(value=settings["cps_limit"])
-        tk.Spinbox(row1, from_=10.0, to=25.0, increment=1.0, width=6,
+        ttk.Spinbox(row1, from_=10.0, to=25.0, increment=1.0, width=6,
                    textvariable=self.cps_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row1, text="字/秒").pack(side="left", padx=(0, 14))
         ttk.Label(row1, text="最短顯示秒數:").pack(side="left")
         self.min_dur_var = tk.DoubleVar(value=settings["min_duration"])
-        tk.Spinbox(row1, from_=0.3, to=2.0, increment=0.1, width=6,
+        ttk.Spinbox(row1, from_=0.3, to=2.0, increment=0.1, width=6,
                    textvariable=self.min_dur_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(row1, text="秒").pack(side="left")
@@ -97,13 +97,13 @@ class SubtitleCheckDialog(tk.Toplevel):
         row2.pack(fill="x", pady=2)
         ttk.Label(row2, text="最多行數:").pack(side="left")
         self.max_lines_var = tk.IntVar(value=settings["max_lines"])
-        tk.Spinbox(row2, from_=1, to=4, increment=1, width=6,
+        ttk.Spinbox(row2, from_=1, to=4, increment=1, width=6,
                    textvariable=self.max_lines_var).pack(
             side="left", padx=(2, 2))
         ttk.Label(row2, text="行").pack(side="left", padx=(0, 14))
         ttk.Label(row2, text="單行字數上限:").pack(side="left")
         self.max_chars_var = tk.IntVar(value=settings["max_chars_per_line"])
-        tk.Spinbox(row2, from_=10, to=60, increment=1, width=6,
+        ttk.Spinbox(row2, from_=10, to=60, increment=1, width=6,
                    textvariable=self.max_chars_var).pack(
             side="left", padx=(2, 2))
         ttk.Label(row2, text="字").pack(side="left")
@@ -117,21 +117,21 @@ class SubtitleCheckDialog(tk.Toplevel):
         ad_row1.pack(fill="x", pady=2)
         ttk.Label(ad_row1, text="叢集時間窗:").pack(side="left")
         self.ad_window_var = tk.DoubleVar(value=ad_settings["window_seconds"])
-        tk.Spinbox(ad_row1, from_=10, to=120, increment=5, width=5,
+        ttk.Spinbox(ad_row1, from_=10, to=120, increment=5, width=5,
                    textvariable=self.ad_window_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(ad_row1, text="秒").pack(side="left", padx=(0, 12))
         ttk.Label(ad_row1, text="高風險門檻:").pack(side="left")
         self.ad_threshold_var = tk.DoubleVar(
             value=ad_settings["cluster_threshold"])
-        tk.Spinbox(ad_row1, from_=1.0, to=10.0, increment=0.5, width=5,
+        ttk.Spinbox(ad_row1, from_=1.0, to=10.0, increment=0.5, width=5,
                    textvariable=self.ad_threshold_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(ad_row1, text="分").pack(side="left", padx=(0, 12))
         ttk.Label(ad_row1, text="開頭加強檢查:").pack(side="left")
         self.ad_opening_var = tk.DoubleVar(
             value=ad_settings["opening_seconds"])
-        tk.Spinbox(ad_row1, from_=0, to=30, increment=1, width=5,
+        ttk.Spinbox(ad_row1, from_=0, to=30, increment=1, width=5,
                    textvariable=self.ad_opening_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(ad_row1, text="秒").pack(side="left")
@@ -166,21 +166,21 @@ class SubtitleCheckDialog(tk.Toplevel):
         ttk.Label(hook_row1, text="幾秒內要進正題:").pack(side="left")
         self.hook_target_var = tk.DoubleVar(
             value=hook_settings["target_seconds"])
-        tk.Spinbox(hook_row1, from_=5, to=60, increment=1, width=5,
+        ttk.Spinbox(hook_row1, from_=5, to=60, increment=1, width=5,
                    textvariable=self.hook_target_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(hook_row1, text="秒").pack(side="left", padx=(0, 12))
         ttk.Label(hook_row1, text="寒暄上限:").pack(side="left")
         self.hook_greeting_var = tk.DoubleVar(
             value=hook_settings["max_greeting_seconds"])
-        tk.Spinbox(hook_row1, from_=1, to=30, increment=1, width=5,
+        ttk.Spinbox(hook_row1, from_=1, to=30, increment=1, width=5,
                    textvariable=self.hook_greeting_var, format="%.0f").pack(
             side="left", padx=(2, 2))
         ttk.Label(hook_row1, text="秒").pack(side="left", padx=(0, 12))
         ttk.Label(hook_row1, text="開頭乾等上限:").pack(side="left")
         self.hook_silence_var = tk.DoubleVar(
             value=hook_settings["max_head_silence"])
-        tk.Spinbox(hook_row1, from_=0, to=10, increment=0.5, width=5,
+        ttk.Spinbox(hook_row1, from_=0, to=10, increment=0.5, width=5,
                    textvariable=self.hook_silence_var, format="%.1f").pack(
             side="left", padx=(2, 2))
         ttk.Label(hook_row1, text="秒").pack(side="left")

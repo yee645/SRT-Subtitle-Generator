@@ -91,17 +91,17 @@ class PublishCheckDialog(tk.Toplevel):
         row1.pack(fill="x", pady=2)
         ttk.Label(row1, text="hashtag 上限:").pack(side="left")
         self.max_tag_var = tk.IntVar(value=settings["max_hashtags"])
-        tk.Spinbox(row1, from_=1, to=30, increment=1, width=5,
+        ttk.Spinbox(row1, from_=1, to=30, increment=1, width=5,
                    textvariable=self.max_tag_var).pack(side="left", padx=(2, 2))
         ttk.Label(row1, text="個").pack(side="left", padx=(0, 12))
         ttk.Label(row1, text="建議上限:").pack(side="left")
         self.rec_tag_var = tk.IntVar(value=settings["recommended_hashtags"])
-        tk.Spinbox(row1, from_=1, to=15, increment=1, width=5,
+        ttk.Spinbox(row1, from_=1, to=15, increment=1, width=5,
                    textvariable=self.rec_tag_var).pack(side="left", padx=(2, 2))
         ttk.Label(row1, text="個").pack(side="left", padx=(0, 12))
         ttk.Label(row1, text="標題上限:").pack(side="left")
         self.title_limit_var = tk.IntVar(value=settings["title_limit"])
-        tk.Spinbox(row1, from_=20, to=200, increment=10, width=5,
+        ttk.Spinbox(row1, from_=20, to=200, increment=10, width=5,
                    textvariable=self.title_limit_var).pack(
             side="left", padx=(2, 2))
         ttk.Label(row1, text="字元").pack(side="left")
@@ -110,19 +110,19 @@ class PublishCheckDialog(tk.Toplevel):
         row2.pack(fill="x", pady=2)
         ttk.Label(row2, text="手機可見標題:").pack(side="left")
         self.mobile_var = tk.IntVar(value=settings["title_mobile_visible"])
-        tk.Spinbox(row2, from_=10, to=100, increment=5, width=5,
+        ttk.Spinbox(row2, from_=10, to=100, increment=5, width=5,
                    textvariable=self.mobile_var).pack(side="left", padx=(2, 2))
         ttk.Label(row2, text="字元").pack(side="left", padx=(0, 12))
         ttk.Label(row2, text="說明欄上限:").pack(side="left")
         self.desc_limit_var = tk.IntVar(
             value=settings["description_byte_limit"])
-        tk.Spinbox(row2, from_=500, to=10000, increment=500, width=7,
+        ttk.Spinbox(row2, from_=500, to=10000, increment=500, width=7,
                    textvariable=self.desc_limit_var).pack(
             side="left", padx=(2, 2))
         ttk.Label(row2, text="位元組").pack(side="left", padx=(0, 12))
         ttk.Label(row2, text="標籤上限:").pack(side="left")
         self.tag_char_var = tk.IntVar(value=settings["tag_char_limit"])
-        tk.Spinbox(row2, from_=100, to=1000, increment=50, width=6,
+        ttk.Spinbox(row2, from_=100, to=1000, increment=50, width=6,
                    textvariable=self.tag_char_var).pack(
             side="left", padx=(2, 2))
         ttk.Label(row2, text="字元").pack(side="left")

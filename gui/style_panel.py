@@ -140,7 +140,7 @@ class StylePanel(tk.LabelFrame):
         size_row.grid(row=4, column=0, columnspan=3, sticky="w", pady=3)
         tk.Label(size_row, text="字級").pack(side="left")
         self.font_size_var = tk.IntVar(value=style["font_size"])
-        tk.Spinbox(
+        ttk.Spinbox(
             size_row, from_=10, to=96, textvariable=self.font_size_var,
             width=5, command=self._emit_change,
         ).pack(side="left", padx=(4, 16))
@@ -148,7 +148,7 @@ class StylePanel(tk.LabelFrame):
         self.font_size_var.trace_add("write", lambda *_a: self._emit_change())
         tk.Label(size_row, text="邊框寬").pack(side="left")
         self.stroke_width_var = tk.IntVar(value=style["stroke_width"])
-        tk.Spinbox(
+        ttk.Spinbox(
             size_row, from_=0, to=6, textvariable=self.stroke_width_var,
             width=5, command=self._emit_change,
         ).pack(side="left", padx=(4, 0))

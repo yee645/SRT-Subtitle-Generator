@@ -175,6 +175,9 @@ else:
         "_refresh_publish_card", "_build_publish_section",
         "_on_send_publish_to_health", "_on_clear_publish",
         "on_media_fixed",  # ↑ _open_health_center_dialog 之內的巢狀 callback
+        # v1.52.3：跳剪與重複片段兩個視窗併成 gui/autotrim_dialog.py，兩顆
+        # 入口都保留、各自開到對應分頁，共用這個開窗方法。
+        "_open_autotrim_dialog",
     }
     unexpected = added_methods - expected_new_methods
     check("新增的方法都在本版白名單內，沒有夾帶計畫外的新邏輯",
