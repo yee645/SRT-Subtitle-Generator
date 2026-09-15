@@ -12,7 +12,7 @@ import sys
 import urllib.request
 
 # 目前程式版本，每次發布新版時須同步調整。
-APP_VERSION = "1.52.3"
+APP_VERSION = "2.0.0"
 
 # GitHub 儲存庫資訊。
 GITHUB_OWNER = "yee645"
