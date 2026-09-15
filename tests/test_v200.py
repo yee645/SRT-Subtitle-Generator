@@ -1,0 +1,194 @@
+# -*- coding: utf-8 -*-
+"""
+v2.0.0 掛版前置條件測試。
+
+使用者 2026-09-13 指示：「到時發布 2.0 記得要寫一份完整的新增功能介紹」，
+`docs/ROADMAP_2.0.md` 7-1 節把它列為**掛版的硬性前置條件**。這一份測的就
+是那個條件有沒有真的達成——不是「有沒有一個檔案」，而是：
+
+1. **四個產出物都在**（主文件、CHANGELOG 條目、README、程式內速覽）。
+2. **範圍對**：涵蓋 1.51.0 → 2.0.0 的全部改動，不是只寫最後一版。這是
+   7-1 節點名「最容易寫錯」的地方——使用者的自動更新一直停在 v1.51.0，
+   轉正那一刻是一次跳過來的。
+3. **數字一致**：主文件、CHANGELOG、程式內速覽三處引用的實測值必須是同
+   一組。三個地方各寫各的就是遲早會有一處過期。
+4. **程式內速覽補上了「新增了什麼」那一半**（v1.52.1 版只講搬家）。
+"""
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+failures = []
+
+
+def check(name, cond, extra=""):
+    print(("PASS" if cond else f"FAIL {extra}"), name)
+    if not cond:
+        failures.append(name)
+
+
+def read(*parts):
+    path = os.path.join(ROOT, *parts)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as fp:
+        return fp.read()
+
+
+# ===== 1. 四個產出物都在 =============================================
+whats_new = read("docs", "WHATS_NEW_2.0.md")
+check("產出物①：docs/WHATS_NEW_2.0.md 存在", whats_new is not None)
+migration = read("docs", "MIGRATION_1x_TO_2.0.md")
+check("1.x→2.0 對照表存在（1.52.3 定稿）", migration is not None)
+
+changelog = read("CHANGELOG.md")
+check("產出物②：CHANGELOG 有 v2.0.0 條目",
+      changelog is not None and "## v2.0.0" in changelog)
+
+readme = read("README.md")
+check("產出物③：README 指向新功能介紹",
+      readme is not None and "WHATS_NEW_2.0.md" in readme)
+
+dialog = read("gui", "whatsnew_dialog.py")
+check("產出物④：程式內速覽存在", dialog is not None)
+
+updater = read("updater.py")
+check("APP_VERSION 已經是 2.0.0",
+      updater is not None and 'APP_VERSION = "2.0.0"' in updater)
+
+if whats_new is None or changelog is None or dialog is None:
+    print()
+    print("失敗：產出物缺漏，後續檢查無法進行。")
+    sys.exit(1)
+
+
+# ===== 2. 範圍：涵蓋 1.51.0 → 2.0.0 ==================================
+check("主文件開宗明義講清楚讀者是「從 v1.51.0 更新上來的」",
+      "1.51.0" in whats_new and "v1.51.0" in whats_new)
+check("主文件明講中間幾版是不推自動更新的測試版（否則讀者不知道為什麼"
+      "一次跳這麼多）",
+      "測試版" in whats_new and "自動更新" in whats_new)
+
+# 中間四版的主題都要被涵蓋到，不能只寫最後一版。
+COVERAGE = {
+    "v1.52.0 三欄化／主按鈕在畫面外": ["y=826"],
+    "v1.52.1 四階段頁籤": ["四個階段", "素材與剪輯"],
+    "v1.52.1 拆一鍵完成": ["一鍵完成", "開始生成字幕", "完成輸出"],
+    "v1.52.1 輸出面合一": ["輸出設定"],
+    "v1.52.2 產出自動流入": ["發佈資料", "送健檢中心"],
+    "v1.52.2 世代鏈": ["粗剪", "修復版"],
+    "v1.52.3 自動修剪併窗": ["自動修剪", "剪重複片段"],
+    "v1.50–1.51 健檢中心": ["健檢中心", "18 項"],
+    "選取即翻譯": ["即時查譯"],
+}
+for topic, needles in COVERAGE.items():
+    miss = [n for n in needles if n not in whats_new]
+    check(f"主文件涵蓋「{topic}」", not miss, f"缺：{miss}")
+
+check("主文件有寫升級須知（設定沿用、CLI 相容）",
+      "設定會沿用" in whats_new and "CLI" in whats_new)
+check("主文件有寫「沒有變的事」，讓人確認能力沒被拿掉",
+      "沒有變的事" in whats_new)
+check("主文件是寫給使用者看的：不出現函式名或內部識別字",
+      not any(token in whats_new for token in
+              ("_build_", "def ", "ttk.", "self.", "winfo_")),
+      "出現了內部識別字")
+
+
+# ===== 3. 三處引用的實測數字必須一致 =================================
+# 這一組是當場量出來的（量法見 docs/UI_AUDIT_2.0.md 1.2 節同一情境）。
+# **要連單位一起比對**：只比 "31" 會被 "−31%" 誤中（破壞探針實測：把
+# CHANGELOG 的點擊數改成 25 次，因為 "−31%" 還在，檢查竟然照樣通過）。
+MEASURED = {"clicks_new": "31 次", "windows_new": "7 個",
+            "clicks_old": "43–46 次", "windows_old": "17–19 個",
+            "y_new": "y=131", "y_old": "y=826"}
+
+audit = read("docs", "UI_AUDIT_2.0.md")
+check("稽核文件已寫回 2.0 的實測值（7-1 節要求量完寫回去）",
+      audit is not None and "2.0 實測對照" in audit)
+
+# 只檢查「字串有沒有出現」擋不住不一致：31 次、7 個在文件裡本來就出現多
+# 次（例如「剩下的 31 次裡有 17 次是內容工作」），改掉其中一處另一處還
+# 在，presence 檢查照樣通過——破壞探針實測證實會漏。所以改成**從各自的對
+# 照表列裡把數字抓出來再互比**。
+def pull(text, pattern, label):
+    match = re.search(pattern, text)
+    if match is None:
+        check(f"{label}：找得到對照表那一列", False, pattern)
+        return None
+    return match.group(1)
+
+doc_clicks = pull(whats_new, r"\|\s*點擊\s*\|[^|]*\|\s*\*\*(\d+)\s*次\*\*", "主文件點擊")
+doc_windows = pull(whats_new, r"\|\s*開啟視窗\s*\|[^|]*\|\s*\*\*(\d+)\s*個\*\*", "主文件視窗")
+log_clicks = pull(changelog, r"\|\s*點擊\s*\|[^|]*\|\s*\*\*(\d+)\s*次\*\*", "CHANGELOG 點擊")
+log_windows = pull(changelog, r"\|\s*開啟視窗\s*\|[^|]*\|\s*\*\*(\d+)\s*個\*\*", "CHANGELOG 視窗")
+dlg_clicks = pull(dialog, r"點擊[^\n]*?→\s*(\d+)\s*次", "速覽點擊")
+dlg_windows = pull(dialog, r"開啟視窗[^\n]*?→\s*(\d+)\s*個", "速覽視窗")
+
+check("三處的「點擊數」是同一個數字（主文件／CHANGELOG／程式內速覽）",
+      doc_clicks == log_clicks == dlg_clicks == MEASURED["clicks_new"].split()[0],
+      f"主文件={doc_clicks} CHANGELOG={log_clicks} 速覽={dlg_clicks} "
+      f"應為={MEASURED['clicks_new']}")
+check("三處的「視窗數」是同一個數字",
+      doc_windows == log_windows == dlg_windows == MEASURED["windows_new"].split()[0],
+      f"主文件={doc_windows} CHANGELOG={log_windows} 速覽={dlg_windows} "
+      f"應為={MEASURED['windows_new']}")
+
+for label, value in MEASURED.items():
+    check(f"實測值「{value}」（{label}）在主文件與 CHANGELOG 都出現",
+          value in whats_new and value in changelog,
+          f"主文件={value in whats_new} CHANGELOG={value in changelog}")
+for value in (MEASURED["y_new"], MEASURED["y_old"]):
+    check(f"實測值「{value}」也出現在程式內速覽", value in dialog, value)
+
+# 不可以留著「預估」那組數字冒充實測。
+check("主文件誠實交代實測比預估差，並寫出原因（不是拿預估值充數）",
+      "20 次" in whats_new and "校對" in whats_new,
+      "沒有找到對預估落差的說明")
+check("CHANGELOG 同樣交代了落差", "20 次" in changelog)
+
+
+# ===== 4. 程式內速覽補上「新增了什麼」那一半 =========================
+try:
+    from gui.whatsnew_dialog import (MOVED, NEW_FEATURES, RENAMED,
+                                     SAVINGS_TEXT, SPLIT_TEXT, should_show,
+                                     NEVER_SHOW)
+except ImportError as exc:
+    print(f"SKIP 速覽內容測試（無 tkinter：{exc}）")
+else:
+    check("速覽有「新增了什麼」那一半（v1.52.1 版只講搬家）",
+          len(NEW_FEATURES) >= 5, str(len(NEW_FEATURES)))
+    check("速覽仍保留搬家對照（兩半都要有）", len(MOVED) >= 5)
+    check("速覽仍保留改名對照", len(RENAMED) >= 2)
+    for title, detail in NEW_FEATURES:
+        check(f"新能力條目「{title[:16]}」有寫實際內容、不是只有標題",
+              len(detail) >= 20, f"{len(detail)} 字")
+    check("速覽的省力數字與文件同一組",
+          all(v in SAVINGS_TEXT for v in
+              (MEASURED["clicks_new"], MEASURED["windows_new"])))
+    check("速覽仍說明「一鍵完成」為什麼拆", "校對" in SPLIT_TEXT)
+
+    # 版本規則：2.0 要對 1.52.x 的使用者再跳一次（他們沒看過新能力那半）。
+    check("看過 v1.52.1 速覽的人，2.0.0 會再跳一次（新增的那半他沒看過）",
+          should_show({"whatsnew_seen": "1.52.1"}, "2.0.0"))
+    check("看過 2.0.0 就不再跳",
+          not should_show({"whatsnew_seen": "2.0.0"}, "2.0.0"))
+    check("勾過「不再顯示」的人不會被打擾",
+          not should_show({"whatsnew_seen": NEVER_SHOW}, "2.0.0"))
+
+
+# ===== 5. 轉正是獨立的一步，本版不做 =================================
+promote = read(".github", "promote_releases.txt")
+check("promote_releases.txt 沒有被本版動到（轉正是獨立決定，需人確認 exe）",
+      promote is not None and "v2.0.0" not in promote,
+      "v2.0.0 不該在這裡")
+
+
+print()
+if failures:
+    print(f"失敗 {len(failures)} 項：" + ", ".join(failures))
+    sys.exit(1)
+print("v2.0.0 掛版前置條件（完整新功能介紹）測試全數通過。")
