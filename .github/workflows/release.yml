@@ -118,14 +118,43 @@ jobs:
           )
           pathlib.Path("RELEASE_NOTES.md").write_text(notes, encoding="utf-8")
 
-      - name: Create GitHub pre-release with exe
+      # 建立 Release 與上傳 exe 分成兩步，且上傳會重試。
+      #
+      # 原本是 `gh release create <tag> <exe>` 一步到底。v2.2.0 那次
+      # uploads.github.com 回了一個 HTTP 500（GitHub 端的暫時性錯誤，exe
+      # 本身已經打包成功），gh 整個回捲——**連 Release 都沒留下**，等於
+      # 一次完全成功的建置因為最後一哩的 500 而白跑，而且沒有辦法只重試
+      # 上傳。分成兩步之後：Release 先建起來（冪等，已存在就沿用），exe
+      # 上傳失敗則重試三次（20s、40s），最後才失敗。
+      - name: Create GitHub pre-release
         if: env.RELEASE_EXISTS != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
           gh release create "$env:RELEASE_TAG"
-          "dist/SRT-Subtitle-Generator.exe"
           --prerelease
           --title "$env:RELEASE_TAG"
           --notes-file RELEASE_NOTES.md
           --target "$env:GITHUB_SHA"
+
+      - name: Upload exe to the release (retry on transient upload errors)
+        if: env.RELEASE_EXISTS != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          $delays = @(20, 40)
+          for ($i = 0; $i -le $delays.Length; $i++) {
+            gh release upload "$env:RELEASE_TAG" `
+              "dist/SRT-Subtitle-Generator.exe" --clobber
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "exe 已附上 $env:RELEASE_TAG"
+              exit 0
+            }
+            if ($i -lt $delays.Length) {
+              Write-Host "::warning::上傳失敗（exit $LASTEXITCODE），$($delays[$i]) 秒後重試。"
+              Start-Sleep -Seconds $delays[$i]
+            }
+          }
+          Write-Error "exe 上傳連續失敗，Release 已建立但沒有附上檔案。"
+          exit 1
