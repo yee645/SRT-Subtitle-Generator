@@ -139,7 +139,7 @@ else:
     app_config.CONFIG_PATH = _tmpcfg.name
     try:
         from gui.app import SrtApp
-        from gui.health_center_dialog import HealthCenterDialog
+        from gui.health_center_panel import HealthCenterPanel
         app = SrtApp()
     except tk.TclError as exc:
         # 只有「連不上顯示器」才算合理略過；其餘 TclError 是真的錯誤。
@@ -229,11 +229,16 @@ else:
               f" vs 視窗高 {app.winfo_height()}")
 
         # --- 一鍵送健檢中心：對象區真的被填好 ---
-        dialog = HealthCenterDialog(
-            app, app.config_data, media_path="", cues=[],
-            publish=dict(app.publish_data))
-        dialog.deiconify()
+        # v2.2.0：健檢中心是階段③的頁籤內容，「送健檢中心」不再開窗而是
+        # 切頁籤＋填對象區。改成直接走使用者真正會走的那條路徑
+        # （_on_send_publish_to_health），比原本自己 new 一個視窗更接近實
+        # 際情形。
+        app._on_send_publish_to_health()
         pump()
+        dialog = app.health_panel
+        check("送健檢中心會切到階段③（不再另外開一個視窗）",
+              app.notebook.select() == str(app.stage_health_tab),
+              app.notebook.select())
         check("送健檢後標題欄已填",
               dialog.publish_title_var.get() == "三分鐘學會剪片",
               dialog.publish_title_var.get())
@@ -247,22 +252,28 @@ else:
               len(dialog._thumb_paths) == 2, str(dialog._thumb_paths))
         check("有資料時「發佈文字」摺疊區會自動展開（填了卻收著等於沒填）",
               dialog.publish_body.winfo_ismapped() == 1)
-        dialog.destroy()
 
-        # 不帶 publish 時完全不影響原本行為。
-        plain = HealthCenterDialog(app, app.config_data, media_path="", cues=[])
-        plain.deiconify(); pump()
+        # 不帶 publish 時完全不影響原本行為（另外裝一個乾淨的面板來比）。
+        plain_host = tk.Toplevel(app)
+        plain_host.geometry("1120x900")
+        plain = HealthCenterPanel(plain_host, app.config_data,
+                                  media_path="", cues=[])
+        plain.pack(fill="both", expand=True)
+        plain_host.deiconify(); pump()
         check("不帶發佈資料開啟時，對象區維持空白、摺疊區維持收合",
               plain.publish_title_var.get() == ""
               and plain.publish_body.winfo_ismapped() == 0)
-        plain.destroy()
+        plain_host.destroy()
 
         # --- 修復版回流 ---
         received = {}
-        hc = HealthCenterDialog(
-            app, app.config_data, media_path=orig, cues=[],
+        hc_host = tk.Toplevel(app)
+        hc_host.geometry("1120x900")
+        hc = HealthCenterPanel(
+            hc_host, app.config_data, media_path=orig, cues=[],
             on_media_fixed=lambda p, s: received.update(path=p, source=s))
-        hc.deiconify(); pump()
+        hc.pack(fill="both", expand=True)
+        hc_host.deiconify(); pump()
         from tkinter import messagebox as _mb
         _orig_ask = _mb.askyesno
         _mb.askyesno = lambda *a, **k: True      # 使用者按「是」
@@ -279,7 +290,7 @@ else:
         check("選「否」時不接手，目前影片與對象區都不動",
               not received and hc.media_var.get() == orig)
         _mb.askyesno = _orig_ask
-        hc.destroy()
+        hc_host.destroy()
 
         # --- 審片助手的三條回流線真的接上了 ---
         from gui.review_window import ReviewWindow

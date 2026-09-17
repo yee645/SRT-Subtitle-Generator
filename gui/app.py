@@ -46,7 +46,7 @@ from gui.whatsnew_dialog import (NEVER_SHOW as NEVER_SHOW_WHATSNEW,
                                  WhatsNewDialog,
                                  should_show as should_show_whatsnew)
 from gui.branding_dialog import BrandingDialog
-from gui.health_center_dialog import HealthCenterDialog
+from gui.health_center_panel import HealthCenterPanel
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
 from gui.cue_editor import CueEditDialog
@@ -513,7 +513,7 @@ class SrtApp(tk.Tk):
 
     def _on_send_publish_to_health(self):
         """把發佈資料整包送進健檢中心的對象區（一鍵，不必再貼一次）。"""
-        self._open_health_center_dialog(publish=dict(self.publish_data))
+        self._go_to_health_stage(publish=dict(self.publish_data))
 
     def _on_clear_publish(self):
         """清空發佈資料。"""
@@ -597,6 +597,8 @@ class SrtApp(tk.Tk):
         notebook.add(self.stage_health_tab, text="③ 健檢中心")
         notebook.add(self.stage_output_tab, text="④ 輸出與發佈")
         notebook.select(self.stage_subtitle_tab)
+        # 切到階段③時把「目前影片」與字幕同步進健檢中心（v2.2.0）。
+        notebook.bind("<<NotebookTabChanged>>", self._on_stage_tab_changed)
 
     def _build_stage_source_tab(self, parent):
         """
@@ -659,25 +661,36 @@ class SrtApp(tk.Tk):
 
     def _build_stage_health_tab(self, parent):
         """
-        階段③「健檢中心」（`docs/UI_ARCHITECTURE_2.0.md` B.5）：本版只
-        搬入口（Toplevel 對話框開法不變，`subtitle/` 與
-        `gui/health_center_dialog.py` 零改動）；B.5 描述的「健檢中心整
-        個內嵌成頁籤內容」是後續版本才做的骨架級大改，本輪範圍只做
-        「對話框入口依 B.4/B.6 搬到對應階段」，見 ROADMAP v1.52.1。
+        階段③「健檢中心」（`docs/UI_ARCHITECTURE_2.0.md` B.5）。
+
+        v1.52.1 只把入口搬進來，按下去仍是開一個 1120x900 的 Toplevel；
+        v2.2.0 做完 B.5 真正要的事——**健檢中心整個就是這個頁籤的內容**。
+        四階段頁籤的前提是「一個視窗把事做完」，在這之前第三階段是唯一
+        一個還要另外開窗的階段（2.0 實測 31 擊／7 窗沒達到預估 20 擊／
+        3–5 窗，這是兩個原因之一）。
+
+        內嵌之後多出兩件原本做不到的事：
+
+        - 字幕**每次健檢前向主視窗現拿**（`get_cues`），不再是開窗當下的
+          快照——在階段②改完字幕切回來重跑，報告講的就是新句子。
+        - 階段④〔送健檢中心〕與工具列的舊「字幕健檢」鈕都改成切頁籤，
+          視窗數不再增加。
+
+        面板本身（`gui/health_center_panel.py`）與 `subtitle/`、
+        `gui/health_aggregator.py` 的檢查與修復邏輯一項未動。
         """
-        container = ttk.Frame(parent, padding=14)
-        container.pack(fill="both", expand=True)
-        card = ttk.LabelFrame(container, text="健檢中心", padding=(10, 8))
-        card.pack(fill="x")
-        ttk.Label(
-            card, foreground="#666666", justify="left", wraplength=900,
-            text=("一次檢查影片、字幕、封面圖、發佈文字、系列影片，產出單一分級報告，"
-                  "每條可修的發現旁邊就是修復按鈕。"),
-        ).pack(anchor="w", pady=(0, 6))
-        ttk.Button(
-            card, text="健檢中心", width=14,
-            command=self._open_health_center_dialog,
-        ).pack(anchor="w")
+        def on_fixed(new_cues):
+            self.cues = new_cues
+            self.apply_text_edits()
+
+        def on_media_fixed(path, source):
+            self.adopt_media(path, "audiofix", source)
+
+        self.health_panel = HealthCenterPanel(
+            parent, self.config_data,
+            get_cues=lambda: list(getattr(self, "cues", []) or []),
+            on_fixed=on_fixed, on_media_fixed=on_media_fixed)
+        self.health_panel.pack(fill="both", expand=True)
 
     def _build_stage_output_tab(self, parent):
         """
@@ -1393,38 +1406,39 @@ class SrtApp(tk.Tk):
         video_path = files[0] if files and os.path.exists(files[0]) else ""
         MusicDuckingDialog(self, self.config_data, video_path)
 
-    def _open_health_center_dialog(self, publish=None):
+    def _on_stage_tab_changed(self, _event=None):
         """
-        健檢中心：v1.50.0 併音訊／字幕／總體檢三窗，v1.51.0 再併發佈資訊／
-        封面／章節三窗（工具列 11→6，見 `_build_toolbar` 的說明）。
+        切到階段③時，把主視窗的「目前影片」與字幕同步進健檢中心頁籤。
 
-        字幕直接沿用主視窗已經有的那一份，使用者不必再挑一次檔案；
-        沒有字幕、沒有選影片時對話框會自動略過對應的檢查。
-
-        v1.52.2 兩處接通（稽核 ④ 的斷鏈）：
-
-        - ``publish`` 有給時（階段④〔送健檢中心〕按下來的），標題／說明欄
-          ／標籤／章節／封面候選直接填進對象區——以前這些全都要使用者自
-          己複製貼上，那正是「產出端與檢查端斷鏈」最實際的痛點。
-        - ``on_media_fixed`` 讓健檢中心修出來的修復版直接回流成「目前影
-          片」。舊版只跳訊息框說「也可對輸出版再跑一次健檢比對」，卻沒給
-          任何做得到的路徑；現在接手後再按一次〔開始健檢〕就是比對。
+        頁籤與程式同壽，不像舊的 Toplevel 每次開窗都重新帶一份對象進
+        去；不同步的話，使用者換了影片再切過來，檢查的還是上一支。
         """
+        panel = getattr(self, "health_panel", None)
+        if panel is None:
+            return
+        try:
+            current = self.notebook.select()
+        except tk.TclError:
+            return
+        if current != str(self.stage_health_tab):
+            return
         files = self._selected_files()
-        media_path = files[0] if files and os.path.exists(files[0]) else ""
+        panel.set_media_path(
+            files[0] if files and os.path.exists(files[0]) else "", auto=True)
+        panel.sync_cues()
 
-        def on_fixed(new_cues):
-            self.cues = new_cues
-            self.apply_text_edits()
+    def _go_to_health_stage(self, publish=None):
+        """
+        切到階段③健檢中心（v2.2.0 起取代「開一個健檢中心視窗」）。
 
-        def on_media_fixed(path, source):
-            self.adopt_media(path, "audiofix", source)
-
-        HealthCenterDialog(self, self.config_data, media_path=media_path,
-                           cues=list(getattr(self, "cues", []) or []),
-                           on_fixed=on_fixed,
-                           on_media_fixed=on_media_fixed,
-                           publish=publish)
+        ``publish`` 有給時（階段④〔送健檢中心〕按下來的），標題／說明欄
+        ／標籤／章節／封面候選直接填進對象區——以前這些全都要使用者自己
+        複製貼上，那正是稽核 ④「產出端與檢查端斷鏈」最實際的痛點。
+        """
+        self.notebook.select(self.stage_health_tab)
+        self._on_stage_tab_changed()
+        if publish:
+            self.health_panel.prefill_publish(publish)
 
     def _open_branding_dialog(self):
         """開啟品牌套版：以第一個選取檔案為預設影片（可留空自行選擇）。"""
@@ -1614,7 +1628,8 @@ class SrtApp(tk.Tk):
 
     def _open_subtitle_check_dialog(self):
         """
-        原「字幕健檢」按鈕：v1.50.0 起改開健檢中心。
+        原「字幕健檢」按鈕：v1.50.0 起改開健檢中心，v2.2.0 起改成切到
+        階段③頁籤（健檢中心已內嵌，不再另開視窗）。
 
         字幕健檢原本不需要選影片就能跑純文字檢查，健檢中心保留這個
         能力——沒有選影片時只會略過需要媒體檔的項目，不會擋住這裡的
@@ -1624,16 +1639,8 @@ class SrtApp(tk.Tk):
         if not self.cues:
             messagebox.showinfo("提示", "目前沒有字幕可健檢，請先生成或匯入字幕。")
             return
-
-        def on_fixed(new_cues):
-            self.cues = new_cues
-            self.apply_text_edits()
-
-        files = self._selected_files()
-        media_path = files[0] if files and os.path.exists(files[0]) else ""
-        HealthCenterDialog(self, self.config_data, media_path=media_path,
-                           cues=self.cues, on_fixed=on_fixed)
-        self.status_var.set("「字幕健檢」已整併至健檢中心。")
+        self._go_to_health_stage()
+        self.status_var.set("「字幕健檢」已整併至健檢中心（階段③）。")
 
     def _open_jumpcut_dialog(self):
         """開啟自動修剪並停在「剪停頓（依字幕）」分頁。"""

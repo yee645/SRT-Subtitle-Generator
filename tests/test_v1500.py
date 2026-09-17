@@ -22,7 +22,7 @@ docs/ROADMAP_2.0.md v1.50 項）。
      幕，實際跑一次健檢中心的彙總掃描，確認報告內容合理、無例外。
   4. 沒有選素材時，純文字的字幕相關檢查仍照跑（這是舊「字幕健檢」視
      窗本來就有、最容易在整併時被誤收緊的能力）。
-  5. Xvfb 下開出真正的 `HealthCenterDialog`：勾選項齊全、進階設定視窗
+  5. Xvfb 下開出真正的健檢中心：勾選項齊全、進階設定視窗
      打得開、跑完真的把結果塞進 `ttk.Treeview`、選取可修項目會啟用
      「修復此項」按鈕、`gui/app.py` 的三顆舊按鈕都改開這個視窗並在狀
      態列留下「已整併至健檢中心」訊息。
@@ -61,7 +61,7 @@ audiocheck_src = _read("gui/audiocheck_dialog.py")
 subcheck_src = _read("gui/subtitle_check_dialog.py")
 preflight_src = _read("gui/preflight_dialog.py")
 aggregator_src = _read("gui/health_aggregator.py")
-center_src = _read("gui/health_center_dialog.py")
+center_src = _read("gui/health_center_panel.py")
 app_src = _read("gui/app.py")
 
 check("三個舊視窗檔案仍在 repo 裡、完全未被修改（回退性：D-3 只改按鈕指向）",
@@ -76,8 +76,11 @@ check("gui/app.py 不再 import SubtitleCheckDialog（改開健檢中心）",
       "SubtitleCheckDialog" not in app_src)
 check("gui/app.py 不再 import PreflightDialog（改開健檢中心）",
       "PreflightDialog" not in app_src)
-check("gui/app.py 改為 import HealthCenterDialog",
-      "from gui.health_center_dialog import HealthCenterDialog" in app_src)
+# v2.2.0：健檢中心從 Toplevel 改成主視窗階段③的頁籤內容
+# （gui/health_center_panel.py 的 HealthCenterPanel），檔名與類別名隨之
+# 改變。這條斷言要守的不變式沒變：主視窗是由那個模組取得健檢中心的。
+check("gui/app.py 由 gui/health_center_panel.py 取得健檢中心",
+      "from gui.health_center_panel import HealthCenterPanel" in app_src)
 # v1.50.0 原文寫死「三顆舊按鈕」「== 3」，是當時工具列上「上片前健檢」
 # 「上片前總體檢」＋清單編輯列「字幕健檢」三顆過渡期轉址鈕的精確數字。
 # v1.51.0 依 D-3「原位保留一版、下一版才移除按鈕」的承諾，這一版把已經
@@ -86,9 +89,9 @@ check("gui/app.py 改為 import HealthCenterDialog",
 # 「字幕健檢」（清單編輯列，不在本次「工具列 11→6」範圍內，未被本版
 # 觸碰）還留著同一句轉址訊息。因此這裡放寬成「至少 1 顆」，真正精確的
 # 現況數字改由 tests/test_v1510.py 斷言（見該檔工具列一節）。
-check("至少還有一顆入口會開 HealthCenterDialog（健檢中心新按鈕 + 尚未"
+check("主視窗至少有一條路徑到得了健檢中心（建立頁籤內容；尚未"
       "移除的「字幕健檢」轉址鈕）",
-      app_src.count("HealthCenterDialog(") >= 1)
+      app_src.count("HealthCenterPanel(") >= 1)
 check("「已整併至健檢中心」轉址訊息至少還留著一則（字幕健檢；工具列上"
       "的兩顆已在 v1.51.0 走完轉址期正式移除，見 test_v1510.py）",
       app_src.count("已整併至健檢中心") >= 1)
@@ -339,7 +342,7 @@ else:
 
 # ===== 7. 全站規範：進階設定視窗全用 ttk 控件（無 classic Checkbutton/Radiobutton）==
 
-for path, src in (("gui/health_center_dialog.py", center_src),
+for path, src in (("gui/health_center_panel.py", center_src),
                   ("gui/health_aggregator.py", aggregator_src)):
     # "ttk.Checkbutton(" 本身以子字串包含 "tk.Checkbutton("，比對前先拿掉
     # ttk. 開頭的合法用法，沿用 tests/test_v1240.py 既有的比對手法。
@@ -355,28 +358,35 @@ for path, src in (("gui/health_center_dialog.py", center_src),
 
 try:
     import tkinter as tk
-    from gui.health_center_dialog import (HealthCenterDialog,
-                                          HealthSettingsDialog)
+    from gui.health_center_panel import (HealthCenterPanel,
+                                         HealthSettingsDialog)
 
     root = tk.Tk()
     root.geometry("60x60+0+0")
     root.deiconify()
     root.update()
 
-    dlg = HealthCenterDialog(root, {}, media_path="",
-                             cues=list(no_media_cues))
-    dlg.deiconify()
+    # v2.2.0：健檢中心是頁籤內容而不是視窗了，本測試自備一個容器視窗把
+    # 它裝起來量（主視窗裡的實測版面另由 tests/test_v1501.py 掃）。
+    host = tk.Toplevel(root)
+    host.geometry("1120x900")
+    dlg = HealthCenterPanel(host, {}, media_path="",
+                            cues=list(no_media_cues))
+    dlg.pack(fill="both", expand=True)
+    host.deiconify()
     for _ in range(10):
         root.update()
+        host.update()
 
     # v1.51.0 再加 3 顆可勾選（發佈健檢／封面健檢／章節健檢），精確數字
     # 改由 tests/test_v1510.py 斷言；這裡放寬為「至少 14 顆」。
     check("健檢中心開窗時至少有 14 顆可勾選＋1 顆一律檢查（檔名）",
           len(dlg.check_vars) >= 14, str(len(dlg.check_vars)))
-    check("健檢中心預設尺寸是文件講的『約 900x760』量級",
-          dlg.winfo_width() >= 800 and dlg.winfo_height() >= 700)
+    check("健檢中心在 1120x900 的版面裡拿得到文件講的『約 900x760』量級",
+          dlg.winfo_width() >= 800 and dlg.winfo_height() >= 700,
+          f"{dlg.winfo_width()}x{dlg.winfo_height()}")
 
-    settings_dlg = HealthSettingsDialog(dlg, dict(dlg.config_data))
+    settings_dlg = HealthSettingsDialog(host, dict(dlg.config_data))
     settings_dlg.deiconify()
     for _ in range(10):
         root.update()
@@ -426,7 +436,7 @@ try:
                     check("Xvfb 實跑：選取可修項目後「修復此項」按鈕啟用",
                           str(dlg.fix_btn.cget("state")) == "normal")
 
-    dlg.destroy()
+    host.destroy()
     root.destroy()
 except tk.TclError as exc:  # pragma: no cover - 沒有可用顯示環境時優雅略過
     print(f"SKIP Xvfb 視窗測試（無可用顯示環境）：{exc}")

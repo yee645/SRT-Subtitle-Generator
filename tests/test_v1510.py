@@ -10,7 +10,7 @@ thumbcheck_dialog／chapter_dialog 併進健檢中心，`termcheck.apply_term_fi
 案（`gui/publishcheck_dialog.py`／`gui/thumbcheck_dialog.py`／
 `gui/chapter_dialog.py`／`gui/series_dialog.py`——四個檔案本身完全未被
 修改，仍在 repo 裡）的原始碼，逐一確認每個舊有的分析函式、修復函式在新
-的 `gui/health_aggregator.py`（或 `gui/health_center_dialog.py`，系列一
+的 `gui/health_aggregator.py`（或 `gui/health_center_panel.py`，系列一
 致性走這條）仍被呼叫到。
 
 其餘涵蓋：
@@ -26,7 +26,7 @@ thumbcheck_dialog／chapter_dialog 併進健檢中心，`termcheck.apply_term_fi
   5. `apply_term_fixes` 真的被呼叫得到、真的會修改字幕文字。
   6. `chaptercheck.fix_chapters` 透過新的 `apply_text_fix("chapter_fix")`
      介面被呼叫得到、真的會修改章節文字。
-  7. Xvfb 下開出真正的 `HealthCenterDialog`：對象區有封面圖／發佈文字
+  7. Xvfb 下開出真正的健檢中心：對象區有封面圖／發佈文字
      （可摺疊）／系列影片三個新區塊、系列一致性視窗開得起來、
      checklist 從 14 顆變 17 顆（+1 顆一律檢查的檔名）。
   8. `gui/app.py`：工具列 11→6 顆，四個舊視窗的 import 都不見了，但
@@ -69,7 +69,7 @@ thumb_src = _read("gui/thumbcheck_dialog.py")
 chapter_src = _read("gui/chapter_dialog.py")
 series_src = _read("gui/series_dialog.py")
 aggregator_src = _read("gui/health_aggregator.py")
-center_src = _read("gui/health_center_dialog.py")
+center_src = _read("gui/health_center_panel.py")
 app_src = _read("gui/app.py")
 termcheck_src = _read("subtitle/termcheck.py")
 
@@ -89,7 +89,7 @@ check("gui/app.py 不再 import ChapterCheckDialog（改由健檢中心對象區
       "ChapterCheckDialog" not in app_src)
 check("gui/app.py 不再 import SeriesCheckDialog（入口移進健檢中心對象區）",
       "SeriesCheckDialog" not in app_src)
-check("gui/health_center_dialog.py 改為 import SeriesCheckDialog（系列一致"
+check("gui/health_center_panel.py 改為 import SeriesCheckDialog（系列一致"
       "性依退路保留為獨立視窗，入口搬進對象區）",
       "from gui.series_dialog import SeriesCheckDialog" in center_src)
 
@@ -133,7 +133,7 @@ SERIES_FUNCS = ("analyze_series", "format_series_report")
 for func in SERIES_FUNCS:
     check(f"舊 series_dialog 呼叫過的 {func}() 仍在（檔案未修改，只是入口"
           "搬家）", func in series_src)
-check("gui/health_center_dialog.py 有一顆會開 SeriesCheckDialog 的按鈕",
+check("gui/health_center_panel.py 有一顆會開 SeriesCheckDialog 的按鈕",
       "SeriesCheckDialog(" in center_src)
 
 # --- 1e. termcheck.apply_term_fixes 首次接上 GUI ---
@@ -332,7 +332,7 @@ else:
 
 try:
     import tkinter as tk
-    from gui.health_center_dialog import HealthCenterDialog
+    from gui.health_center_panel import HealthCenterPanel
     from gui.series_dialog import SeriesCheckDialog
 
     root = tk.Tk()
@@ -340,15 +340,21 @@ try:
     root.deiconify()
     root.update()
 
-    dlg = HealthCenterDialog(root, {}, media_path="", cues=[])
-    dlg.deiconify()
+    # v2.2.0：健檢中心是頁籤內容而不是視窗了，自備一個容器視窗裝起來量。
+    host = tk.Toplevel(root)
+    host.geometry("1120x900")
+    dlg = HealthCenterPanel(host, {}, media_path="", cues=[])
+    dlg.pack(fill="both", expand=True)
+    host.deiconify()
     for _ in range(20):
         root.update()
+        host.update()
 
-    check("健檢中心開窗時有 17 顆可勾選＋1 顆一律檢查（檔名）",
+    check("健檢中心有 17 顆可勾選＋1 顆一律檢查（檔名）",
           len(dlg.check_vars) == 17, str(len(dlg.check_vars)))
-    check("健檢中心預設尺寸仍在合理量級（不小於文件講的『約 900x760』）",
-          dlg.winfo_width() >= 900 and dlg.winfo_height() >= 760)
+    check("健檢中心在 1120x900 的版面裡拿得到『約 900x760』量級",
+          dlg.winfo_width() >= 900 and dlg.winfo_height() >= 760,
+          f"{dlg.winfo_width()}x{dlg.winfo_height()}")
 
     check("對象區有封面圖清單（thumb_list）", hasattr(dlg, "thumb_list"))
     check("對象區有發佈文字四個欄位（標題／說明欄／標籤／章節）",
@@ -361,6 +367,7 @@ try:
           and not dlg.publish_body.winfo_ismapped())
     dlg._toggle_publish()
     root.update()
+    host.update()
     check("點一下展開後，發佈文字欄位變成看得到",
           dlg._publish_expanded and dlg.publish_body.winfo_ismapped())
 
@@ -369,7 +376,7 @@ try:
     dlg._series_paths = ["/tmp/不存在的檔案.mp4"]
     series_ok = True
     try:
-        series_dlg = SeriesCheckDialog(dlg, dlg.config_data,
+        series_dlg = SeriesCheckDialog(host, dlg.config_data,
                                        list(dlg._series_paths))
         series_dlg.deiconify()
         root.update()
@@ -381,8 +388,8 @@ try:
     check("系列一致性視窗開啟過程沒有例外", series_ok)
 
     settings_dlg_cls = None
-    from gui.health_center_dialog import HealthSettingsDialog
-    settings_dlg = HealthSettingsDialog(dlg, dict(dlg.config_data))
+    from gui.health_center_panel import HealthSettingsDialog
+    settings_dlg = HealthSettingsDialog(host, dict(dlg.config_data))
     settings_dlg.deiconify()
     for _ in range(10):
         root.update()
@@ -391,7 +398,7 @@ try:
           and hasattr(settings_dlg, "thumb_width_var")
           and hasattr(settings_dlg, "chapter_min_seconds_var"))
     settings_dlg.destroy()
-    dlg.destroy()
+    host.destroy()
 
     # ---- app.py 工具列：11→6 顆 ----
     from tkinter import ttk as _ttk
@@ -421,8 +428,17 @@ try:
                      "封面健檢", "發佈健檢"}
     check("工具列六顆舊健檢類按鈕文字都不見了（併入健檢中心／對象區）",
           not (expected_gone & set(all_texts)), str(set(all_texts)))
-    check("工具列出現新的「健檢中心」按鈕",
-          "健檢中心" in all_texts)
+    # v2.2.0：健檢中心不再是「按一下開窗」的按鈕，它整個就是階段③頁籤
+    # 的內容，入口即頁籤本身。要守的不變式沒變——主視窗上有一個明確叫
+    # 「健檢中心」的地方進得去——但改成對著現在真正的入口驗，而且順帶
+    # 驗它真的裝著健檢中心（只有標籤對、內容是空的也算壞掉）。
+    tab_labels = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
+    check("主視窗有一個叫「健檢中心」的階段頁籤",
+          any("健檢中心" in label for label in tab_labels), str(tab_labels))
+    check("那個頁籤裝的就是健檢中心本體（有勾選清單與開始健檢鈕）",
+          hasattr(app, "health_panel")
+          and len(app.health_panel.check_vars) == 17
+          and str(app.health_panel.run_btn.cget("text")) == "開始健檢")
     app.destroy()
 except tk.TclError as exc:
     # 只有「連不上顯示器」才算合理略過。其餘 TclError 是真的程式錯誤
@@ -440,7 +456,7 @@ except tk.TclError as exc:
 
 # ===== 7. 全站規範：本版新增/改動的檔案全用 ttk 控件 ======================
 
-for path, src in (("gui/health_center_dialog.py", center_src),
+for path, src in (("gui/health_center_panel.py", center_src),
                   ("gui/health_aggregator.py", aggregator_src),
                   ("gui/app.py", app_src)):
     stripped = src.replace("ttk.Checkbutton(", "").replace(

@@ -146,8 +146,24 @@ else:
     old_methods = set(re.findall(r"def (\w+)\(", old_app_src))
     new_methods = set(re.findall(r"def (\w+)\(", app_src))
     missing_methods = old_methods - new_methods
+    # 計畫內改名：舊方法沒了，但它做的事由指名的新方法接手，而且新名字
+    # 必須真的存在——否則就是能力真的不見了。比照上面按鈕文字的
+    # `planned_renames` 作法（只放行有接手者的那一個名字，不是整條放寬）。
+    planned_method_renames = {
+        # v2.2.0：健檢中心從 Toplevel 變成階段③頁籤內容，「開一個健檢中心
+        # 視窗」這件事本身不存在了，改成「切到階段③（順便帶入發佈資料）」。
+        "_open_health_center_dialog": "_go_to_health_stage",
+    }
+    for old_name, new_name in planned_method_renames.items():
+        if old_name in missing_methods and new_name in new_methods:
+            missing_methods.discard(old_name)
     check(f"v1.51.0 的所有方法（共 {len(old_methods)} 個）在 v1.52.0 "
-          "一個不少", not missing_methods, str(missing_methods))
+          "一個不少（計畫內改名需有指名的接手者）",
+          not missing_methods, str(missing_methods))
+    check("計畫內改名的方法，接手者確實存在（不是悄悄不見）",
+          all(new_name in new_methods
+              for new_name in planned_method_renames.values()),
+          str(planned_method_renames))
     added_methods = new_methods - old_methods
     # v1.52.0 時這裡斷言「只新增兩個方法」；v1.52.1 第一輪改成「名字必須
     # 像版面建構類」的正則。第二輪發現那個正則其實鬆掉了——`_on_*` 是事
@@ -174,10 +190,13 @@ else:
         "adopt_media", "adopt_publish", "adopt_thumbnails",
         "_refresh_publish_card", "_build_publish_section",
         "_on_send_publish_to_health", "_on_clear_publish",
-        "on_media_fixed",  # ↑ _open_health_center_dialog 之內的巢狀 callback
+        "on_media_fixed",  # ↑ 健檢中心那段之內的巢狀 callback
         # v1.52.3：跳剪與重複片段兩個視窗併成 gui/autotrim_dialog.py，兩顆
         # 入口都保留、各自開到對應分頁，共用這個開窗方法。
         "_open_autotrim_dialog",
+        # v2.2.0 B.5：健檢中心內嵌成階段③頁籤內容。切頁籤時同步對象，
+        # 並以切頁籤取代開窗（`_open_health_center_dialog` 的接手者）。
+        "_on_stage_tab_changed", "_go_to_health_stage",
     }
     unexpected = added_methods - expected_new_methods
     check("新增的方法都在本版白名單內，沒有夾帶計畫外的新邏輯",
@@ -489,8 +508,18 @@ try:
     # `_refresh_action_buttons`），單檔情境下不在畫面上是正確行為。這裡
     # 排除它不是放過檢查——它的存在與位置由下面「多檔時批次鈕會出現」
     # 那一組斷言單獨守住。
+    # 健檢中心（v2.2.0 起是階段③的頁籤內容）對象區裡的三個摺疊區也是
+    # **刻意**收合的：封面圖、發佈文字、系列影片預設不展開，因為頁籤上半
+    # 部只有約 260px，那三塊攤開會把每次都要用的 18 項勾選擠到捲不到的地
+    # 方。收合區裡的按鈕當然 unmapped，那是設計而不是被版面擠掉。
+    # 同樣地，排除它們不是放過檢查——「預設收合／點一下展開／帶資料進來
+    # 自動展開」由 tests/test_v220.py 與 tests/test_v1510.py 單獨守住，
+    # 三顆切換鈕本身則照常在這個掃描裡。
+    _panel = app.health_panel
     unmapped = scan_unmapped_all_tabs(
-        app, excluded_roots=(app.transcript_frame, app.auto_btn))
+        app, excluded_roots=(app.transcript_frame, app.auto_btn,
+                             _panel.thumb_body, _panel.publish_body,
+                             _panel.series_body))
     check("1400x800：沒有互動控件因版面擠不下而整個消失（逐頁籤檢查；比"
           "裁切更嚴重，施工時真的踩過——10 顆按鈕擠一列時後 4 顆被 pack "
           "擠到寬度 1px/未 map）",
