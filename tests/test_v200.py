@@ -129,21 +129,66 @@ def pull(text, pattern, label):
         return None
     return match.group(1)
 
+# CHANGELOG 只抓 v2.0.0 那一節：v2.2.0 起後續版本各自有自己的實測表，
+# 拿整份檔案去 re.search 只會抓到最上面那一版的數字（那是 2.2 的，不是
+# 2.0 的）。鎖到版本區段之後這條反而比原本更嚴——它現在比的真的是 2.0。
+def section(text, heading):
+    if heading not in text:
+        return ""
+    body = text.split(heading, 1)[1]
+    nxt = re.search(r"\n## v", body)
+    return body[:nxt.start()] if nxt else body
+
+
+changelog_200 = section(changelog, "## v2.0.0")
+check("CHANGELOG 的 v2.0.0 區段抓得到", bool(changelog_200.strip()))
+
 doc_clicks = pull(whats_new, r"\|\s*點擊\s*\|[^|]*\|\s*\*\*(\d+)\s*次\*\*", "主文件點擊")
 doc_windows = pull(whats_new, r"\|\s*開啟視窗\s*\|[^|]*\|\s*\*\*(\d+)\s*個\*\*", "主文件視窗")
-log_clicks = pull(changelog, r"\|\s*點擊\s*\|[^|]*\|\s*\*\*(\d+)\s*次\*\*", "CHANGELOG 點擊")
-log_windows = pull(changelog, r"\|\s*開啟視窗\s*\|[^|]*\|\s*\*\*(\d+)\s*個\*\*", "CHANGELOG 視窗")
-dlg_clicks = pull(dialog, r"點擊[^\n]*?→\s*(\d+)\s*次", "速覽點擊")
-dlg_windows = pull(dialog, r"開啟視窗[^\n]*?→\s*(\d+)\s*個", "速覽視窗")
+log_clicks = pull(changelog_200, r"\|\s*點擊\s*\|[^|]*\|\s*\*\*(\d+)\s*次\*\*", "CHANGELOG 點擊")
+log_windows = pull(changelog_200, r"\|\s*開啟視窗\s*\|[^|]*\|\s*\*\*(\d+)\s*個\*\*", "CHANGELOG 視窗")
 
-check("三處的「點擊數」是同一個數字（主文件／CHANGELOG／程式內速覽）",
-      doc_clicks == log_clicks == dlg_clicks == MEASURED["clicks_new"].split()[0],
-      f"主文件={doc_clicks} CHANGELOG={log_clicks} 速覽={dlg_clicks} "
+check("2.0 的「點擊數」在主文件與 CHANGELOG v2.0.0 區段是同一個數字",
+      doc_clicks == log_clicks == MEASURED["clicks_new"].split()[0],
+      f"主文件={doc_clicks} CHANGELOG={log_clicks} "
       f"應為={MEASURED['clicks_new']}")
-check("三處的「視窗數」是同一個數字",
-      doc_windows == log_windows == dlg_windows == MEASURED["windows_new"].split()[0],
-      f"主文件={doc_windows} CHANGELOG={log_windows} 速覽={dlg_windows} "
+check("2.0 的「視窗數」是同一個數字",
+      doc_windows == log_windows == MEASURED["windows_new"].split()[0],
+      f"主文件={doc_windows} CHANGELOG={log_windows} "
       f"應為={MEASURED['windows_new']}")
+
+# 程式內速覽只有一份、跟著最新版走，所以它比的對象是**最新那一份新功能
+# 介紹**，不是 2.0 那一份（原本寫死比 2.0，是「當下狀態」的斷言：2.2 起
+# 速覽顯示的必然是新數字，寫死就只會逼人把速覽留在過期的數字上）。
+def latest_whats_new():
+    best = None
+    for name in os.listdir(os.path.join(ROOT, "docs")):
+        m = re.fullmatch(r"WHATS_NEW_(\d+)\.(\d+)\.md", name)
+        if m:
+            key = (int(m.group(1)), int(m.group(2)))
+            if best is None or key > best[0]:
+                best = (key, name)
+    return best
+
+
+_latest = latest_whats_new()
+check("找得到最新一份新功能介紹", _latest is not None)
+if _latest is not None:
+    latest_name = _latest[1]
+    latest_doc = read("docs", latest_name)
+    latest_clicks = pull(latest_doc,
+                         r"\|\s*點擊\s*\|[^|]*\|\s*\*\*(\d+)\s*次\*\*",
+                         f"{latest_name} 點擊")
+    latest_windows = pull(latest_doc,
+                          r"\|\s*開啟視窗\s*\|[^|]*\|\s*\*\*(\d+)\s*個\*\*",
+                          f"{latest_name} 視窗")
+    dlg_clicks = pull(dialog, r"點擊[^\n]*?→\s*(\d+)\s*次", "速覽點擊")
+    dlg_windows = pull(dialog, r"開啟視窗[^\n]*?→\s*(\d+)\s*個", "速覽視窗")
+    check(f"程式內速覽的點擊數與最新一份介紹（{latest_name}）一致",
+          dlg_clicks == latest_clicks, f"速覽={dlg_clicks} 文件={latest_clicks}")
+    check(f"程式內速覽的視窗數與最新一份介紹（{latest_name}）一致",
+          dlg_windows == latest_windows,
+          f"速覽={dlg_windows} 文件={latest_windows}")
 
 for label, value in MEASURED.items():
     check(f"實測值「{value}」（{label}）在主文件與 CHANGELOG 都出現",
@@ -156,7 +201,7 @@ for value in (MEASURED["y_new"], MEASURED["y_old"]):
 check("主文件誠實交代實測比預估差，並寫出原因（不是拿預估值充數）",
       "20 次" in whats_new and "校對" in whats_new,
       "沒有找到對預估落差的說明")
-check("CHANGELOG 同樣交代了落差", "20 次" in changelog)
+check("CHANGELOG 的 v2.0.0 區段同樣交代了落差", "20 次" in changelog_200)
 
 
 # ===== 4. 程式內速覽補上「新增了什麼」那一半 =========================
@@ -174,9 +219,11 @@ else:
     for title, detail in NEW_FEATURES:
         check(f"新能力條目「{title[:16]}」有寫實際內容、不是只有標題",
               len(detail) >= 20, f"{len(detail)} 字")
-    check("速覽的省力數字與文件同一組",
-          all(v in SAVINGS_TEXT for v in
-              (MEASURED["clicks_new"], MEASURED["windows_new"])))
+    # 速覽跟著最新版走，所以這裡驗的是「它和最新那份介紹講同一組數字」，
+    # 上面已經逐一比過；這裡只再確認它真的寫了兩個數字、不是空的。
+    check("速覽真的寫出了省力數字（不是只有標題）",
+          "點擊" in SAVINGS_TEXT and "開啟視窗" in SAVINGS_TEXT
+          and re.search(r"→\s*\d+\s*次", SAVINGS_TEXT) is not None)
     check("速覽仍說明「一鍵完成」為什麼拆", "校對" in SPLIT_TEXT)
 
     # 版本規則：2.0 要對 1.52.x 的使用者再跳一次（他們沒看過新能力那半）。

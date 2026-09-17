@@ -194,13 +194,13 @@ check("對話框無 classic tk.Checkbutton/Radiobutton 殘留",
 
 with open(os.path.join(root, "gui", "app.py"), encoding="utf-8") as fp:
     app_src = fp.read()
-with open(os.path.join(root, "gui", "health_center_dialog.py"),
+with open(os.path.join(root, "gui", "health_center_panel.py"),
          encoding="utf-8") as fp:
     center_src = fp.read()
 # v1.51.0：健檢中心（二）把「系列一致性」的入口從主視窗工具列移進健檢
 # 中心的對象區（保留為獨立視窗，未併進單支分級報告——見
 # docs/UI_AUDIT_2.0.md 2.2 節預留的退路），工具列本身收成 6 顆、不再有
-# 系列一致性這顆按鈕；SeriesCheckDialog 改由 gui/health_center_dialog.py
+# 系列一致性這顆按鈕；SeriesCheckDialog 改由 gui/health_center_panel.py
 # import 並開啟，能力（開始比對／檔案管理／背景執行緒）完全未變，
 # 詳見 tests/test_v1510.py。
 check("系列一致性不再是主視窗工具列按鈕，改由健檢中心對象區開啟"

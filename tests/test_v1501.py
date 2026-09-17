@@ -11,6 +11,11 @@ v1.50.0 出貨時「進階設定（門檻）⚙」被 `pack(side="right")` 與�
 
 注意：一定要在 `deiconify()` 之後才量。未顯示的視窗其子元件一律回報
 `winfo_ismapped()=0`、寬高 1px，在那之前量會誤判（這個坑 v1.48.0 踩過）。
+
+v2.2.0：健檢中心從 Toplevel 變成主視窗階段③的頁籤內容，本測試跟著改掃
+**主視窗預設尺寸（1400x800）下的那個頁籤**——比原本自己開一個 1120x900
+的視窗來掃更接近使用者看到的東西（頁籤拿到的高度比獨立視窗少得多，裁
+切的風險只會更高，不會更低）。
 """
 import os
 import sys
@@ -30,25 +35,25 @@ if not os.environ.get("DISPLAY"):
     sys.exit(0)
 
 import tkinter as tk
-from gui.health_center_dialog import HealthCenterDialog
-from config import DEFAULT_CONFIG
+from gui.app import SrtApp
 
-# root 不 withdraw、且每輪 root 與 dlg 都要 update：只更新 root 時
-# Toplevel 的版面不會被算出來，量到的會是 1x1 的假值（本測試第一條斷言
-# 就是為了擋下這種誤判而存在）。
-root = tk.Tk()
-root.geometry("400x300")
-root.update()
-dlg = HealthCenterDialog(root, dict(DEFAULT_CONFIG), media_path="", cues=[])
-dlg.deiconify()
-for _ in range(30):
-    root.update()
-    dlg.update()
-    time.sleep(0.05)
+# 用真的主視窗、真的預設尺寸：健檢中心現在是階段③的頁籤內容，它拿得到
+# 多少版面由主視窗決定，自己開一個大視窗來量等於沒量。
+app = SrtApp()
+app.geometry("1400x800")
+app.deiconify()
+for _ in range(20):
+    app.update()
+    time.sleep(0.02)
+app.notebook.select(app.stage_health_tab)
+for _ in range(20):
+    app.update()
+    time.sleep(0.02)
+dlg = app.health_panel
 
 win_w = dlg.winfo_width()
 win_h = dlg.winfo_height()
-check("視窗有真的顯示出來（否則量到的都是 1px 假值）",
+check("健檢中心頁籤有真的顯示出來（否則量到的都是 1px 假值）",
       win_w > 100 and win_h > 100, f"{win_w}x{win_h}")
 
 clipped = []
@@ -103,8 +108,7 @@ if found:
           btn.winfo_width() >= btn.winfo_reqwidth(),
           f"需要{btn.winfo_reqwidth()}px 只有{btn.winfo_width()}px")
 
-dlg.destroy()
-root.destroy()
+app.destroy()
 
 print()
 if failures:

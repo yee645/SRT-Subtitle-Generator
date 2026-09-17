@@ -16,6 +16,12 @@ v1.51.0 再併入「發佈健檢」「封面健檢」「章節健檢」三個異
 `ttk.Treeview` 分級清單，選取一筆發現即顯示詳情與建議，可修的項目按
 「修復此項」直接呼叫既有的修復函式。
 
+v2.2.0 起它不再是 Toplevel，而是主視窗階段③的頁籤內容（架構文件 B.5 一
+開始就是這樣寫的，1.52.1 只先搬了入口）——檔名也從 health_center_dialog
+改成 health_center_panel。結構與能力一項未動，差別只在三處：沒有〔關
+閉〕鈕；捲動區高度隨視窗按比例配而不是寫死 560px；佇列輪詢只在背景工作
+進行中才排程。
+
 真正的分析與修復邏輯完全在 `gui/health_aggregator.py`（可離線單元測試）
 與各 `subtitle/` 模組；本檔案只負責畫面與背景執行緒調度。
 """
@@ -70,27 +76,51 @@ _LEVEL_LABELS = (("一定要修", LEVEL_BAD), ("建議修", LEVEL_WARN),
                  ("通過", LEVEL_GOOD))
 _CHECKLIST_COLUMNS = 3
 
+# 對象區＋檢查清單那塊捲動區的高度預算（見 `_fit_top_height`）。
+#
+# 先扣掉下半部一定要留的高度、剩下的才給捲動區——不是反過來按比例分。
+# 按比例分的話，視窗一矮，下半部就跟著等比縮水，而下半部有一顆「修復此
+# 項」按鈕壓不得（1.51.0 踩過：詳情區只分到 64px，按鈕看得到按不到）。
+# 上半部本來就在捲動區裡，少看幾列只是多捲一下。
+#
+# 保留額 = 狀態列＋進度條＋主動作那一列（實測 80px）＋分級報告區下限
+#        （286px：清單看得到幾列＋詳情區 170px 容得下四行與按鈕）
+#        ＋body 內距 24px
+# 數字是量出來的：主視窗預設 1400x800 時本頁籤高 652px，扣掉這 390px 之
+# 後上半部拿到 262px，而上半部並排後的內容高度實測 255px——剛好不必捲。
+_BOTTOM_RESERVE = 390
+# 上半部左右並排（檢查對象｜要跑哪些檢查）所需的最小寬度；比這窄就上下
+# 疊回去（沿用 gui/app.py 主視窗三欄退化規則的同一個作法）。
+_SIDE_BY_SIDE_WIDTH = 1100
 
-class HealthCenterDialog(tk.Toplevel):
-    """健檢中心視窗：選對象→勾選檢查→開始健檢→分級清單＋逐項修復。"""
+_TOP_HEIGHT_MIN = 120
+_TOP_HEIGHT_MAX = 560
+
+
+def _clamp_top_height(panel_height):
+    """由頁籤高度算出捲動區該吃多少高度（純算式，可離線測）。"""
+    return max(_TOP_HEIGHT_MIN,
+               min(_TOP_HEIGHT_MAX, panel_height - _BOTTOM_RESERVE))
+
+
+class HealthCenterPanel(ttk.Frame):
+    """健檢中心頁籤：選對象→勾選檢查→開始健檢→分級清單＋逐項修復。"""
 
     def __init__(self, master, config_data, media_path="", cues=None,
-                on_fixed=None, on_media_fixed=None, publish=None):
+                on_fixed=None, on_media_fixed=None, publish=None,
+                get_cues=None):
         super().__init__(master)
-        self.title("健檢中心：影片、字幕、封面與發佈資訊的所有健檢，一次跑完")
-        # 高度刻意壓在 900 而不是把所有內容一次攤開所需的 1020：1080p
-        # 螢幕扣掉工作列只剩約 1032px，1020 幾乎貼死，更小的筆電螢幕會把
-        # 底部的「修復此項」整個推出畫面。對象區與檢查項本來就在可捲動區
-        # 裡（實測垂直溢出 61px，捲一下就到），少看幾列的代價遠小於按鈕
-        # 看不見。
-        self.geometry("1120x900")
-        self.minsize(980, 700)
-        self.transient(master)
 
         self.config_data = config_data
         self.on_fixed = on_fixed
         # v1.52.2：修復版做出來之後回報給主視窗接手（稽核 ④ 斷鏈修復）。
         self.on_media_fixed = on_media_fixed
+        # v2.2.0：內嵌之後字幕不能再是「開窗當下的快照」——使用者在階段②
+        # 改完字幕、切回階段③重跑，報告要講新句子。有給 get_cues 就每次
+        # 健檢前現拿；使用者若自己用〔瀏覽...〕指定了字幕檔，那是明示的
+        # 覆寫，不再被主視窗蓋掉。
+        self.get_cues = get_cues
+        self.cues_overridden = False
         self.result_queue = queue.Queue()
         self.is_processing = False
         self.is_fixing = False
@@ -101,38 +131,120 @@ class HealthCenterDialog(tk.Toplevel):
         self._thumb_paths = []
         self._series_paths = []
         self._publish_expanded = False
+        self._poll_job = None
+        # messagebox／filedialog 的 parent 要的是視窗；本類別是頁籤內容、
+        # 自己不是視窗，一律指向所屬主視窗。
+        self._window = self.winfo_toplevel()
 
         body = ttk.Frame(self, padding=12)
         body.pack(fill="both", expand=True)
 
         # 對象區在 v1.51.0 擴充（封面圖／發佈文字／系列影片）後，展開
         # 「發佈文字」摺疊區＋18 項檢查清單全展開時的總高度會超過任何
-        # 合理的預設視窗高度（實測需要 1300px 以上）。仿照
-        # `HealthSettingsDialog` 已經在用的做法：把這段低頻捲動的內容
-        # 包進 `ScrollableFrame`、給一個固定高度預算，讓「開始健檢」與
-        # 分級報告永遠留在視窗下半部可見，不會被對象區展開撐到畫面外
-        # （這正是 docs/ROADMAP_2.0.md 點名的「靠看的」版面判斷會漏掉
-        # 的那種垂直溢位，本檔案改用量測＋螢幕截圖雙重驗證）。
-        top_wrap = ttk.Frame(body, height=560)
-        top_wrap.pack(fill="x")
-        top_wrap.pack_propagate(False)
+        # 合理的視窗高度（實測需要 1300px 以上）。把這段低頻捲動的內容
+        # 包進 `ScrollableFrame`、給一個高度預算，讓「開始健檢」與分級
+        # 報告永遠留在下半部可見，不會被對象區展開撐到畫面外。
+        #
+        # v2.2.0：那個預算原本寫死 560px，是照 1120x900 的獨立視窗算
+        # 的。主視窗預設 800 高、minsize 只有 560，沿用會把主動作與報告
+        # 整個推出畫面，正是 ROADMAP 點名的那種垂直溢位。改成隨頁籤高度
+        # 按比例配（見 `_fit_top_height`）。
+        self._top_height = _TOP_HEIGHT_MAX
+        self._top_wrap = ttk.Frame(body, height=self._top_height)
+        self._top_wrap.pack(fill="x")
+        self._top_wrap.pack_propagate(False)
         self.top_scroll = ScrollableFrame(
-            top_wrap, theme=self.config_data.get("theme", "light"))
+            self._top_wrap, theme=self.config_data.get("theme", "light"))
         self.top_scroll.pack(fill="both", expand=True)
         top = self.top_scroll.interior
 
         self._build_ffmpeg_banner(top)
-        self._build_object_row(top, media_path)
+        self._top_columns = ttk.Frame(top)
+        self._top_columns.pack(fill="both", expand=True)
+        self._object_frame = self._build_object_row(self._top_columns,
+                                                   media_path)
         # v1.52.2：階段④〔送健檢中心〕帶進來的發佈資料直接填好，使用者不
         # 必再把審片助手產生的章節與發佈包複製貼上一次。
         if publish:
             self._prefill_publish(publish)
-        self._build_checklist(top)
+        self._checklist_frame = self._build_checklist(self._top_columns)
+        self._top_wide = None
+        self._apply_top_layout(False)
         self._build_run_row(body)
         self._build_result_area(body)
 
-        self._poll_job = self.after(120, self._poll_queue)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.bind("<Configure>", self._fit_top_height)
+
+    # ------------------------------------------------------------------
+    # 主視窗介面（頁籤版專用）
+    # ------------------------------------------------------------------
+    def _fit_top_height(self, _event=None):
+        """捲動區高度隨頁籤高度重配，並決定上半部要並排還是上下疊。"""
+        height = self.winfo_height()
+        if height <= 1:
+            return
+        target = _clamp_top_height(height)
+        if target != self._top_height:
+            self._top_height = target
+            self._top_wrap.configure(height=target)
+        self._apply_top_layout(self.winfo_width() >= _SIDE_BY_SIDE_WIDTH)
+
+    def _apply_top_layout(self, wide):
+        """
+        「檢查對象」與「要跑哪些檢查」左右並排（寬的時候）或上下疊。
+
+        頁籤版的高度比獨立視窗少得多（1400x800 下只有 652px，扣掉報告區
+        與主動作，上半部只剩約 250px），但**寬度很夠**（1374px）。上下疊
+        的話，18 項勾選與〔進階設定〕整組會沉到捲動區看不見的地方——這正
+        是本專案截圖抓過好幾次的「新能力被埋在捲動區最底下」。並排之後
+        總高度變成兩欄取大者而不是相加，預設尺寸下一次全看得到。
+
+        視窗窄到放不下兩欄時（minsize 980）退回上下疊，由捲動區處理。
+        """
+        if wide == self._top_wide:
+            return
+        self._top_wide = wide
+        self._object_frame.pack_forget()
+        self._checklist_frame.pack_forget()
+        if wide:
+            # 右欄拿它自己要的寬度（3 欄勾選文字最長的那幾項＋進階設定
+            # 鈕），左欄吃剩下的——寫死寬度會把第三欄的「語音同步（需完
+            # 整解碼音訊，較慢）」切掉，截圖抓到過。
+            self._object_frame.pack(side="left", fill="both", expand=True)
+            self._checklist_frame.pack(side="right", fill="y", padx=(10, 0))
+        else:
+            self._object_frame.pack(fill="x")
+            self._checklist_frame.pack(fill="x", pady=(8, 0))
+
+    def set_media_path(self, path, auto=False):
+        """
+        主視窗換了「目前影片」時同步過來（對象區沿用工作檔案列）。
+
+        ``auto=True`` 是主視窗切到本頁籤時的自動同步：只有在欄位還空
+        著、或內容正是上次自動填進去的那個路徑時才覆蓋。使用者自己用
+        〔瀏覽...〕挑過的、或接手修復版換過的，都不動它——自動同步不該
+        把使用者明示的選擇洗掉。
+        """
+        path = path or ""
+        if auto:
+            current = self.media_var.get().strip()
+            if current and current != self._auto_media:
+                return
+        self.media_var.set(path)
+        self._auto_media = path
+
+    def sync_cues(self, cues=None):
+        """把最新字幕同步進對象區；使用者自己選過字幕檔就不覆蓋。"""
+        if cues is None:
+            if self.cues_overridden or self.get_cues is None:
+                return
+            cues = self.get_cues()
+        self.cues = list(cues or [])
+        self.subs_var.set(self._subs_summary())
+
+    def prefill_publish(self, publish):
+        """階段④〔送健檢中心〕：把發佈資料整包填進對象區。"""
+        return self._prefill_publish(publish or {})
 
     # ------------------------------------------------------------------
     # 版面
@@ -155,12 +267,13 @@ class HealthCenterDialog(tk.Toplevel):
     def _build_object_row(self, body, media_path):
         frame = ttk.LabelFrame(body, text="檢查對象（皆選填，填什麼檢什麼）",
                                padding=(10, 6))
-        frame.pack(fill="x")
 
         row_media = ttk.Frame(frame)
         row_media.pack(fill="x")
         ttk.Label(row_media, text="影片檔：", width=8).pack(side="left")
         self.media_var = tk.StringVar(value=media_path)
+        # 上一次「自動同步」填進去的值，用來分辨使用者有沒有手動改過。
+        self._auto_media = media_path
         ttk.Entry(row_media, textvariable=self.media_var).pack(
             side="left", fill="x", expand=True, padx=(4, 4))
         ttk.Button(row_media, text="瀏覽...", width=8,
@@ -179,15 +292,23 @@ class HealthCenterDialog(tk.Toplevel):
         self._build_thumb_object(frame)
         self._build_publish_object(frame)
         self._build_series_object(frame)
+        return frame
 
     def _subs_summary(self):
         return f"（沿用目前的 {len(self.cues)} 句字幕）" if self.cues else "（無）"
 
     # -- 封面圖（可多選，v1.51.0 併自 gui/thumbcheck_dialog.py）---------
     def _build_thumb_object(self, frame):
-        sub = ttk.LabelFrame(frame, text="封面圖（可多選，會依分數排名）",
-                             padding=(8, 4))
-        sub.pack(fill="x")
+        # v2.2.0：改成可摺疊、預設收合。頁籤版的上半部只有約 250px，而大
+        # 多數健檢只用到「影片檔＋字幕」——封面圖與系列影片攤開在那裡，
+        # 等於把每次都要用的 18 項勾選擠到捲不到的地方。
+        self._thumb_expanded = False
+        self.thumb_toggle_btn = ttk.Button(
+            frame, text="▸ 封面圖（可多選，會依分數排名，點一下展開）",
+            command=self._toggle_thumb)
+        self.thumb_toggle_btn.pack(fill="x")
+        sub = ttk.Frame(frame)
+        self.thumb_body = sub
         list_row = ttk.Frame(sub)
         list_row.pack(fill="x")
         self.thumb_list = tk.Listbox(list_row, height=3,
@@ -206,9 +327,23 @@ class HealthCenterDialog(tk.Toplevel):
         ttk.Button(btn_row, text="全部清除",
                   command=self._clear_thumbs).pack(side="left", padx=(6, 0))
 
+    def _toggle_thumb(self, expand=None):
+        self._thumb_expanded = (not self._thumb_expanded if expand is None
+                                else bool(expand))
+        if self._thumb_expanded:
+            self.thumb_body.pack(fill="x", pady=(0, 4))
+            self.thumb_toggle_btn.configure(
+                text="▾ 封面圖（可多選，會依分數排名，點一下收合）")
+        else:
+            self.thumb_body.pack_forget()
+            self.thumb_toggle_btn.configure(
+                text="▸ 封面圖（可多選，會依分數排名，點一下展開）")
+
     def _add_thumbs(self):
+        self._toggle_thumb(expand=True)
         paths = filedialog.askopenfilenames(
-            title="選擇封面圖片", filetypes=IMAGE_FILETYPES, parent=self)
+            title="選擇封面圖片", filetypes=IMAGE_FILETYPES,
+            parent=self._window)
         for path in paths:
             if path not in self._thumb_paths:
                 self._thumb_paths.append(path)
@@ -298,10 +433,14 @@ class HealthCenterDialog(tk.Toplevel):
 
     # -- 系列影片（可多選，保留獨立視窗，v1.51.0 只把入口移進對象區）----
     def _build_series_object(self, frame):
-        sub = ttk.LabelFrame(
-            frame, text="系列影片（可多選，比對整批彼此是否一致）",
-            padding=(8, 4))
-        sub.pack(fill="x", pady=(6, 0))
+        # v2.2.0：同封面圖，改成可摺疊、預設收合（見 _build_thumb_object）。
+        self._series_expanded = False
+        self.series_toggle_btn = ttk.Button(
+            frame, text="▸ 系列影片（可多選，比對整批彼此是否一致，點一下展開）",
+            command=self._toggle_series)
+        self.series_toggle_btn.pack(fill="x", pady=(6, 0))
+        sub = ttk.Frame(frame)
+        self.series_body = sub
         list_row = ttk.Frame(sub)
         list_row.pack(fill="x")
         self.series_list = tk.Listbox(list_row, height=3,
@@ -330,9 +469,23 @@ class HealthCenterDialog(tk.Toplevel):
                  "不併進下方的分級報告。",
         ).pack(fill="x", pady=(2, 0))
 
+    def _toggle_series(self, expand=None):
+        self._series_expanded = (not self._series_expanded if expand is None
+                                 else bool(expand))
+        if self._series_expanded:
+            self.series_body.pack(fill="x", pady=(0, 4))
+            self.series_toggle_btn.configure(
+                text="▾ 系列影片（可多選，比對整批彼此是否一致，點一下收合）")
+        else:
+            self.series_body.pack_forget()
+            self.series_toggle_btn.configure(
+                text="▸ 系列影片（可多選，比對整批彼此是否一致，點一下展開）")
+
     def _add_series(self):
+        self._toggle_series(expand=True)
         paths = filedialog.askopenfilenames(
-            title="選擇同系列的影片", filetypes=MEDIA_FILETYPES, parent=self)
+            title="選擇同系列的影片", filetypes=MEDIA_FILETYPES,
+            parent=self._window)
         for path in paths:
             if path not in self._series_paths:
                 self._series_paths.append(path)
@@ -348,18 +501,29 @@ class HealthCenterDialog(tk.Toplevel):
         self._series_paths = []
 
     def _open_series_check(self):
-        SeriesCheckDialog(self, self.config_data, list(self._series_paths))
+        SeriesCheckDialog(self._window, self.config_data,
+                          list(self._series_paths))
 
     def _build_checklist(self, body):
         frame = ttk.LabelFrame(body, text="要跑哪些檢查（自動記憶）",
                                padding=(10, 6))
-        frame.pack(fill="x", pady=(8, 0))
 
         pf_settings = resolve_preflight_settings(self.config_data)
         hc_settings = ha.resolve_healthcenter_settings(self.config_data)
 
+        # 〔進階設定〕先宣告、且 side="bottom"：pack 是先到先分配，勾選
+        # 格線若先 pack 成 side="left"，這顆就只能去搶右邊那條垂直空間，
+        # 整個框的「要求寬度」因此多出 149px（實測 893→1062），並排時把
+        # 第三欄的「語音同步（需完整解碼音訊，較慢）」推出畫面。宣告順序
+        # 換過來之後它改成佔底部一整條，格線拿到完整寬度。
+        # （v1.50.1 只改了 side 沒改宣告順序，所以當時只解決了文字被切成
+        # 「進階設」，沒解決要求寬度虛胖。）
+        settings_btn = ttk.Button(frame, text="進階設定（門檻）⚙",
+                                  command=self._open_settings)
+        settings_btn.pack(side="bottom", anchor="e", pady=(6, 0))
+
         grid = ttk.Frame(frame)
-        grid.pack(fill="x", side="left", expand=True)
+        grid.pack(fill="x", side="top", expand=True)
         self.check_vars = {}
         index = 0
         for check in ha.CHECK_DEFS:
@@ -383,12 +547,7 @@ class HealthCenterDialog(tk.Toplevel):
                column=index % _CHECKLIST_COLUMNS, sticky="w",
                padx=(0, 16), pady=2)
 
-        # 這顆原本 pack(side="right") 與勾選格線搶同一條水平空間，實測
-        # 它需要 168px 卻只分到 69px、文字被切成「進階設」。改成自己一
-        # 列靠右，格線就能拿到完整寬度。
-        ttk.Button(frame, text="進階設定（門檻）⚙",
-                  command=self._open_settings).pack(
-            side="bottom", anchor="e", pady=(6, 0))
+        return frame
 
     def _build_run_row(self, body):
         self.status_var = tk.StringVar(
@@ -411,8 +570,8 @@ class HealthCenterDialog(tk.Toplevel):
         self.save_btn = ttk.Button(buttons, text="另存報告...",
                                    state="disabled", command=self._on_save)
         self.save_btn.pack(side="left", padx=(6, 0))
-        ttk.Button(buttons, text="關閉", command=self._on_close).pack(
-            side="right")
+        # v2.2.0 拿掉〔關閉〕：頁籤沒有東西可關，留著只會讓人以為按了會
+        # 關掉主程式。
 
     def _build_result_area(self, body):
         pane = ttk.PanedWindow(body, orient="vertical")
@@ -437,6 +596,16 @@ class HealthCenterDialog(tk.Toplevel):
         self._tree_frame = tree_frame
 
         detail_frame = ttk.LabelFrame(pane, text="發現詳情", padding=(8, 6))
+        # 〔修復此項〕先宣告、且 side="bottom"：pack 是先到先分配空間，
+        # 上面三行說明文字遇到長內容會換行變高，詳情區高度不夠時最後才
+        # pack 的那個會被擠成 1px。按鈕壓不得，說明文字少看一行還看得到
+        # ——所以按鈕先卡位。（只改 side 不改宣告順序沒有用，這是本專案
+        # 踩過三次的無效改法之一。）
+        fix_row = ttk.Frame(detail_frame)
+        fix_row.pack(side="bottom", fill="x", pady=(6, 0))
+        self.fix_btn = ttk.Button(fix_row, text="修復此項", state="disabled",
+                                  command=self._on_fix_selected)
+        self.fix_btn.pack(side="left")
         self.detail_title_var = tk.StringVar(value="（選取上方一筆結果查看詳情）")
         ttk.Label(detail_frame, textvariable=self.detail_title_var,
                  font=("Microsoft JhengHei", 10, "bold"), anchor="w",
@@ -449,11 +618,6 @@ class HealthCenterDialog(tk.Toplevel):
         ttk.Label(detail_frame, textvariable=self.detail_advice_var,
                  anchor="w", justify="left", wraplength=860,
                  foreground="#1a5fb4").pack(fill="x", pady=(2, 0))
-        fix_row = ttk.Frame(detail_frame)
-        fix_row.pack(fill="x", pady=(6, 0))
-        self.fix_btn = ttk.Button(fix_row, text="修復此項", state="disabled",
-                                  command=self._on_fix_selected)
-        self.fix_btn.pack(side="left")
         pane.add(detail_frame, weight=1)
         self._detail_frame = detail_frame
         # PanedWindow 的初始 sash 位置只看子元件的「要求尺寸」，發現詳情區
@@ -461,26 +625,38 @@ class HealthCenterDialog(tk.Toplevel):
         # 出來；開窗後量出實際可用高度，明確把 sash 往下推、保留詳情區
         # 至少 150px（標題＋內容＋建議＋按鈕四行）。
         self.after(80, self._init_pane_sash)
+        pane.bind("<Configure>", self._init_pane_sash)
 
-    def _init_pane_sash(self):
-        # 發現詳情區的「修復此項」按鈕比清單本身更容易被忽略地壓到 1px
-        # 高（v1.51.0 對象區擴充後，實測預設尺寸下 pane 可用高度比
-        # v1.50.0 小很多，才第一次踩到這個問題）：舊公式只保住清單至少
-        # 140px，detail 區不足額時完全沒有下限，`170 - 234` 這種算式會
-        # 讓 detail 只分到 64px、三行文字＋按鈕塞不進去，按鈕變得看得到
-        # 按不到。改成優先保住 detail 的 170px 下限，清單只保底 60px
-        # （清單本身有自己的捲軸，壓縮只是少看到幾列，不像按鈕壓縮到
-        # 1px 那樣直接壞掉）。
+    def _init_pane_sash(self, _event=None):
+        """
+        確保「發現詳情」區有下限高度，那顆〔修復此項〕才按得到。
+
+        詳情區的按鈕比清單本身更容易被忽略地壓到 1px 高（v1.51.0 對象區
+        擴充後第一次踩到）：舊公式只保住清單至少 140px，detail 區不足額
+        時完全沒有下限，`170 - 234` 這種算式會讓 detail 只分到 64px、三
+        行文字＋按鈕塞不進去，按鈕變得看得到按不到。改成優先保住 detail
+        的 170px 下限，清單只保底 60px（清單本身有自己的捲軸，壓縮只是
+        少看到幾列，不像按鈕壓縮到 1px 那樣直接壞掉）。
+
+        v2.2.0：改成綁在 pane 的 `<Configure>` 上重複執行，不再只算一
+        次。頁籤版的 pane 高度在顯示過程中還會變（捲動區高度是視窗一量
+        到就重配的），只算一次會停在早期那個值——實測 1400x800 下詳情區
+        因此只分到 79px，「修復此項」又一次被壓到看不見。只在**低於下
+        限**時才動 sash，使用者自己往上拉大詳情區不會被搶回去。
+        """
         try:
             self._pane.update_idletasks()
             total = self._pane.winfo_height()
+            if total <= 100:
+                return
             detail_min, tree_min = 170, 60
+            if total - self._pane.sashpos(0) >= detail_min:
+                return  # 詳情區已經夠高（含使用者自己拉大的），不動它。
             if total <= detail_min + tree_min:
                 sashpos = max(total - detail_min, tree_min)
             else:
                 sashpos = total - detail_min
-            if total > 100:
-                self._pane.sashpos(0, sashpos)
+            self._pane.sashpos(0, sashpos)
         except tk.TclError:
             pass  # 視窗已關閉或尚未映射，安全略過。
 
@@ -490,22 +666,24 @@ class HealthCenterDialog(tk.Toplevel):
     def _choose_media(self):
         path = filedialog.askopenfilename(
             title="選擇要健檢的影音檔", filetypes=MEDIA_FILETYPES,
-            parent=self)
+            parent=self._window)
         if path:
             self.media_var.set(path)
 
     def _choose_subs(self):
         path = filedialog.askopenfilename(
             title="選擇字幕檔（選填）", filetypes=SUBTITLE_FILETYPES,
-            parent=self)
+            parent=self._window)
         if not path:
             return
         try:
             loaded = load_subtitle_file(path)
         except Exception as exc:
-            show_friendly_error(self, "讀取字幕檔失敗", exc)
+            show_friendly_error(self._window, "讀取字幕檔失敗", exc)
             return
         self.cues = loaded["cues"]
+        # 明示覆寫：之後主視窗的字幕變動不再自動蓋掉這份。
+        self.cues_overridden = True
         self.subs_var.set(f"{path}（{len(self.cues)} 句）")
         self.status_var.set(f"已載入 {len(self.cues)} 句字幕。")
 
@@ -514,13 +692,13 @@ class HealthCenterDialog(tk.Toplevel):
             if self.ffmpeg_banner is not None:
                 self.ffmpeg_banner.destroy()
                 self.ffmpeg_banner = None
-        FfmpegInstallDialog(self, on_done=done)
+        FfmpegInstallDialog(self._window, on_done=done)
 
     # ------------------------------------------------------------------
     # 進階設定（門檻）
     # ------------------------------------------------------------------
     def _open_settings(self):
-        HealthSettingsDialog(self, self.config_data)
+        HealthSettingsDialog(self._window, self.config_data)
 
     # ------------------------------------------------------------------
     # 開始健檢
@@ -552,20 +730,23 @@ class HealthCenterDialog(tk.Toplevel):
     def _on_run(self):
         if self.is_processing or self.is_fixing:
             return
+        # 每次健檢前向主視窗現拿字幕，報告才會講現在的句子（v2.2.0）。
+        self.sync_cues()
         media_path = self.media_var.get().strip()
         publish = self._collect_publish()
         if not self._has_any_object(media_path, publish):
             messagebox.showinfo(
                 "提示", "請至少填一項檢查對象：影片、字幕、封面圖，"
-                "或發佈文字（標題／說明欄／標籤／章節）。", parent=self)
+                "或發佈文字（標題／說明欄／標籤／章節）。", parent=self._window)
             return
         selected = self._selected_keys()
         if not selected:
             messagebox.showinfo("提示", "請至少勾選一項要跑的檢查。",
-                                parent=self)
+                                parent=self._window)
             return
         self._save_checklist()
         self._set_processing(True)
+        self._ensure_polling()
         self.status_var.set("健檢進行中...")
         self.progress_var.set(0.0)
         threading.Thread(
@@ -674,10 +855,10 @@ class HealthCenterDialog(tk.Toplevel):
             new_text, changes, message = ha.apply_text_fix(
                 fix_key, self.config_data, raw)
         except ha.FixError as exc:
-            messagebox.showinfo("提示", str(exc), parent=self)
+            messagebox.showinfo("提示", str(exc), parent=self._window)
             return
         if not changes:
-            messagebox.showinfo("提示", message, parent=self)
+            messagebox.showinfo("提示", message, parent=self._window)
             return
         if fix_key == "chapter_fix":
             if not self._publish_expanded:
@@ -693,12 +874,12 @@ class HealthCenterDialog(tk.Toplevel):
             new_cues, changed, message = ha.apply_cue_fix(
                 fix_key, self.cues, self.config_data, raw)
         except ha.FixError as exc:
-            messagebox.showinfo("提示", str(exc), parent=self)
+            messagebox.showinfo("提示", str(exc), parent=self._window)
             return
         if changed == 0:
             messagebox.showinfo(
                 "提示", "沒有可修復的內容（可能空檔不足，或已經符合規範）。",
-                parent=self)
+                parent=self._window)
             return
         self.cues = new_cues
         if self.on_fixed:
@@ -732,6 +913,7 @@ class HealthCenterDialog(tk.Toplevel):
             if path not in self._thumb_paths:
                 self._thumb_paths.append(path)
                 self.thumb_list.insert("end", os.path.basename(path))
+                self._toggle_thumb(expand=True)
                 filled = True
         if filled and not self._publish_expanded:
             self._toggle_publish()
@@ -752,7 +934,7 @@ class HealthCenterDialog(tk.Toplevel):
         if not self.on_media_fixed:
             messagebox.showinfo(
                 "修復完成", f"已輸出：\n{path}\n\n建議播放／試聽確認結果。",
-                parent=self)
+                parent=self._window)
             return
         source = self.media_var.get().strip()
         adopt = messagebox.askyesno(
@@ -763,7 +945,7 @@ class HealthCenterDialog(tk.Toplevel):
             "〔開始健檢〕就是修復前後的比對，不必自己回主視窗重選檔案。\n\n"
             "（建議先播放／試聽確認結果再決定。選「否」則只是輸出檔案，"
             "不改變目前影片。）",
-            parent=self)
+            parent=self._window)
         if not adopt:
             return
         self.on_media_fixed(path, source)
@@ -775,21 +957,23 @@ class HealthCenterDialog(tk.Toplevel):
     def _run_media_fix(self, fix_key):
         media_path = self.media_var.get().strip()
         if not media_path or not os.path.exists(media_path):
-            messagebox.showinfo("提示", "請選擇有效的影音檔。", parent=self)
+            messagebox.showinfo("提示", "請選擇有效的影音檔。",
+                                parent=self._window)
             return
         if not ffmpeg_available():
             show_friendly_error(
-                self, "修復需要 ffmpeg",
+                self._window, "修復需要 ffmpeg",
                 RuntimeError("找不到 ffmpeg，請先安裝並加入系統 PATH。"),
                 on_install_ffmpeg=self._open_ffmpeg_installer)
             return
         try:
             output = ha.suggest_fix_output_path(fix_key, media_path)
         except ha.FixError as exc:
-            messagebox.showinfo("提示", str(exc), parent=self)
+            messagebox.showinfo("提示", str(exc), parent=self._window)
             return
         raw = (self.last_result or {}).get("raw") or {}
         self._set_fixing(True)
+        self._ensure_polling()
         self.status_var.set("修復進行中...")
         threading.Thread(
             target=self._media_fix_worker,
@@ -810,6 +994,15 @@ class HealthCenterDialog(tk.Toplevel):
             self.result_queue.put(("fix_error", exc))
 
     # ------------------------------------------------------------------
+    def _ensure_polling(self):
+        """背景工作開跑時才排輪詢。
+
+        獨立視窗時代是「開窗就每 120ms 跑一次、關窗才停」；內嵌之後這個
+        頁籤與程式同壽，照抄等於整個生命週期都在空轉。
+        """
+        if self._poll_job is None:
+            self._poll_job = self.after(120, self._poll_queue)
+
     def _poll_queue(self):
         try:
             while True:
@@ -831,7 +1024,7 @@ class HealthCenterDialog(tk.Toplevel):
                     self._set_processing(False)
                     self.status_var.set("健檢失敗。")
                     show_friendly_error(
-                        self, "健檢失敗", payload,
+                        self._window, "健檢失敗", payload,
                         on_install_ffmpeg=self._open_ffmpeg_installer)
                 elif kind == "fix_done":
                     self._set_fixing(False)
@@ -839,14 +1032,18 @@ class HealthCenterDialog(tk.Toplevel):
                     self._offer_adopt_fixed(payload)
                 elif kind == "fix_notice":
                     self._set_fixing(False)
-                    messagebox.showinfo("提示", payload, parent=self)
+                    messagebox.showinfo("提示", payload,
+                                        parent=self._window)
                 elif kind == "fix_error":
                     self._set_fixing(False)
                     self.status_var.set("修復失敗。")
-                    show_friendly_error(self, "修復失敗", payload)
+                    show_friendly_error(self._window, "修復失敗", payload)
         except queue.Empty:
             pass
-        self._poll_job = self.after(120, self._poll_queue)
+        if self.is_processing or self.is_fixing:
+            self._poll_job = self.after(120, self._poll_queue)
+        else:
+            self._poll_job = None
 
     def _set_processing(self, processing):
         self.is_processing = processing
@@ -886,21 +1083,25 @@ class HealthCenterDialog(tk.Toplevel):
             initialfile=os.path.basename(initial),
             initialdir=os.path.dirname(initial) or ".",
             filetypes=[("文字檔", "*.txt"), ("所有檔案", "*.*")],
-            parent=self)
+            parent=self._window)
         if not path:
             return
         try:
             with open(path, "w", encoding="utf-8") as fp:
                 fp.write(ha.format_health_report(self.last_result))
         except OSError as exc:
-            messagebox.showerror("儲存失敗", str(exc), parent=self)
+            messagebox.showerror("儲存失敗", str(exc), parent=self._window)
             return
         self.status_var.set(f"報告已儲存：{path}")
 
-    def _on_close(self):
-        if getattr(self, "_poll_job", None):
-            self.after_cancel(self._poll_job)
-        self.destroy()
+    def destroy(self):
+        if self._poll_job is not None:
+            try:
+                self.after_cancel(self._poll_job)
+            except tk.TclError:
+                pass  # 視窗已在拆除中，安全略過。
+            self._poll_job = None
+        super().destroy()
 
 
 class HealthSettingsDialog(tk.Toplevel):
