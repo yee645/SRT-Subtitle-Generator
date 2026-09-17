@@ -250,6 +250,7 @@ if old_app_src is not None:
         "subtitle/pipeline.py",     # v1.52.1：describe_output_plan
         "subtitle/generations.py",  # v1.52.2：世代鏈（全新檔案）
         "subtitle/publisher.py",    # v1.52.2：build_publish_fields
+        "subtitle/clipwatch.py",    # v2.1.0：剪貼簿監聽篩子（全新檔案）
     }
     unexpected_touched = set(diff) - allowed_touched
     check("subtitle/ 只有白名單內的檔案被改動（公開介面只准加、不准改）",
