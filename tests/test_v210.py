@@ -158,6 +158,172 @@ check("要翻譯時給的是進行中的訊息，不是跳過理由",
           classify_clipboard("This is a normal English sentence.")))
 
 
+# ===== 7. Xvfb 下的真實面板行為 ======================================
+import tempfile
+
+try:
+    import tkinter as tk
+except ImportError as exc:
+    print(f"SKIP 面板測試（無 tkinter：{exc}）")
+else:
+    import config as app_config
+    _cfg = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+    _cfg.write(b'{"whatsnew_seen": "never"}')
+    _cfg.close()
+    app_config.CONFIG_PATH = _cfg.name
+    app = panel = None
+    try:
+        from gui.app import SrtApp
+        from gui.quicktranslate_panel import QuickTranslatePanel
+        app = SrtApp()
+    except tk.TclError as exc:
+        message = str(exc).lower()
+        if "display" in message or "connect" in message:
+            print(f"SKIP 面板測試（無顯示器：{exc}）")
+        else:
+            check(f"主視窗開得起來（TclError：{exc}）", False)
+
+    if app is not None:
+        app.deiconify()
+        for _ in range(30):
+            app.update()
+        panel = QuickTranslatePanel(app, app.config_data)
+        panel.deiconify()
+        for _ in range(30):
+            app.update()
+
+        submitted = []
+        panel._submit = lambda raw, manual: submitted.append((raw, manual))
+
+        def pump(n=8):
+            for _ in range(n):
+                app.update()
+
+        def setclip(text):
+            app.clipboard_clear()
+            app.clipboard_append(text)
+            pump()
+
+        check("面板預設沒有在監聽剪貼簿",
+              panel.clipwatch_var.get() is False and panel._clip_job is None)
+
+        # 打開監聽的當下，剪貼簿裡「本來就躺著」的東西不可以被送出——那
+        # 是使用者稍早複製的，不是他「剛複製要翻」的。
+        #
+        # 這裡刻意用**會通過篩子的正常英文**當測資：用密碼當測資的話，就
+        # 算這條規則壞掉也會被篩子擋下來，測試等於在驗篩子而不是驗這條規
+        # 則（破壞探針實測證實：把 `_last_clip` 改成 None 時測試照樣通
+        # 過）。另外要**明確呼叫一次 `_poll_clipboard()`**——`after()` 排
+        # 的 500ms 計時器不會在 `update()` 迴圈裡到期，不主動觸發的話這段
+        # 根本沒被執行到。
+        setclip("This English was already sitting in the clipboard before.")
+        panel.clipwatch_var.set(True)
+        panel._on_clipwatch_toggle()
+        pump()
+        panel._poll_clipboard()
+        pump()
+        check("開啟監聽時，剪貼簿裡本來就有的內容不會被當成「剛複製的」送出",
+              submitted == [], str(submitted))
+        check("開啟監聽後有告訴使用者正在監聽",
+              "監聽中" in panel.clip_status_var.get(),
+              panel.clip_status_var.get())
+
+        setclip("This is a normal English sentence about editing.")
+        panel._poll_clipboard()
+        pump()
+        check("複製正常英文會送出翻譯", len(submitted) == 1, str(submitted))
+        check("送出時標記為非手動（沿用自動翻譯那條路徑的去重與快取）",
+              submitted and submitted[0][1] is False)
+
+        submitted.clear()
+        setclip("ghp_16CharsOfTokenHere123456")
+        panel._poll_clipboard()
+        pump()
+        check("【不可外洩】複製 GitHub token 不會被送出",
+              submitted == [], str(submitted))
+        check("跳過時狀態列講得出理由（沉默＝使用者以為壞了）",
+              "密碼" in panel.clip_status_var.get()
+              or "金鑰" in panel.clip_status_var.get(),
+              panel.clip_status_var.get())
+
+        submitted.clear()
+        setclip("Another normal English sentence here.")
+        panel._poll_clipboard()
+        pump()
+        first = len(submitted)
+        panel._poll_clipboard()
+        pump()
+        panel._poll_clipboard()
+        pump()
+        check("剪貼簿沒變時不會重複送出（否則每 500ms 打一次 API）",
+              len(submitted) == first == 1, f"{first} → {len(submitted)}")
+
+        # 翻譯結果是中文，就算被使用者複製也不會被再翻一次——迴圈防線。
+        submitted.clear()
+        setclip("這是翻譯出來的中文結果")
+        panel._poll_clipboard()
+        pump()
+        check("翻譯結果（中文）被複製時不會形成翻譯迴圈",
+              submitted == [], str(submitted))
+
+        # 收起面板＝停止讀取剪貼簿。
+        panel._hide()
+        pump()
+        check("收起面板就停止監聽（「關掉視窗」＝別再讀我複製的東西）",
+              panel._clip_job is None)
+        check("勾選狀態保留，不會因為收起面板就被關掉",
+              panel.clipwatch_var.get() is True)
+        panel.show()
+        pump()
+        check("重新開窗自動恢復監聽", panel._clip_job is not None)
+
+        submitted.clear()
+        panel.clipwatch_var.set(False)
+        panel._on_clipwatch_toggle()
+        pump()
+        setclip("Yet another English sentence to translate.")
+        pump()
+        check("取消勾選後就算剪貼簿變了也不送出",
+              panel._clip_job is None and submitted == [], str(submitted))
+
+        # 設定要寫回 config，下次開程式才記得。
+        import json as _json
+        with open(_cfg.name, encoding="utf-8") as fp:
+            saved = _json.load(fp)
+        check("剪貼簿監聽設定有寫回 config.json",
+              isinstance(saved.get("clipwatch"), dict)
+              and "skip_secrets" in saved["clipwatch"], str(saved.get("clipwatch")))
+
+        # 沒有 API 金鑰時，「監聽剪貼簿」要跟「選取後自動翻譯」一起停用
+        # ——否則使用者打開它、複製了東西卻什麼都沒發生，也不知道為什麼。
+        # （截圖比對時發現的：當時只停用了後者。）
+        has_key = bool(panel._get_api_key())
+        check("測試環境確實沒有 API 金鑰（這一段才有意義）", not has_key,
+              "有金鑰的話下面兩項驗不到東西")
+        if not has_key:
+            panel._refresh_api_key_state(force=True)
+            pump()
+            check("沒有金鑰時「選取後自動翻譯」停用（既有行為）",
+                  str(panel.auto_check["state"]) == "disabled")
+            check("沒有金鑰時「監聽剪貼簿」也一起停用（不要讓它空轉讀剪貼簿）",
+                  str(panel.clip_check["state"]) == "disabled",
+                  str(panel.clip_check["state"]))
+            check("沒有金鑰時監聽確實停下來了",
+                  panel._clip_job is None)
+
+        # 剪貼簿放非文字（圖片）或空的時候不可以把輪詢打斷。
+        app.clipboard_clear()
+        pump()
+        check("剪貼簿空的時候讀取不會拋例外",
+              panel._read_clipboard() is None
+              or isinstance(panel._read_clipboard(), str))
+
+        panel.destroy()
+        app.destroy()
+    if os.path.exists(_cfg.name):
+        os.unlink(_cfg.name)
+
+
 print()
 if failures:
     print(f"失敗 {len(failures)} 項：" + ", ".join(failures[:6])

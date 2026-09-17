@@ -56,8 +56,16 @@ dialog = read("gui", "whatsnew_dialog.py")
 check("產出物④：程式內速覽存在", dialog is not None)
 
 updater = read("updater.py")
-check("APP_VERSION 已經是 2.0.0",
-      updater is not None and 'APP_VERSION = "2.0.0"' in updater)
+# 原本寫死 `APP_VERSION == "2.0.0"`，但版號本來就會往前走（v2.1.0 之後這
+# 條必然失敗）。真正要守的是「**2.0 之後**的版本都受這份前置條件約束」，
+# 所以改成比大小而不是比字串相等。
+import re as _re
+_m = _re.search(r'APP_VERSION = "(\d+)\.(\d+)\.(\d+)"', updater or "")
+check("讀得到 APP_VERSION", _m is not None)
+if _m:
+    _ver = tuple(int(g) for g in _m.groups())
+    check(f"APP_VERSION（{'.'.join(map(str, _ver))}）已達 2.0.0 以上",
+          _ver >= (2, 0, 0), str(_ver))
 
 if whats_new is None or changelog is None or dialog is None:
     print()
@@ -180,11 +188,26 @@ else:
           not should_show({"whatsnew_seen": NEVER_SHOW}, "2.0.0"))
 
 
-# ===== 5. 轉正是獨立的一步，本版不做 =================================
+# ===== 5. 轉正與這份前置條件的關係 ===================================
+# 原本斷言「promote_releases.txt 裡不可以有 v2.0.0」，那是寫在「轉正尚未
+# 執行」當下的狀態快照——使用者 2026-09-17 指示轉正之後，這條必然失敗。
+#
+# 換成真正該永久成立的那條規則：**任何 2.x 被轉正時，四個產出物都必須存
+# 在**。轉正會把自動更新推給所有使用者，而這份介紹就是他們唯一會看到的說
+# 明；「已經轉正但文件不見了」才是要擋的事，「有沒有轉正」本身不是。
 promote = read(".github", "promote_releases.txt")
-check("promote_releases.txt 沒有被本版動到（轉正是獨立決定，需人確認 exe）",
-      promote is not None and "v2.0.0" not in promote,
-      "v2.0.0 不該在這裡")
+check("讀得到轉正清單", promote is not None)
+if promote is not None:
+    promoted_2x = [line.strip() for line in promote.splitlines()
+                   if line.strip().startswith("v2.")]
+    if promoted_2x:
+        check(f"已轉正的 2.x（{', '.join(promoted_2x)}）都有完整的新功能介紹"
+              "——轉正就是推給所有使用者，這份介紹是他們唯一看得到的說明",
+              whats_new is not None and changelog is not None
+              and "WHATS_NEW_2.0.md" in (readme or "")
+              and dialog is not None)
+    else:
+        print("SKIP 尚未有 2.x 被轉正，這一組檢查沒有對象")
 
 
 print()

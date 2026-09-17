@@ -40,6 +40,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Optional
 
 from config import CONFIG_PATH, save_config
+from subtitle import clipwatch as cw
 from subtitle import quicktranslate as qt
 from subtitle.punctstyle import cjk_ratio
 from subtitle.translator import LANGUAGE_LABELS
@@ -250,6 +251,10 @@ class QuickTranslatePanel(tk.Toplevel):
         self._consecutive_failures = 0
         self._had_key = None          # None＝尚未檢查過，強制第一次一定套用
         self._in_nokey_state = False
+        # v2.1.0 剪貼簿監聽（「複製即翻譯」）。
+        self.clip_settings = cw.resolve_clipwatch_settings(config_data)
+        self._clip_job = None
+        self._last_clip = None        # 上一次看到的剪貼簿內容，用來只在「變了」時才動作
 
         self.title("即時查譯（選字即翻）")
         self.geometry("520x600")
@@ -261,6 +266,7 @@ class QuickTranslatePanel(tk.Toplevel):
         self.explain_var = tk.BooleanVar(value=self.settings["explain"])
         self.save_vocab_var = tk.BooleanVar(value=bool(raw_prefs.get("save_to_vocab", True)))
         self.topmost_var = tk.BooleanVar(value=bool(raw_prefs.get("topmost", True)))
+        self.clipwatch_var = tk.BooleanVar(value=self.clip_settings["enabled"])
 
         self._build_ui()
         self.attributes("-topmost", bool(self.topmost_var.get()))
@@ -323,6 +329,25 @@ class QuickTranslatePanel(tk.Toplevel):
         ttk.Checkbutton(ctrl1, text="附關鍵詞解說", variable=self.explain_var,
                         command=self._write_settings).pack(
             side="left", padx=(10, 0))
+
+        # v2.1.0：剪貼簿監聽自成一列，因為它跟上面那些「怎麼翻」的選項不
+        # 同——它決定的是「要不要讀取你複製的每一樣東西」，屬於另一個層
+        # 級的決定，不該跟語言選單擠在一起讓人順手勾到。
+        clip_row = ttk.Frame(page)
+        clip_row.pack(fill="x", pady=(6, 0))
+        self.clip_check = ttk.Checkbutton(
+            clip_row, text="監聽剪貼簿（複製即翻譯）",
+            variable=self.clipwatch_var, command=self._on_clipwatch_toggle)
+        self.clip_check.pack(side="left")
+        self.clip_status_var = tk.StringVar(value="")
+        ttk.Label(clip_row, textvariable=self.clip_status_var,
+                  foreground=HINT_FG).pack(side="left", padx=(8, 0))
+        ttk.Label(
+            page, foreground=HINT_FG, justify="left", wraplength=460,
+            text="開啟後，在任何軟體按 Ctrl+C 複製外文就會自動翻譯——"
+                 "本程式之外也能用。密碼、金鑰、檔案路徑、網址與程式碼會"
+                 "自動跳過，不會送出。關掉這個面板就停止監聽。",
+        ).pack(anchor="w", pady=(2, 0))
 
         ctrl2 = ttk.Frame(page)
         ctrl2.pack(fill="x", pady=(4, 0))
@@ -387,6 +412,8 @@ class QuickTranslatePanel(tk.Toplevel):
         self._visible = True
         if self._poll_job is None:
             self._poll_job = self.after(_POLL_MS, self._poll_queue)
+        if self.clipwatch_var.get():
+            self._start_clipwatch()
 
     def _hide(self):
         self.withdraw()
@@ -397,6 +424,76 @@ class QuickTranslatePanel(tk.Toplevel):
         if self._poll_job is not None:
             self.after_cancel(self._poll_job)
             self._poll_job = None
+        # 面板收起來就停止監聽剪貼簿。「關掉視窗」在使用者的預期裡就是
+        # 「別再讀我複製的東西」——而且翻譯結果沒人看得到也沒有意義。
+        # 勾選狀態保留，下次開窗會自動恢復監聽。
+        self._stop_clipwatch()
+
+    # ------------------------------------------------------------------
+    # 剪貼簿監聽（v2.1.0，選取即翻譯第二階段）
+    def _on_clipwatch_toggle(self):
+        """使用者勾選／取消「監聽剪貼簿」。"""
+        if self.clipwatch_var.get():
+            self._start_clipwatch()
+        else:
+            self._stop_clipwatch()
+            self.clip_status_var.set("已停止監聽。")
+        self._write_settings()
+
+    def _start_clipwatch(self):
+        """
+        開始監聽。
+
+        開始的當下**先把目前剪貼簿內容記下來但不翻譯**——使用者按下勾選
+        的那一刻，剪貼簿裡多半躺著他稍早複製的東西（很可能就是密碼或路
+        徑），沒有理由把它當成「剛複製的」送出去。從下一次變動才算數。
+        """
+        if self._clip_job is not None:
+            return
+        self._last_clip = self._read_clipboard()
+        self.clip_status_var.set("監聽中——複製外文即翻譯。")
+        self._clip_job = self.after(
+            self.clip_settings["poll_ms"], self._poll_clipboard)
+
+    def _stop_clipwatch(self):
+        if self._clip_job is not None:
+            self.after_cancel(self._clip_job)
+            self._clip_job = None
+
+    def _read_clipboard(self):
+        """
+        讀取剪貼簿文字；讀不到就回 None。
+
+        剪貼簿裡放的是圖片、檔案或空的時候，`clipboard_get()` 會丟
+        TclError——那是正常情形不是錯誤，不能讓它把輪詢打斷。
+        """
+        try:
+            return self.clipboard_get()
+        except tk.TclError:
+            return None
+
+    def _poll_clipboard(self):
+        """
+        定時看剪貼簿有沒有變。Tk 沒有「剪貼簿變了」的事件，只能輪詢。
+
+        只在**內容真的變了**時才動作，否則同一段文字會被重複送出。變動之
+        後先過 `subtitle/clipwatch.py` 的篩子——密碼、金鑰、路徑、程式碼
+        一律不送，並且把「為什麼沒翻」寫在面板上：介面沉默地什麼都不做，
+        跟功能壞掉在使用者眼裡是同一件事。
+        """
+        self._clip_job = None
+        if not self.clipwatch_var.get() or not self._is_visible():
+            return
+        current = self._read_clipboard()
+        if current is not None and current != self._last_clip:
+            self._last_clip = current
+            verdict = cw.classify_clipboard(
+                current, self.clip_settings, self._current_settings())
+            self.clip_status_var.set(cw.format_skip_reason(verdict))
+            if verdict["translate"]:
+                self._submit(current, manual=False)
+        self._clip_job = self.after(
+            self.clip_settings["poll_ms"], self._poll_clipboard)
 
     def _is_visible(self) -> bool:
         return self._visible
@@ -427,6 +524,15 @@ class QuickTranslatePanel(tk.Toplevel):
             "topmost": bool(self.topmost_var.get()),
         })
         self.config_data["quicktranslate"] = data
+        clip = dict(self.config_data.get("clipwatch") or {})
+        clip.update({
+            "enabled": bool(self.clipwatch_var.get()),
+            "poll_ms": self.clip_settings["poll_ms"],
+            "skip_secrets": self.clip_settings["skip_secrets"],
+            "skip_code": self.clip_settings["skip_code"],
+            "skip_paths": self.clip_settings["skip_paths"],
+        })
+        self.config_data["clipwatch"] = clip
         try:
             save_config(self.config_data)
         except OSError:
@@ -452,11 +558,19 @@ class QuickTranslatePanel(tk.Toplevel):
         self._had_key = has_key
         if has_key:
             self.auto_check.configure(state="normal")
+            self.clip_check.configure(state="normal")
             if self._in_nokey_state:
                 self._in_nokey_state = False
                 self._set_state_initial()
         else:
             self.auto_check.configure(state="disabled")
+            # v2.1.0：沒有金鑰時「監聽剪貼簿」也要一起停用。截圖比對時發現
+            # 只停用了「選取後自動翻譯」，剪貼簿那顆還能勾——使用者打開它、
+            # 然後複製了東西卻什麼都沒發生，也不知道是為什麼。順手把監聽
+            # 停下來，不要讓它在沒有金鑰的情況下空轉讀取剪貼簿。
+            self.clip_check.configure(state="disabled")
+            self._stop_clipwatch()
+            self.clip_status_var.set("")
             self._in_nokey_state = True
             self._set_state_nokey()
 
