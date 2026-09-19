@@ -270,7 +270,19 @@ if old_app_src is not None:
         "subtitle/generations.py",  # v1.52.2：世代鏈（全新檔案）
         "subtitle/publisher.py",    # v1.52.2：build_publish_fields
         "subtitle/clipwatch.py",    # v2.1.0：剪貼簿監聽篩子（全新檔案）
+        "subtitle/ocrlayout.py",    # 第 9 項調研：OCR 排版還原（全新檔案）
+        "subtitle/ocrengine.py",    # 第 9 項第一階段：tesseract 包裝（全新）
     }
+    # 未追蹤（還沒 git add）的新檔案 `git diff` 看不到，會整個繞過這份白
+    # 名單——本檔案上面那段註解已經修過「未 commit 的刪除」，但**新增**
+    # 這一側還留著同一個破口，而且我自己就踩進去了：`subtitle/ocrlayout.py`
+    # 在還沒 commit 的那一晚，全套測試照樣回報通過。補上。
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "--", "subtitle/"],
+        cwd=REPO_ROOT, capture_output=True, text=True).stdout.split()
+    untracked = [path for path in untracked if path.endswith(".py")]
+    diff.extend(untracked)
+    added_files.update(untracked)
     unexpected_touched = set(diff) - allowed_touched
     check("subtitle/ 只有白名單內的檔案被改動（公開介面只准加、不准改）",
           not unexpected_touched, str(unexpected_touched))
