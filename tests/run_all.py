@@ -29,7 +29,8 @@ TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
          "test_v1500.py", "test_v1501.py", "test_v1510.py", "test_v1520.py",
          "test_v1521.py", "test_v1522.py", "test_v1523.py",
          "test_v200.py", "test_v210.py", "test_v220.py",
-         "test_ocrlayout.py", "test_ocrengine.py"]
+         "test_ocrlayout.py", "test_ocrengine.py",
+         "test_tesseract_setup.py"]
 
 
 def main() -> int:
