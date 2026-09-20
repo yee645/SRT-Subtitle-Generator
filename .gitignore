@@ -27,3 +27,8 @@ release-repo/
 
 # 轉錄結果快取（本地產生，不入版控）
 transcribe_cache/
+
+# 一鍵安裝下載的外部執行檔與語言檔（ffmpeg、tesseract）。
+# 這些是執行期才產生、每台機器各自的東西，不該進版本庫——而且 ffmpeg
+# 那一包就有 80~100 MB。
+tools/

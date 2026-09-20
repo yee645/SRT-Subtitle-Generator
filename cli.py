@@ -75,6 +75,7 @@ from subtitle.colorcheck import (analyze_color, format_color_report,
 from subtitle.errors import format_error_text
 from subtitle.exporter import export
 from subtitle.ffmpeg_setup import ensure_ffmpeg_on_path
+from subtitle.tesseract_setup import ensure_tesseract_on_path
 from subtitle.importer import load_subtitle_file
 from subtitle.jumpcut import (apply_jumpcut, format_jumpcut_report,
                               resolve_jumpcut_settings, suggest_output_path
@@ -462,8 +463,9 @@ def _apply_overrides(config: dict, args: argparse.Namespace) -> None:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    # 先前「自動安裝 ffmpeg」裝好的執行檔在此生效（不改動系統 PATH）。
+    # 先前「自動安裝」裝好的執行檔在此生效（不改動系統 PATH）。
     ensure_ffmpeg_on_path()
+    ensure_tesseract_on_path()
     config = load_config()
     _apply_overrides(config, args)
 

@@ -2494,6 +2494,7 @@ class SrtApp(tk.Tk):
 def main():
     """建立並執行應用程式。"""
     from subtitle.ffmpeg_setup import app_root, ensure_ffmpeg_on_path
+    from subtitle.tesseract_setup import ensure_tesseract_on_path
 
     handlers = [logging.StreamHandler()]
     try:
@@ -2509,7 +2510,8 @@ def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=handlers,
     )
-    # 先前「自動安裝 ffmpeg」裝好的執行檔在此生效（不改動系統 PATH）。
+    # 先前「自動安裝」裝好的執行檔在此生效（不改動系統 PATH）。
     ensure_ffmpeg_on_path()
+    ensure_tesseract_on_path()
     app = SrtApp()
     app.mainloop()
