@@ -197,6 +197,9 @@ else:
         # v2.2.0 B.5：健檢中心內嵌成階段③頁籤內容。切頁籤時同步對象，
         # 並以切頁籤取代開窗（`_open_health_center_dialog` 的接手者）。
         "_on_stage_tab_changed", "_go_to_health_stage",
+        # v2.3.0 第 9 項 5b-2：使用者開過螢幕翻譯熱鍵的話，啟動時在背景
+        # 建好查譯面板，熱鍵才不必先手動開一次面板才有效。
+        "_maybe_start_hotkey",
     }
     unexpected = added_methods - expected_new_methods
     check("新增的方法都在本版白名單內，沒有夾帶計畫外的新邏輯",

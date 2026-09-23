@@ -41,9 +41,17 @@ from typing import Optional
 
 from config import CONFIG_PATH, save_config
 from subtitle import clipwatch as cw
+from subtitle import hotkey as hk
+from subtitle import ocrengine
 from subtitle import quicktranslate as qt
+from subtitle import screencap
+from subtitle import screentranslate as st
+from subtitle import speech
 from subtitle.punctstyle import cjk_ratio
 from subtitle.translator import LANGUAGE_LABELS
+
+from gui.region_overlay import RegionOverlay
+from gui.tesseract_dialog import TesseractInstallDialog
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +68,10 @@ VOCAB_PATH = os.path.join(
 
 _CONSECUTIVE_FAILURE_LIMIT = 3
 _POLL_MS = 150
+# 全域熱鍵輪詢間隔（見 subtitle/hotkey.py 的 WindowsBackend 說明）。
+_HOTKEY_POLL_MS = 120
+# 朗讀狀態輪詢：念完要把狀態列改回來，失敗也要講。
+_SPEECH_POLL_MS = 300
 
 # ---------------------------------------------------------------------------
 # 文案（對照設計文件的 C1~C22 編號，方便日後對照修改）。
@@ -96,6 +108,24 @@ C18_VOCAB_HINT = ("查譯時的關鍵詞會自動收進這裡（本機保存，�
                    "記憶卡。")
 C21_CLEAR_TITLE = "清空生字本"
 C22_VOCAB_EMPTY = "生字本還是空的。查譯幾句附關鍵詞的外文，就會自動收詞進來。"
+
+# v2.3.0 螢幕翻譯（第 9 項 5b）。
+C30_SCREEN_HINT = ("框選螢幕上任何一塊畫面（遊戲、影片、圖片裡的字），"
+                   "在這台電腦上辨識成文字，確認後再翻譯。畫面不會被傳出去。")
+C31_OCR_RUNNING = "辨識中…（在這台電腦上跑，通常 1～3 秒）"
+C32_OCR_CANCELLED = "已取消框選。"
+C33_NEED_TESSERACT = ("螢幕翻譯要先安裝文字辨識引擎。安裝視窗已經打開，"
+                      "裝完再按一次「框選螢幕翻譯」。")
+C34_NOTHING_TO_SPEAK = "還沒有可以朗讀的內容。"
+C35_NOTHING_TO_COPY = "還沒有可以複製的內容。"
+C36_SPEECH_OFF = "朗讀功能已在設定裡關閉。"
+C37_SECRET_BLOCKED = ("這段內容看起來像密碼或金鑰，不會送去翻譯。"
+                      "需要的話仍可在本機朗讀或複製。")
+C38_OCR_BUSY = "上一次框選還在辨識，請稍候。"
+
+
+def hotkey_check_label(combo: str) -> str:
+    return f"熱鍵 {combo}"
 
 
 def C14_TOO_LONG(max_chars: int) -> str:
@@ -230,7 +260,7 @@ def _scrolled_text(parent, height):
 class QuickTranslatePanel(tk.Toplevel):
     """即時查譯浮動視窗（獨立 Toplevel，可置頂，關閉即隱藏）。"""
 
-    def __init__(self, master, config_data: dict):
+    def __init__(self, master, config_data: dict, start_hidden: bool = False):
         super().__init__(master)
         self.config_data = config_data
         self.settings = qt.resolve_quicktranslate_settings(config_data)
@@ -255,10 +285,22 @@ class QuickTranslatePanel(tk.Toplevel):
         self.clip_settings = cw.resolve_clipwatch_settings(config_data)
         self._clip_job = None
         self._last_clip = None        # 上一次看到的剪貼簿內容，用來只在「變了」時才動作
+        # v2.3.0 螢幕翻譯。辨識結果走自己的佇列與輪詢——框選時面板是收起
+        # 來的，不能靠只在面板可見時才跑的 `_poll_queue`。
+        self.screen_settings = st.resolve_screentranslate_settings(config_data)
+        self._ocr_queue: "queue.Queue" = queue.Queue()
+        self._ocr_job = None
+        self._ocr_busy = False
+        self._ocr_id = 0
+        self._speaker = None
+        self._speech_job = None
+        self.hotkey_settings = hk.resolve_hotkey_settings(config_data)
+        self._hotkey = None
+        self._hotkey_job = None
 
         self.title("即時查譯（選字即翻）")
-        self.geometry("520x600")
-        self.minsize(480, 560)
+        self.geometry("520x720")
+        self.minsize(480, 680)
         self.transient(master)
 
         raw_prefs = config_data.get("quicktranslate") or {}
@@ -267,6 +309,7 @@ class QuickTranslatePanel(tk.Toplevel):
         self.save_vocab_var = tk.BooleanVar(value=bool(raw_prefs.get("save_to_vocab", True)))
         self.topmost_var = tk.BooleanVar(value=bool(raw_prefs.get("topmost", True)))
         self.clipwatch_var = tk.BooleanVar(value=self.clip_settings["enabled"])
+        self.hotkey_var = tk.BooleanVar(value=self.hotkey_settings["enabled"])
 
         self._build_ui()
         self.attributes("-topmost", bool(self.topmost_var.get()))
@@ -278,7 +321,14 @@ class QuickTranslatePanel(tk.Toplevel):
 
         self._refresh_api_key_state(force=True)
         self._refresh_vocab_tree()
-        self.show()
+        if self.hotkey_var.get():
+            self._enable_hotkey()
+        if start_hidden:
+            # 只為了熱鍵而在背景建好面板：不要在使用者眼前閃一下。
+            self.withdraw()
+            self._visible = False
+        else:
+            self.show()
 
     # ------------------------------------------------------------------
     # 版面
@@ -299,6 +349,26 @@ class QuickTranslatePanel(tk.Toplevel):
         page = ttk.Frame(self.notebook, padding=(8, 8))
         self.notebook.add(page, text="查譯")
 
+        # v2.3.0 螢幕翻譯放最上面：它是另一個「文字從哪來」的入口，跟
+        # 選取、剪貼簿並列，但不需要先有文字才能按。
+        screen_row = ttk.Frame(page)
+        screen_row.pack(fill="x")
+        self.screen_btn = ttk.Button(
+            screen_row, text="框選螢幕翻譯", width=12,
+            command=self.start_screen_capture)
+        self.screen_btn.pack(side="left")
+        self.ocr_translate_btn = ttk.Button(
+            screen_row, text="翻譯辨識結果", width=12, state="disabled",
+            command=self._on_ocr_translate)
+        self.ocr_translate_btn.pack(side="left", padx=(8, 0))
+        self.hotkey_check = ttk.Checkbutton(
+            screen_row, text=hotkey_check_label(self.hotkey_settings["combo"]),
+            variable=self.hotkey_var, command=self._on_hotkey_toggle)
+        self.hotkey_check.pack(side="left", padx=(10, 0))
+        self.screen_status_var = tk.StringVar(value=C30_SCREEN_HINT)
+        ttk.Label(page, textvariable=self.screen_status_var, foreground=HINT_FG,
+                  wraplength=460, justify="left").pack(anchor="w", pady=(4, 6))
+
         self.src_frame = ttk.LabelFrame(page, text="原文", padding=(8, 4))
         self.src_frame.pack(fill="x")
         self.src_text = _scrolled_text(self.src_frame, 3)
@@ -316,6 +386,29 @@ class QuickTranslatePanel(tk.Toplevel):
         self.status_var = tk.StringVar(value=C3_WAITING)
         ttk.Label(page, textvariable=self.status_var, foreground=STATUS_FG,
                   wraplength=460, justify="left").pack(anchor="w", pady=(6, 4))
+
+        # 朗讀／複製：不需要 API 金鑰，辨識被擋下來（像密碼）時也照樣能用。
+        voice_row = ttk.Frame(page)
+        voice_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(voice_row, text="朗讀:").pack(side="left")
+        self.speak_src_btn = ttk.Button(
+            voice_row, text="原文", width=5,
+            command=lambda: self._speak("src"))
+        self.speak_src_btn.pack(side="left", padx=(4, 0))
+        self.speak_dst_btn = ttk.Button(
+            voice_row, text="譯文", width=5,
+            command=lambda: self._speak("dst"))
+        self.speak_dst_btn.pack(side="left", padx=(4, 0))
+        self.speak_stop_btn = ttk.Button(
+            voice_row, text="停止", width=5, command=self._stop_speaking)
+        self.speak_stop_btn.pack(side="left", padx=(4, 0))
+        ttk.Label(voice_row, text="複製:").pack(side="left", padx=(14, 0))
+        self.copy_src_btn = ttk.Button(
+            voice_row, text="原文", width=5, command=lambda: self._copy("src"))
+        self.copy_src_btn.pack(side="left", padx=(4, 0))
+        self.copy_dst_btn = ttk.Button(
+            voice_row, text="譯文", width=5, command=lambda: self._copy("dst"))
+        self.copy_dst_btn.pack(side="left", padx=(4, 0))
 
         ctrl1 = ttk.Frame(page)
         ctrl1.pack(fill="x", pady=(0, 2))
@@ -710,6 +803,12 @@ class QuickTranslatePanel(tk.Toplevel):
             if manual:
                 self.status_var.set(C17_NOTHING_SELECTED)
             return
+        # v2.3.0：辨識結果放在可編輯的原文框裡，在那裡選字也會觸發選取即
+        # 翻譯——那條路不經過 `_on_ocr_translate`。所以密碼檢查放在所有
+        # 路徑都會經過的這裡，而不是只放在按鈕上。寧可漏翻、不可誤送。
+        if st.is_secret(source):
+            self.status_var.set(C37_SECRET_BLOCKED)
+            return
         if not qt.looks_translatable(source, settings):
             self.status_var.set(classify_skip_reason(source, settings))
             return
@@ -772,6 +871,274 @@ class QuickTranslatePanel(tk.Toplevel):
         except queue.Empty:
             pass
         self._poll_job = self.after(_POLL_MS, self._poll_queue)
+
+    # ------------------------------------------------------------------
+    # 螢幕翻譯（v2.3.0，第 9 項 5b）
+    def start_screen_capture(self):
+        """
+        框選一塊螢幕 → 本機辨識 → 顯示在原文框。
+
+        熱鍵和按鈕都走這裡。框選前先把面板收起來，否則面板自己會蓋在要框
+        的東西上面，也會被截進去。
+        """
+        if self._ocr_busy:
+            self._reveal()
+            self.screen_status_var.set(C38_OCR_BUSY)
+            return
+        if not ocrengine.tesseract_available():
+            # 沒裝引擎就直接開安裝視窗，不要讓使用者先框一次才被告知。
+            self._reveal()
+            self.screen_status_var.set(C33_NEED_TESSERACT)
+            TesseractInstallDialog(self)
+            return
+        self._ocr_busy = True
+        self.screen_btn.configure(state="disabled")
+        self._was_visible = self._visible
+        self.withdraw()
+        self._visible = False
+        self.update_idletasks()
+        RegionOverlay(self, on_select=self._on_region_selected,
+                      on_cancel=self._on_region_cancelled)
+
+    def _reveal(self):
+        """把面板叫出來（熱鍵觸發時面板可能根本沒開過）。"""
+        if not self._visible:
+            self.show()
+        else:
+            self.lift()
+
+    def _on_region_cancelled(self):
+        self._ocr_busy = False
+        self.screen_btn.configure(state="normal")
+        if getattr(self, "_was_visible", True):
+            self._reveal()
+            self.screen_status_var.set(C32_OCR_CANCELLED)
+
+    def _on_region_selected(self, region):
+        self._ocr_id += 1
+        ocr_id = self._ocr_id
+        width, height = self.winfo_screenwidth(), self.winfo_screenheight()
+        self._reveal()
+        self.screen_status_var.set(C31_OCR_RUNNING)
+        threading.Thread(
+            target=self._ocr_worker,
+            args=(region, (0, 0, width, height), ocr_id), daemon=True,
+        ).start()
+        if self._ocr_job is None:
+            self._ocr_job = self.after(_POLL_MS, self._poll_ocr)
+
+    def _ocr_worker(self, region, bounds, ocr_id):
+        try:
+            result = st.capture_and_recognize(
+                region, config=self.config_data, bounds=bounds)
+            self._ocr_queue.put(("done", ocr_id, result))
+        except Exception as exc:  # 背景執行緒須攔截所有例外回報主執行緒。
+            # 擷取與辨識的例外訊息本來就寫成使用者看得懂的話，照原樣顯示；
+            # 其他例外多半是程式錯誤，留完整記錄。
+            if not isinstance(exc, (ocrengine.OcrError, screencap.CaptureError)):
+                logger.exception("螢幕翻譯失敗")
+            self._ocr_queue.put(("error", ocr_id, exc))
+
+    def _poll_ocr(self):
+        self._ocr_job = None
+        try:
+            kind, ocr_id, payload = self._ocr_queue.get_nowait()
+        except queue.Empty:
+            self._ocr_job = self.after(_POLL_MS, self._poll_ocr)
+            return
+        self._ocr_busy = False
+        self.screen_btn.configure(state="normal")
+        if ocr_id != self._ocr_id:
+            return
+        self._reveal()
+        if kind == "error":
+            reason = str(payload).strip().splitlines()
+            self.screen_status_var.set(
+                "螢幕翻譯失敗：%s" % (reason[0] if reason else "未知錯誤"))
+            return
+        self._show_ocr_result(payload)
+
+    def _show_ocr_result(self, result: dict):
+        decision = st.decide(result, self.screen_settings)
+        self.notebook.select(0)
+        # 辨識結果常有錯字，原文框開放編輯，讓使用者改好再送。
+        self._set_text(self.src_text, decision["text"])
+        self.src_text.configure(state="normal")
+        if not self._in_nokey_state:
+            self._set_text(self.dst_text, "")
+        self._set_text(self.term_text, "")
+        # 結論只寫在上方那一行（離按鈕最近）；下方狀態列清掉，免得留著上
+        # 一次查譯的「翻譯完成」讓人以為這段也翻好了。
+        self.screen_status_var.set(st.format_status(result, decision))
+        self.status_var.set("")
+        if decision["action"] == st.ACTION_BLOCK:
+            self.ocr_translate_btn.configure(state="disabled")
+        else:
+            self.ocr_translate_btn.configure(state="normal")
+            if decision["action"] == st.ACTION_SEND:
+                self._on_ocr_translate()
+
+    def _on_ocr_translate(self):
+        """按下「翻譯辨識結果」：以使用者**改過之後**的原文為準再檢查一次。"""
+        text = self.src_text.get("1.0", "end-1c")
+        ok, why = st.may_send(text)
+        if not ok:
+            self.status_var.set(why)
+            return
+        if not self._get_api_key():
+            self.status_var.set(C9_NOKEY_STATUS)
+            return
+        self.ocr_translate_btn.configure(state="disabled")
+        self._submit(text, manual=True)
+
+    # ------------------------------------------------------------------
+    # 熱鍵
+    def _on_hotkey_toggle(self):
+        if self.hotkey_var.get():
+            self._enable_hotkey()
+        else:
+            self._disable_hotkey()
+            self.screen_status_var.set(
+                f"熱鍵 {self.hotkey_settings['combo']} 已關閉。")
+        data = dict(self.config_data.get("hotkey") or {})
+        data.update({"enabled": bool(self.hotkey_var.get()),
+                     "combo": self.hotkey_settings["combo"]})
+        self.config_data["hotkey"] = data
+        try:
+            save_config(self.config_data)
+        except OSError:
+            pass
+
+    def _hotkey_hwnd(self):
+        """RegisterHotKey 要的是主視窗的最外層 handle（只在 Windows 用得到）。"""
+        try:
+            return int(self.master.winfo_toplevel().wm_frame(), 16)
+        except (tk.TclError, ValueError, AttributeError):
+            return None
+
+    def _enable_hotkey(self):
+        if self._hotkey is None:
+            import sys
+            hwnd = self._hotkey_hwnd() if sys.platform == "win32" else None
+            self._hotkey = hk.HotkeyManager(
+                backend=hk.make_backend(hwnd),
+                window_binder=self._bind_hotkey,
+                window_unbinder=self._unbind_hotkey,
+                on_trigger=lambda: self.after(0, self.start_screen_capture))
+        try:
+            status = self._hotkey.enable(self.hotkey_settings["combo"])
+        except hk.HotkeyError as exc:
+            status = "unavailable"
+            self.screen_status_var.set(str(exc))
+        else:
+            self.screen_status_var.set(self._hotkey.describe())
+        if status == "global" and self._hotkey_job is None:
+            self._hotkey_job = self.after(_HOTKEY_POLL_MS, self._poll_hotkey)
+        return status
+
+    def _disable_hotkey(self):
+        if self._hotkey_job is not None:
+            self.after_cancel(self._hotkey_job)
+            self._hotkey_job = None
+        if self._hotkey is not None:
+            self._hotkey.disable()
+
+    def _bind_hotkey(self, sequence):
+        # bind_all：焦點在本程式任何一個視窗都有效，不只這個面板。
+        self.bind_all(sequence, lambda _e: self._hotkey.trigger())
+        return True
+
+    def _unbind_hotkey(self, sequence):
+        self.unbind_all(sequence)
+
+    def _poll_hotkey(self):
+        self._hotkey_job = None
+        if self._hotkey is None or self._hotkey.status != "global":
+            return
+        self._hotkey.poll()
+        self._hotkey_job = self.after(_HOTKEY_POLL_MS, self._poll_hotkey)
+
+    # ------------------------------------------------------------------
+    # 朗讀／複製（不需要 API 金鑰）
+    _PLACEHOLDERS = (C2_INITIAL, C10_NOKEY_BODY)
+
+    def _panel_text(self, which: str) -> str:
+        widget = self.src_text if which == "src" else self.dst_text
+        text = widget.get("1.0", "end-1c").strip()
+        return "" if text in self._PLACEHOLDERS else text
+
+    def _speak(self, which: str):
+        text = self._panel_text(which)
+        if not text:
+            self.status_var.set(C34_NOTHING_TO_SPEAK)
+            return
+        settings = speech.resolve_speech_settings(self.config_data)
+        if not settings["enabled"]:
+            self.status_var.set(C36_SPEECH_OFF)
+            return
+        if self._speaker is None:
+            self._speaker = speech.Speaker(settings=settings)
+        lang = (st.guess_speech_lang(text) if which == "src"
+                else self._language_code())
+        try:
+            dropped = self._speaker.speak(text, lang)
+        except speech.SpeechError as exc:
+            self.status_var.set(str(exc))
+            return
+        label = "原文" if which == "src" else "譯文"
+        if dropped:
+            self.status_var.set(f"朗讀{label}中（太長，後面 {dropped} 字不念）。")
+        else:
+            self.status_var.set(f"朗讀{label}中。")
+        if self._speech_job is None:
+            self._speech_job = self.after(_SPEECH_POLL_MS, self._poll_speech)
+
+    def _poll_speech(self):
+        self._speech_job = None
+        speaker = self._speaker
+        if speaker is None or speaker._proc is None:
+            return
+        code = speaker.wait(timeout=0)
+        if code is None:
+            self._speech_job = self.after(_SPEECH_POLL_MS, self._poll_speech)
+            return
+        if code != 0:
+            detail = speaker.last_error or speaker._read_stderr()
+            self.status_var.set(
+                "朗讀失敗%s。" % (f"：{detail.splitlines()[0]}" if detail else ""))
+        else:
+            self.status_var.set("朗讀完畢。")
+
+    def _stop_speaking(self):
+        if self._speaker is not None and self._speaker.is_speaking():
+            self._speaker.stop()
+            self.status_var.set("已停止朗讀。")
+
+    def _copy(self, which: str):
+        text = self._panel_text(which)
+        if not text:
+            self.status_var.set(C35_NOTHING_TO_COPY)
+            return
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        # 自己放進剪貼簿的東西不要被「監聽剪貼簿」當成新複製的再翻一次。
+        self._last_clip = text
+        label = "原文" if which == "src" else "譯文"
+        self.status_var.set(f"已複製{label}。")
+
+    def destroy(self):
+        for job in ("_ocr_job", "_hotkey_job", "_speech_job"):
+            if getattr(self, job, None) is not None:
+                try:
+                    self.after_cancel(getattr(self, job))
+                except tk.TclError:
+                    pass
+                setattr(self, job, None)
+        if getattr(self, "_hotkey", None) is not None:
+            self._hotkey.disable()
+        if getattr(self, "_speaker", None) is not None:
+            self._speaker.stop()
+        super().destroy()
 
     # ------------------------------------------------------------------
     # 生字本
