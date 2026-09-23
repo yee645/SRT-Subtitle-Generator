@@ -904,7 +904,7 @@ try，擷取意外失敗時例外會往上竄、整個檔案在那裡中止，�
    景建一個隱藏的面板。
 
 驗證：`tests/test_screentranslate_gui.py`（Xvfb 上真的畫字、真的截圖、真
-的 tesseract 辨識，53 項）；7 個破壞探針（拿掉 `_submit` 密碼檢查、原文
+的 tesseract 辨識，55 項）；7 個破壞探針（拿掉 `_submit` 密碼檢查、原文
 框不可編輯、複製不記 `_last_clip`、視窗高度改回 600、`start_hidden` 失
 效、銷毀不解熱鍵、框選前不收面板）全部正確失敗。全套 70 檔 3450 PASS。
 **這裡量不到的**：Windows 上 `RegisterHotKey` 真的收得到（Tk 自己的訊息
