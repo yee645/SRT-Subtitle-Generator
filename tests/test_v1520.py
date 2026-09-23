@@ -276,6 +276,7 @@ if old_app_src is not None:
         "subtitle/screencap.py",    # 第 9 項第一階段：螢幕擷取（全新）
         "subtitle/hotkey.py",       # 第 9 項第一階段：全域熱鍵（全新）
         "subtitle/speech.py",       # 第 9 項第一階段：朗讀（全新）
+        "subtitle/screentranslate.py",  # 第 9 項第一階段：螢幕翻譯流程層（全新）
     }
     # 未追蹤（還沒 git add）的新檔案 `git diff` 看不到，會整個繞過這份白
     # 名單——本檔案上面那段註解已經修過「未 commit 的刪除」，但**新增**
