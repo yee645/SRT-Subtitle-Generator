@@ -114,12 +114,23 @@ if _m:
     readme = _read("README.md")
     check(f"產出物③：README 指向 docs/{doc_name}", doc_name in readme)
     dialog_src = _read("gui/whatsnew_dialog.py")
-    check("產出物④：程式內速覽提到本版的主題（健檢中心內嵌）",
+    check(f"產出物④：程式內速覽提到本版（v{major}.{minor}）",
+          f"v{major}.{minor}" in dialog_src)
+    check("程式內速覽仍保有 v2.2 的主題（健檢中心內嵌）",
           "v2.2" in dialog_src)
 
+    # 下面是 **v2.2 這一份**介紹的內容檢查（點擊數三處一致、誠實交代未
+    # 達預估）。v2.3.0 起 APP_VERSION 往前走了，但這些數字只屬於 2.2 那份
+    # 文件與那一條 CHANGELOG——若跟著 APP_VERSION 走，就會要求 2.3 的文件
+    # 也放一張跟它無關的點擊數表。所以釘在 2.2，強度不變；新版本自己的內
+    # 容檢查寫在自己的測試檔（見 tests/test_v230.py）。
+    doc_name = "WHATS_NEW_2.2.md"
+    doc_path = os.path.join(ROOT, "docs", doc_name)
+    check("docs/WHATS_NEW_2.2.md 仍在（後面版本的介紹會連回它）",
+          os.path.exists(doc_path))
     if os.path.exists(doc_path):
         doc = _read(f"docs/{doc_name}")
-        section = changelog.split(f"## v{major}.{minor}.{patch}", 1)[1]
+        section = changelog.split("\n## v2.2.0", 1)[1]
         nxt = re.search(r"\n## v", section)
         section = section[:nxt.start()] if nxt else section
 
