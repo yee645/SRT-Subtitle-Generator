@@ -124,6 +124,40 @@ def scale_region(region, factor):
     return tuple(int(round(v * factor)) for v in region)
 
 
+# GetDeviceCaps 的索引：HORZRES 是「本程式看到的」寬度，DESKTOPHORZRES
+# 是螢幕實際的像素寬度。
+_HORZRES = 8
+_DESKTOPHORZRES = 118
+# 超出這個範圍的倍率視為讀值有問題（Windows 的縮放最高 500%，但讀到比
+# 1 小或大得離譜的值，比較可能是驅動回報怪數字），寧可不換算。
+_DPI_FACTOR_RANGE = (1.0, 5.0)
+
+
+def dpi_factor(physical_width, logical_width):
+    """
+    從「實際像素寬度／本程式看到的寬度」算出高 DPI 倍率。
+
+    本程式沒有宣告自己支援高 DPI，所以在 125%／150% 縮放下 Windows 會給
+    它一套縮小過的座標：Tk 回報的框選位置是邏輯座標，但對整個螢幕做
+    `BitBlt` 用的是實際像素——不換算就會抓到左上方偏移的一塊（Pillow 的
+    螢幕截圖在同樣情況下只抓到畫面的一部分，是同一件事）。
+
+    讀不到、或讀到不合理的值時回傳 1（不換算）：換算錯比不換算更糟。
+    **這一項在開發環境驗不到**（沒有 Windows），算式本身單獨測。
+    """
+    try:
+        physical, logical = float(physical_width), float(logical_width)
+    except (TypeError, ValueError):
+        return 1.0
+    if physical <= 0 or logical <= 0:
+        return 1.0
+    factor = physical / logical
+    low, high = _DPI_FACTOR_RANGE
+    if factor < low or factor > high:
+        return 1.0
+    return round(factor, 4)
+
+
 # ----------------------------------------------------------------------
 # BMP：寫得出、也讀得回（零第三方依賴）
 # ----------------------------------------------------------------------
@@ -234,7 +268,6 @@ def _capture_windows(region, out_path):
     import ctypes
     from ctypes import wintypes
 
-    left, top, width, height = region
     gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
     user32 = ctypes.WinDLL("user32", use_last_error=True)
 
@@ -242,6 +275,10 @@ def _capture_windows(region, out_path):
     if not screen_dc:
         raise CaptureError("取不到螢幕畫面（系統拒絕存取）。請改用視窗化"
                            "或無邊框模式再試一次。")
+    # 框選座標是 Tk 給的邏輯座標，BitBlt 要的是實際像素（見 dpi_factor）。
+    factor = dpi_factor(gdi32.GetDeviceCaps(screen_dc, _DESKTOPHORZRES),
+                        gdi32.GetDeviceCaps(screen_dc, _HORZRES))
+    left, top, width, height = scale_region(region, factor)
     mem_dc = bitmap = None
     try:
         mem_dc = gdi32.CreateCompatibleDC(screen_dc)
