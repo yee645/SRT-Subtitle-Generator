@@ -32,8 +32,9 @@ check("is_ffmpeg_missing 判定", errors.is_ffmpeg_missing(
 e = errors.describe_exception(RuntimeError(
     "找不到可用的本地 Whisper。請先安裝 Python 並執行 pip install..."))
 check("whisper 缺失歸類", e.kind == errors.KIND_WHISPER_MISSING)
-check("whisper 解法含三條路", "API" in e.solution and "模式二" in e.solution,
-      e.solution)
+# v2.3.1 起模式不再用編號稱呼：第三條路要用介面上真的看得到的名字。
+check("whisper 解法含三條路", "API" in e.solution and "「文字稿對齊」" in e.solution
+      and "模式二" not in e.solution, e.solution)
 
 e = errors.describe_exception(RuntimeError("載入 Whisper 模型失敗：OOM"))
 check("模型載入失敗有解法", "較小的模型" in e.solution, e.solution)

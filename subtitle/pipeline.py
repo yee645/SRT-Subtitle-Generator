@@ -64,7 +64,7 @@ def find_sidecar_transcript(media_path: str) -> Optional[str]:
     """
     尋找與媒體檔同名的文字稿（sidecar）檔。
 
-    批次跑「模式二：文字稿對齊」時，每部影片的文字稿放在旁邊同名的
+    批次跑「文字稿對齊」時，每部影片的文字稿放在旁邊同名的
     ``影片.txt`` 即可自動帶入，不必逐一貼上。找不到時回傳 None。
     """
     root = os.path.splitext(media_path)[0]
@@ -103,8 +103,8 @@ def run_pipeline(
     參數：
         media_path: 影片或音訊檔路徑。
         config: 完整設定 dict（含 segmentation / transcription / automation）。
-        mode: "transcribe"（模式一）或 "align"（模式二）。
-        transcript: 模式二使用的文字稿；留空時自動尋找同名 .txt sidecar 檔。
+        mode: "transcribe"（語音轉寫）或 "align"（文字稿對齊）。
+        transcript: 文字稿對齊使用的文字稿；留空時自動尋找同名 .txt sidecar 檔。
         report: (message, ratio) 進度回呼。
     回傳：
         {"cues": cue 清單, "exports": [匯出的檔案路徑], "burned": 燒錄輸出路徑或 None}
@@ -126,7 +126,7 @@ def run_pipeline(
             sidecar = find_sidecar_transcript(media_path)
             if not sidecar:
                 raise ValueError(
-                    f"模式二需要文字稿：請貼上文字稿，或在媒體檔旁放置同名的"
+                    f"「文字稿對齊」需要文字稿：請貼上文字稿，或在媒體檔旁放置同名的"
                     f"「{os.path.splitext(os.path.basename(media_path))[0]}.txt」。")
             with open(sidecar, "r", encoding="utf-8") as fp:
                 transcript = fp.read()
@@ -230,7 +230,7 @@ def run_batch(
     批次執行自動流程：多個檔案依序以相同設定跑 run_pipeline。
 
     單一檔案失敗不會中斷整批，失敗原因記錄在該檔的結果中。
-    模式二批次時，文字稿一律改由各檔案的同名 .txt sidecar 提供
+    文字稿對齊批次時，文字稿一律改由各檔案的同名 .txt sidecar 提供
     （只有單一檔案時才使用傳入的 transcript）。
 
     回傳：每個檔案一筆結果 dict：

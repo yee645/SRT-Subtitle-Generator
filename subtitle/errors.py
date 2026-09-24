@@ -81,7 +81,7 @@ def describe_exception(exc: Union[BaseException, str]) -> FriendlyError:
                      "並於「轉寫設定」的「本地 Python」欄位填入該 Python 路徑；"
                      "(2) 於「轉寫設定」啟用 OpenAI API 模式並填入金鑰"
                      "（免安裝、按用量計費）；(3) 已有逐字稿時改用"
-                     "「模式二：文字稿對齊」。",
+                     "「文字稿對齊」。",
             details=text, kind=KIND_WHISPER_MISSING)
 
     if "載入 Whisper 模型失敗" in text or "外部 Whisper 辨識失敗" in text:

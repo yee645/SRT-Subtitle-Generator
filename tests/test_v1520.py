@@ -104,7 +104,7 @@ else:
     # （不是真正的換行字元），要用同樣的兩字元序列取代才對得起來。
     mode_texts_folded = {
         t.replace("\\n", "") for t in
-        re.findall(r'"(模式[一二三][：:].*?)"', app_src)
+        re.findall(r'\(MODE_[A-Z]+, "(.*?)"\)', app_src)
     }
     truly_missing = {t for t in (old_texts - new_texts)
                      if t not in mode_texts_folded}
@@ -115,7 +115,17 @@ else:
                        "重複片段偵測": "剪重複片段",
                        # v1.52.1 第二輪：C-4 併三個輸出面，兩個區塊改名。
                        "自動化輸出（一鍵完成用）": "輸出設定",
-                       "匯出與燒錄": "只做單獨一件事"}
+                       "匯出與燒錄": "只做單獨一件事",
+                       # v2.3.1：D-1 摘掉模式舊編號（「保留至 2.0.0 之後一
+                       # 版再摘除」）。副標一字不改，只換掉前面的名字。
+                       "模式一：音訊轉錄（自動產生逐字稿與時間軸）":
+                           "語音轉寫（自動產生逐字稿與時間軸）",
+                       "模式二：文字稿對齊（貼上現成文字稿，自動對齊時間軸）":
+                           "文字稿對齊（貼上現成文字稿，自動對齊時間軸）",
+                       "模式三：手動字幕模式（從零建立字幕、手動標記時間）":
+                           "手動輸入（從零建立字幕、手動標記時間）",
+                       "轉寫設定（模式一）": "轉寫設定",
+                       "文字稿（模式二）": "文字稿"}
     # C-3 拆掉「一鍵完成」是**一顆變三顆**，不是改名，所以單獨核對：舊按
     # 鈕的三項能力（生成、依設定輸出、批次全自動）新版都要找得到入口，
     # 少一項就是能力真的不見了。
@@ -126,7 +136,7 @@ else:
     if split_ok:
         planned_renames["一鍵完成（生成＋匯出＋燒錄）"] = "批次一鍵完成"
     renamed_ok = {old: new for old, new in planned_renames.items()
-                  if new in new_texts}
+                  if new in new_texts or new in mode_texts_folded}
     truly_missing = {t for t in truly_missing if t not in renamed_ok}
     check(f"v1.51.0 的所有按鈕/標籤文字（共 {len(old_texts)} 個）在新版一個"
           "不少（模式文字換行、D-1 計畫內改名除外）",
@@ -280,6 +290,10 @@ if old_app_src is not None:
         "subtitle/hotkey.py",       # 第 9 項第一階段：全域熱鍵（全新）
         "subtitle/speech.py",       # 第 9 項第一階段：朗讀（全新）
         "subtitle/screentranslate.py",  # 第 9 項第一階段：螢幕翻譯流程層（全新）
+        # v2.3.1 D-1：模式摘掉舊編號，以下只改錯誤訊息字串與註解，沒有動任
+        # 何函式或公開名稱（下面「公開名稱一個不少」那條照樣守著）。
+        "subtitle/errors.py", "subtitle/aligner.py", "subtitle/segmenter.py",
+        "subtitle/transcriber.py", "subtitle/subtitlecheck.py",
     }
     # 未追蹤（還沒 git add）的新檔案 `git diff` 看不到，會整個繞過這份白
     # 名單——本檔案上面那段註解已經修過「未 commit 的刪除」，但**新增**

@@ -2,7 +2,7 @@
 """
 字幕列編輯對話框與時間軸工具。
 
-提供以下功能（模式三手動字幕模式與其他模式皆可使用）：
+提供以下功能（「手動輸入」與其他模式皆可使用）：
     1. CueEditDialog：以 mm:ss.fff 文字框編輯單一 cue 的起訖時間與文字。
     2. parse_timestamp / format_timestamp_input：時間字串解析與格式化。
 
