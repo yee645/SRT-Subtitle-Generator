@@ -2,7 +2,7 @@
 """
 SRT 自動字幕生成與編輯應用程式 - 主視窗。
 
-整合：模式切換（含手動字幕模式）、檔案選擇（可多選批次）、轉寫設定、
+整合：模式切換（含手動輸入）、檔案選擇（可多選批次）、轉寫設定、
 字幕生成、即時預覽、視覺調整面板、多格式字幕匯出（SRT/VTT/ASS/TXT）、
 影片字幕燒錄（hardsub），以及設定檔的載入與自動儲存（記憶功能）。
 
@@ -825,9 +825,9 @@ class SrtApp(tk.Tk):
         # 只是排成兩行避免撐開欄寬觸發水平捲軸（見
         # docs/UI_ARCHITECTURE_2.0.md B.2：左欄設計成「只捲設定」）。
         for value, text in (
-                (MODE_TRANSCRIBE, "模式一：音訊轉錄\n（自動產生逐字稿與時間軸）"),
-                (MODE_ALIGN, "模式二：文字稿對齊\n（貼上現成文字稿，自動對齊時間軸）"),
-                (MODE_MANUAL, "模式三：手動字幕模式\n（從零建立字幕、手動標記時間）")):
+                (MODE_TRANSCRIBE, "語音轉寫\n（自動產生逐字稿與時間軸）"),
+                (MODE_ALIGN, "文字稿對齊\n（貼上現成文字稿，自動對齊時間軸）"),
+                (MODE_MANUAL, "手動輸入\n（從零建立字幕、手動標記時間）")):
             ttk.Radiobutton(
                 frame, text=text, variable=self.mode_var, value=value,
                 command=self._update_mode_state,
@@ -850,14 +850,14 @@ class SrtApp(tk.Tk):
 
     def _build_transcription_section(self, parent):
         """
-        轉寫設定區（模式一相關）。
+        轉寫設定區（「語音轉寫」用）。
 
         v1.52.0：左欄固定 330px 窄寬，原本擠在同一列的「本地模型／語
         言」「兩個勾選＋API 金鑰」拆成獨立列，長說明文字改 wraplength
         換行，避免撐開欄寬（見 `_build_mode_section` 同一份理由）。控制
         項本身（變數名稱、預設值、行為）完全不變。
         """
-        frame = ttk.LabelFrame(parent, text="轉寫設定（模式一）", padding=(10, 6))
+        frame = ttk.LabelFrame(parent, text="轉寫設定", padding=(10, 6))
         frame.pack(fill="x", pady=(0, 8))
         self.transcription_frame = frame
         transcription_cfg = self.config_data["transcription"]
@@ -932,7 +932,7 @@ class SrtApp(tk.Tk):
         ttk.Label(
             frame, foreground="#666666", wraplength=hint_wrap, justify="left",
             text=("可填入常出現的專有名詞、人名或易聽錯的詞彙（以空白或逗號分隔），"
-                  "用於導正辨識結果。模式二會與文字稿一併使用。"),
+                  "用於導正辨識結果。「文字稿對齊」也會一併使用。"),
         ).pack(anchor="w", pady=(2, 0))
 
     def _build_segmentation_section(self, parent):
@@ -1007,8 +1007,8 @@ class SrtApp(tk.Tk):
         ).pack(anchor="w", pady=(2, 0))
 
     def _build_transcript_section(self, parent):
-        """文字稿輸入區（模式二相關）。"""
-        frame = ttk.LabelFrame(parent, text="文字稿（模式二）", padding=(10, 6))
+        """文字稿輸入區（「文字稿對齊」用）。"""
+        frame = ttk.LabelFrame(parent, text="文字稿", padding=(10, 6))
         frame.pack(fill="both", pady=(0, 8))
         self.transcript_frame = frame
         self.transcript_text = tk.Text(frame, height=6, wrap="word")
@@ -1495,7 +1495,7 @@ class SrtApp(tk.Tk):
         self._on_edit_cue()
 
     # ==================================================================
-    # 字幕列編輯（模式三主要使用，其他模式也可用以微調）
+    # 字幕列編輯（「手動輸入」主要使用，其他模式也可用以微調）
     # ==================================================================
     def _on_add_cue(self):
         """新增一筆空白字幕；時間預設接在最後一句之後。"""
@@ -1902,13 +1902,13 @@ class SrtApp(tk.Tk):
         self._refresh_output_plan()
 
     def _on_generate(self):
-        """按下「開始生成字幕」（模式三則為清空進入手動編輯）。"""
+        """按下「開始生成字幕」（「手動輸入」則為清空進入手動編輯）。"""
         if self.is_processing:
             return
         mode = self.mode_var.get()
 
         if mode == MODE_MANUAL:
-            # 模式三：清空現有清單並進入手動編輯流程。
+            # 手動輸入：清空現有清單並進入手動編輯流程。
             if self.cues and not messagebox.askyesno(
                     "確認清空", "進入手動編輯會清空目前字幕清單，繼續嗎？"):
                 return
@@ -1917,7 +1917,7 @@ class SrtApp(tk.Tk):
             self._collect_segmentation_config()
             self._update_export_state()
             self.status_var.set(
-                "已進入手動字幕模式，請按「新增字幕」開始建立字幕。")
+                "已進入「手動輸入」，請按「新增字幕」開始建立字幕。")
             return
 
         files = self._selected_files()
@@ -1934,7 +1934,7 @@ class SrtApp(tk.Tk):
         if mode == MODE_ALIGN:
             transcript = self.transcript_text.get("1.0", "end").strip()
             if not transcript:
-                messagebox.showerror("錯誤", "模式二需要先貼上文字稿。")
+                messagebox.showerror("錯誤", "「文字稿對齊」需要先貼上文字稿。")
                 return
 
         self._collect_transcription_config()

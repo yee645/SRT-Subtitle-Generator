@@ -219,7 +219,7 @@ class StylePanel(tk.LabelFrame):
         dynamic_box.grid(row=9, column=1, columnspan=2, sticky="w")
         dynamic_box.bind("<<ComboboxSelected>>", lambda _e: self._emit_change())
         tk.Label(
-            self, text="逐字換色或單字彈出；模式一（音訊轉錄）燒錄與 ASS 匯出時生效",
+            self, text="逐字換色或單字彈出；「語音轉寫」的字幕在燒錄與 ASS 匯出時生效",
             fg="#666666", wraplength=380, justify="left",
         ).grid(row=10, column=0, columnspan=3, sticky="w")
 

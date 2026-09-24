@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-文字稿對齊模組（模式二：文字稿對齊）。
+文字稿對齊模組。
 
 使用者提供現成文字稿時，本模組以「文字比對對齊（forced alignment）」處理：
 
@@ -13,7 +13,7 @@
 
 如此字幕時間會直接貼著真實語音，而非機械式地按字數平均攤開。
 
-注意：本模式需要可用的語音辨識引擎，設定方式與模式一的「轉寫設定」相同。
+注意：本模式需要可用的語音辨識引擎，設定方式與「語音轉寫」相同，都在「轉寫設定」。
 """
 
 import difflib
@@ -65,7 +65,7 @@ def align_transcript(audio_path, transcript, config, status_cb=None):
     whisper_chars, whisper_times = _build_whisper_char_timeline(words)
     if len(whisper_chars) < 2 or whisper_times[-1] <= whisper_times[0]:
         raise RuntimeError(
-            "語音辨識未提供有效的時間資訊，請改用模式一，或確認音訊含清晰人聲。")
+            "語音辨識未提供有效的時間資訊，請改用「語音轉寫」，或確認音訊含清晰人聲。")
 
     _emit(status_cb, "正在比對文字稿與語音、對齊時間軸...", 0.97)
     lines = split_into_lines(transcript, seg_cfg)

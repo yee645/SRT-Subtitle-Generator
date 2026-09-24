@@ -166,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="要處理的影片或音訊檔，可一次列出多個。")
     parser.add_argument(
         "--mode", choices=["transcribe", "align"], default="transcribe",
-        help="transcribe＝模式一音訊轉錄（預設）；align＝模式二文字稿對齊"
+        help="transcribe＝語音轉寫（預設）；align＝文字稿對齊"
              "（文字稿放在媒體檔旁的同名 .txt）。")
     parser.add_argument(
         "--formats", metavar="srt,vtt,ass,txt",
