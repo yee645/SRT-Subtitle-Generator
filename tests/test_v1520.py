@@ -197,6 +197,9 @@ else:
         # v2.2.0 B.5：健檢中心內嵌成階段③頁籤內容。切頁籤時同步對象，
         # 並以切頁籤取代開窗（`_open_health_center_dialog` 的接手者）。
         "_on_stage_tab_changed", "_go_to_health_stage",
+        # v2.3.0 第 9 項 5b-2：使用者開過螢幕翻譯熱鍵的話，啟動時在背景
+        # 建好查譯面板，熱鍵才不必先手動開一次面板才有效。
+        "_maybe_start_hotkey",
     }
     unexpected = added_methods - expected_new_methods
     check("新增的方法都在本版白名單內，沒有夾帶計畫外的新邏輯",
@@ -275,6 +278,8 @@ if old_app_src is not None:
         "subtitle/tesseract_setup.py",  # 第 9 項第一階段：一鍵安裝（全新）
         "subtitle/screencap.py",    # 第 9 項第一階段：螢幕擷取（全新）
         "subtitle/hotkey.py",       # 第 9 項第一階段：全域熱鍵（全新）
+        "subtitle/speech.py",       # 第 9 項第一階段：朗讀（全新）
+        "subtitle/screentranslate.py",  # 第 9 項第一階段：螢幕翻譯流程層（全新）
     }
     # 未追蹤（還沒 git add）的新檔案 `git diff` 看不到，會整個繞過這份白
     # 名單——本檔案上面那段註解已經修過「未 commit 的刪除」，但**新增**

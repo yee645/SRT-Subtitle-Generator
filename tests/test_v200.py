@@ -160,11 +160,18 @@ check("2.0 的「視窗數」是同一個數字",
 # 程式內速覽只有一份、跟著最新版走，所以它比的對象是**最新那一份新功能
 # 介紹**，不是 2.0 那一份（原本寫死比 2.0，是「當下狀態」的斷言：2.2 起
 # 速覽顯示的必然是新數字，寫死就只會逼人把速覽留在過期的數字上）。
+#
+# 比的是**最新一份「有實測點擊數」的介紹**：v2.3 是螢幕翻譯，主流程一擊
+# 都沒動，那份文件沒有點擊數表。若硬比最新一份，就只能在 2.3 的文件裡塞
+# 一張與它無關的表；而找不到任何一份有表的介紹時照樣失敗，強度不變。
+_CLICK_ROW = r"\|\s*點擊\s*\|[^|]*\|\s*\*\*(\d+)\s*次\*\*"
+
+
 def latest_whats_new():
     best = None
     for name in os.listdir(os.path.join(ROOT, "docs")):
         m = re.fullmatch(r"WHATS_NEW_(\d+)\.(\d+)\.md", name)
-        if m:
+        if m and re.search(_CLICK_ROW, read("docs", name)):
             key = (int(m.group(1)), int(m.group(2)))
             if best is None or key > best[0]:
                 best = (key, name)
@@ -172,7 +179,7 @@ def latest_whats_new():
 
 
 _latest = latest_whats_new()
-check("找得到最新一份新功能介紹", _latest is not None)
+check("找得到最新一份有實測點擊數的新功能介紹", _latest is not None)
 if _latest is not None:
     latest_name = _latest[1]
     latest_doc = read("docs", latest_name)

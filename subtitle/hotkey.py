@@ -22,7 +22,7 @@
 **Windows 那一段（`RegisterHotKey`）在開發環境驗不到**，所以：
 
 - 組合鍵的**解析、正規化、驗證、換成 Tk 綁定字串**全部寫成純函式，離線
-  測得到（也就是說「Ctrl+Shift+Z 到底代表什麼」這件事是驗過的）。
+  測得到（也就是說「Ctrl+Alt+F8 到底代表什麼」這件事是驗過的）。
 - 平台相關的部分收在 `WindowsBackend`，每一個 API 呼叫都檢查回傳值；
   `HotkeyManager` 對後端只認一個小介面，測試用假的後端把三種狀態都走過。
 """
@@ -38,7 +38,12 @@ DEFAULT_HOTKEY = {
     # 預設關閉：這是「螢幕翻譯」的觸發器，而螢幕內容比剪貼簿更敏感，
     # 沿用 v2.1.0 的原則由使用者主動打開。
     "enabled": False,
-    "combo": "Ctrl+Shift+Z",
+    # 不可以撞到常見的編輯快捷鍵。第一版是 Ctrl+Shift+Z——那是 Premiere、
+    # Photoshop、Word 的「重做」；註冊成全域熱鍵之後，使用者在剪輯軟體裡
+    # 按重做會變成截圖，而本工具的使用者正是剪影片的人。函數鍵加兩個修
+    # 飾鍵在常見的剪輯與文書軟體裡都沒有預設用途。
+    # `tests/test_hotkey.py` 用一張常見快捷鍵表守著這一條。
+    "combo": "Ctrl+Alt+F8",
 }
 
 # Windows 的修飾鍵旗標（MOD_ALT/CONTROL/SHIFT/WIN）。
@@ -118,18 +123,18 @@ def resolve_hotkey_settings(config=None):
 # ----------------------------------------------------------------------
 def parse_combo(text):
     """
-    把「Ctrl+Shift+Z」拆成修飾鍵與主鍵。
+    把「Ctrl+Alt+F8」拆成修飾鍵與主鍵。
 
     回傳 ``{"modifiers", "key", "vk", "flags", "text"}``。不合法時拋出
     `HotkeyError`，而且訊息要講得出**怎麼改**——使用者看到的是設定裡的
     一行字，不是堆疊追蹤。
     """
     if not str(text or "").strip():
-        raise HotkeyError("還沒有設定熱鍵。請輸入像「Ctrl+Shift+Z」這樣的組合。")
+        raise HotkeyError("還沒有設定熱鍵。請輸入像「Ctrl+Alt+F8」這樣的組合。")
     parts = [p.strip() for p in str(text).replace("-", "+").split("+")]
     parts = [p for p in parts if p]
     if not parts:
-        raise HotkeyError("熱鍵格式看不懂。請輸入像「Ctrl+Shift+Z」這樣的組合。")
+        raise HotkeyError("熱鍵格式看不懂。請輸入像「Ctrl+Alt+F8」這樣的組合。")
 
     modifiers, key_parts = [], []
     for part in parts:
@@ -142,7 +147,7 @@ def parse_combo(text):
 
     if len(key_parts) != 1:
         raise HotkeyError(
-            "熱鍵要有剛好一個主鍵，例如「Ctrl+Shift+Z」。"
+            "熱鍵要有剛好一個主鍵，例如「Ctrl+Alt+F8」。"
             + (f"目前看到 {len(key_parts)} 個主鍵。" if key_parts
                else "目前只有修飾鍵。"))
     if not modifiers:

@@ -102,6 +102,63 @@ check("高 DPI 換算：150% 縮放時座標乘上倍率",
 check("倍率為 1 時不動", sc.scale_region((10, 20, 30, 40), 1)
       == (10, 20, 30, 40))
 
+# dpi_factor：實際像素寬度／本程式看到的寬度。
+check("125% 縮放：2400／1920 → 1.25", sc.dpi_factor(2400, 1920) == 1.25,
+      str(sc.dpi_factor(2400, 1920)))
+check("150% 縮放：2880／1920 → 1.5", sc.dpi_factor(2880, 1920) == 1.5)
+check("沒縮放（或本程式已宣告支援高 DPI）：倍率 1", sc.dpi_factor(1920, 1920) == 1.0)
+for bad in ((0, 1920), (1920, 0), (None, 1920), ("x", 1), (1000, 1920),
+            (99999, 1920)):
+    check(f"讀值不合理 {bad} 時不換算（換錯比不換更糟）",
+          sc.dpi_factor(*bad) == 1.0, str(sc.dpi_factor(*bad)))
+
+
+# Windows 擷取那一段在 Linux 上跑不起來，但可以換掉 `ctypes.WinDLL`，驗
+# 「框選座標有沒有真的乘上倍率才交給 BitBlt」——只測 dpi_factor 算式的
+# 話，呼叫端忘了用它照樣全數通過。
+def fake_windows_capture(physical, logical, region):
+    import ctypes
+    calls = {}
+
+    class Lib:
+        def __getattr__(self, name):
+            def fn(*args):
+                calls.setdefault(name, []).append(args)
+                if name == "GetDeviceCaps":
+                    return {118: physical, 8: logical}[args[1]]
+                return 1
+            return fn
+
+    had = hasattr(ctypes, "WinDLL")
+    real = getattr(ctypes, "WinDLL", None)
+    ctypes.WinDLL = lambda *a, **k: Lib()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            sc._capture_windows(region, os.path.join(tmp, "win.bmp"))
+    finally:
+        if had:
+            ctypes.WinDLL = real
+        else:
+            del ctypes.WinDLL
+    return calls
+
+
+try:
+    calls = fake_windows_capture(2400, 1920, (100, 200, 400, 120))
+    blt = calls["BitBlt"][0]
+    check("125% 縮放時 BitBlt 拿到的是換算後的實際像素座標",
+          blt[6:8] == (125, 250), str(blt))
+    check("125% 縮放時擷取的寬高也跟著換算",
+          blt[3:5] == (500, 150) and calls["CreateCompatibleBitmap"][0][1:] == (500, 150),
+          f"{blt} {calls['CreateCompatibleBitmap']}")
+    calls = fake_windows_capture(1920, 1920, (100, 200, 400, 120))
+    check("沒縮放時座標原封不動", calls["BitBlt"][0][6:8] == (100, 200),
+          str(calls["BitBlt"][0]))
+    check("用完一定還回螢幕 DC", "ReleaseDC" in calls)
+except Exception as exc:  # noqa: BLE001
+    check("假 WinDLL 下的 Windows 擷取（區塊內丟出例外）", False,
+          f"{type(exc).__name__}: {exc}")
+
 
 # ===== 3. BMP：寫得出也讀得回 ===========================================
 

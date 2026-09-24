@@ -40,7 +40,7 @@ BASE = oe.resolve_ocrengine_settings(None)
 
 check("沒有設定檔時取得預設值",
       BASE["good_enough_conf"] == oe.DEFAULT_OCRENGINE["good_enough_conf"]
-      and BASE["lang"] == "eng")
+      and BASE["lang"] == "auto")
 check("設定檔的值會被讀進來",
       oe.resolve_ocrengine_settings(
           {"ocrengine": {"lang": "jpn"}})["lang"] == "jpn")
@@ -52,7 +52,22 @@ check("離譜的值會被夾回合理範圍",
       == 100_000)
 check("空白語言設定退回預設，不會送出空字串給 tesseract",
       oe.resolve_ocrengine_settings({"ocrengine": {"lang": "   "}})["lang"]
-      == "eng")
+      == "auto")
+
+# 預設語言從 eng 改成 auto（實測日文、繁中畫面用 eng 認是整段空白）。
+check("auto：已安裝的常用語言逐一試，順序固定（英、日在前）",
+      oe.candidate_langs("auto", {"osd", "chi_tra", "eng", "jpn"})
+      == ["eng", "jpn", "chi_tra"],
+      oe.candidate_langs("auto", {"osd", "chi_tra", "eng", "jpn"}))
+check("auto：只裝英文就只試英文",
+      oe.candidate_langs("auto", {"eng", "osd"}) == ["eng"])
+check("auto：沒裝的語言不會被塞進去（否則 tesseract 直接報錯）",
+      oe.candidate_langs("auto", {"eng", "fra", "deu"}) == ["eng"])
+check("auto：一種都沒裝時退回 eng，不送空字串",
+      oe.candidate_langs("auto", set()) == ["eng"])
+check("明確指定的語言照用、只試那一個",
+      oe.candidate_langs("jpn+eng", {"eng", "jpn"}) == ["jpn+eng"])
+check("空字串視同 auto", oe.candidate_langs("", {"eng", "kor"}) == ["eng", "kor"])
 check("不認得的鍵不會混進來",
       "nonsense" not in oe.resolve_ocrengine_settings(
           {"ocrengine": {"nonsense": 1}}))
@@ -276,6 +291,39 @@ else:
             except oe.OcrError as exc:
                 check("實跑：圖片不存在時丟 OcrError 並指出是哪個檔",
                       "找不到" in str(exc), str(exc))
+
+            # 預設（auto）的實跑：一般使用者從來不改設定，所以這才是真正
+            # 會發生的情形。日文畫面在舊預設 eng 下認出來是整段空白。
+            bad = oe.recognize_text(noise)
+            check("實跑（預設語言）：逐一試多種語言也不會把雜訊當成字",
+                  bad["verdict"] == "unreadable" and bad["text"] == "",
+                  f"{bad['verdict']} {bad['text'][:40]!r}")
+            got = oe.recognize_text(clean)
+            check("實跑（預設語言）：英文畫面照樣一字不差",
+                  got["text"].strip() == LINE, repr(got["text"]))
+            check("實跑（預設語言）：英文第一種就夠準，不多花時間試其他語言",
+                  {a.get("lang") for a in got["attempts"]} == {"eng"},
+                  oe.describe_attempts(got["attempts"]))
+            JA_FONT = "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf"
+            if "jpn" not in oe.available_languages() or not os.path.isfile(JA_FONT):
+                print("SKIP 實跑：日文（沒有 jpn 語言檔或日文字型）")
+            else:
+                ja_line = "扉は三つの封印で守られている"
+                ja = os.path.join(tmp, "ja.png")
+                subprocess.run(
+                    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                     "-f", "lavfi", "-i",
+                     f"color=c=white:s=900x120,drawtext=fontfile={JA_FONT}:"
+                     f"text='{ja_line}':fontsize=40:fontcolor=black:x=20:y=40",
+                     "-frames:v", "1", ja], check=True, timeout=90)
+                got = oe.recognize_text(ja)
+                # 開頭的「扉」單用 jpn 也會漏（tesseract 本身的準確度，與語
+                # 言怎麼選無關），所以比對後段；要驗的是「挑中日文、讀得出
+                # 來」，舊預設 eng 在這張圖上是整段空白。
+                check("實跑（預設語言）：日文畫面挑中日文並認得出來",
+                      got["lang"] == "jpn" and got["verdict"] != "unreadable"
+                      and "三つの封印で守られている" in "".join(got["text"].split()),
+                      f"{got['lang']} {got['verdict']} {got['text']!r}")
 
 
 print()

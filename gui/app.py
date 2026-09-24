@@ -133,6 +133,20 @@ class SrtApp(tk.Tk):
         # 介面大改版後第一次啟動：跳出舊位置→新位置對照表（v1.52.1）。
         # 排在主視窗建好之後才開，這樣速覽關掉時後面就是它描述的那個介面。
         self.after(400, self._maybe_show_whatsnew)
+        # 螢幕翻譯熱鍵（v2.3.0）：使用者打開過熱鍵的話，啟動時就在背景建
+        # 好查譯面板，熱鍵才不必先手動開一次面板才有效。
+        self.after(800, self._maybe_start_hotkey)
+
+    def _maybe_start_hotkey(self):
+        if not (self.config_data.get("hotkey") or {}).get("enabled"):
+            return
+        if getattr(self, "_quicktranslate_panel", None) is not None:
+            return
+        try:
+            self._quicktranslate_panel = QuickTranslatePanel(
+                self, self.config_data, start_hidden=True)
+        except Exception:            # 熱鍵起不來不該讓主程式起不來
+            logger.exception("啟動時建立查譯面板失敗")
 
     def _maybe_show_whatsnew(self):
         """

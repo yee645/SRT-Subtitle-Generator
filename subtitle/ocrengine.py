@@ -56,9 +56,27 @@ DEFAULT_OCRENGINE = {
     "hopeless_conf": 40.0,
     # 單一模式的逾時秒數。
     "timeout_seconds": 30,
-    # 預設辨識語言（tesseract 的語言代碼，可用 "+" 串多個）。
-    "lang": "eng",
+    # 辨識語言（tesseract 的語言代碼，可用 "+" 串多個）。預設 "auto"：
+    # 已安裝的常用語言逐一試，挑信心最高的（見 candidate_langs）。
+    "lang": "auto",
 }
+
+# "auto" 時依序逐一試的語言（只試已安裝的）。
+#
+# 第一版預設只認英文——實測日文、繁中畫面用 eng 認出來是**整段空白**，
+# 而一鍵安裝預設就會裝日文與繁中，調研文件也寫日文是遊戲翻譯最常見的來
+# 源語言。
+#
+# **為什麼逐一試而不是 "eng+jpn+chi_tra" 一起認**：一起認的結果看語言順序
+# 與圖而定，不可靠——同一行日文，ImageMagick 畫的圖一起認全對，ffmpeg 畫
+# 的圖一起認卻是整段空白（信心 16），單用 jpn 則是 93。逐一試、照信心挑，
+# 在實測的英、日、繁中、遊戲 UI 四種圖上都挑對。
+#
+# **順序有意義**：前一種語言已經夠準（≥ good_enough_conf）就不再試下去，
+# 所以最可能要翻的排前面。本工具是翻成中文用的，要翻的多半是英文與日
+# 文；中文畫面就算被日文先認走，也本來就不需要翻。英文畫面第一個就夠
+# 準，時間與改版前一樣。
+AUTO_LANGS = ("eng", "jpn", "chi_tra", "chi_sim", "kor")
 
 # 打包成 exe 之後 tesseract 會被裝在這裡（比照 subtitle/ffmpeg_setup.py
 # 的作法；一鍵安裝本身是下一階段的工作，這裡先把尋找的路認好，安裝功能
@@ -87,7 +105,7 @@ def resolve_ocrengine_settings(config=None):
         "timeout_seconds": int(_clamp(int(raw["timeout_seconds"]), 3, 300)),
         "good_enough_conf": _clamp(float(raw["good_enough_conf"]), 0.0, 100.0),
         "hopeless_conf": _clamp(float(raw["hopeless_conf"]), 0.0, 100.0),
-        "lang": str(raw["lang"]).strip() or "eng",
+        "lang": str(raw["lang"]).strip() or DEFAULT_OCRENGINE["lang"],
     }
 
 
@@ -143,6 +161,22 @@ def available_languages():
         if line and " " not in line and ":" not in line:
             langs.add(line)
     return langs
+
+
+def candidate_langs(lang, installed=None):
+    """
+    要依序試哪幾種語言（每一項是交給 tesseract 的語言字串）。
+
+    指定了就只試那一個；``"auto"`` 則是 `AUTO_LANGS` 裡已安裝的每一種，
+    一種都沒裝時退回 ``["eng"]``（讓 tesseract 自己講缺什麼，而不是送一
+    個空字串）。
+    """
+    lang = (lang or "").strip()
+    if lang and lang != "auto":
+        return [lang]
+    installed = available_languages() if installed is None else set(installed)
+    picked = [code for code in AUTO_LANGS if code in installed]
+    return picked or ["eng"]
 
 
 def missing_languages(lang, installed=None):
@@ -333,46 +367,57 @@ def recognize(image_path, lang=None, config=None, progress_cb=None):
     時候快」。
     """
     settings = resolve_ocrengine_settings(config)
-    lang = (lang or settings["lang"]).strip() or "eng"
     binary = _require_tesseract()
+    langs = candidate_langs(lang or settings["lang"])
     if not os.path.isfile(image_path):
         raise OcrError(f"找不到要辨識的圖片：{image_path}")
 
     size = image_size(image_path)
     attempts = []
     temps = []
+    upscaled = {}                 # 放大過的圖每種倍率只做一次，各語言共用
+    total = float(len(MODES) * len(langs))
     started = time.time()
     try:
-        for name, psm, factor in MODES:
-            if factor > 1:
-                best_so_far = max([a["mean_conf"] for a in attempts] or [0.0])
-                worth, why = upscale_worthwhile(best_so_far, settings)
-                if not worth:
-                    attempts.append({"mode": name, "skipped": why, "boxes": [],
-                                     "mean_conf": 0.0, "seconds": 0.0})
+        for code in langs:
+            if attempts and max(a["mean_conf"] for a in attempts) >= \
+                    settings["good_enough_conf"]:
+                break             # 前一種語言已經夠準，不必再試
+            mine = []             # 這個語言自己的結果（放大值不值得看自己的）
+            for name, psm, factor in MODES:
+                attempt = {"mode": name, "lang": code, "skipped": "",
+                           "boxes": [], "mean_conf": 0.0, "seconds": 0.0}
+                if factor > 1:
+                    best_so_far = max([a["mean_conf"] for a in mine] or [0.0])
+                    worth, why = upscale_worthwhile(best_so_far, settings)
+                    if not worth:
+                        attempt["skipped"] = why
+                        attempts.append(attempt)
+                        continue
+                if not upscale_allowed(size, factor, settings):
+                    attempt["skipped"] = "框選範圍太大，放大後會太慢"
+                    attempts.append(attempt)
                     continue
-            if not upscale_allowed(size, factor, settings):
-                attempts.append({"mode": name, "skipped": "框選範圍太大，"
-                                 "放大後會太慢",
-                                 "boxes": [], "mean_conf": 0.0, "seconds": 0.0})
-                continue
-            target = image_path
-            if factor > 1:
-                target = _upscale_image(image_path, factor,
-                                        settings["timeout_seconds"])
-                if not target:
-                    attempts.append({"mode": name, "skipped": "放大失敗（ffmpeg）",
-                                     "boxes": [], "mean_conf": 0.0,
-                                     "seconds": 0.0})
-                    continue
-                temps.append(target)
-            if progress_cb:
-                progress_cb(len(attempts) / float(len(MODES)), f"辨識中（{name}）...")
-            boxes, seconds = _run_mode(binary, target, lang, psm,
-                                       settings["timeout_seconds"])
-            attempts.append({"mode": name, "skipped": "",
-                             "boxes": rescale_boxes(boxes, factor),
-                             "mean_conf": mean_conf(boxes), "seconds": seconds})
+                target = image_path
+                if factor > 1:
+                    if factor not in upscaled:
+                        upscaled[factor] = _upscale_image(
+                            image_path, factor, settings["timeout_seconds"])
+                        if upscaled[factor]:
+                            temps.append(upscaled[factor])
+                    target = upscaled[factor]
+                    if not target:
+                        attempt["skipped"] = "放大失敗（ffmpeg）"
+                        attempts.append(attempt)
+                        continue
+                if progress_cb:
+                    progress_cb(len(attempts) / total, f"辨識中（{name}）...")
+                boxes, seconds = _run_mode(binary, target, code, psm,
+                                           settings["timeout_seconds"])
+                attempt.update(boxes=rescale_boxes(boxes, factor),
+                               mean_conf=mean_conf(boxes), seconds=seconds)
+                attempts.append(attempt)
+                mine.append(attempt)
     finally:
         for path in temps:
             try:
@@ -384,6 +429,7 @@ def recognize(image_path, lang=None, config=None, progress_cb=None):
     return {
         "boxes": best["boxes"] if best else [],
         "mode": best["mode"] if best else "",
+        "lang": best.get("lang", "") if best else "",
         "mean_conf": best["mean_conf"] if best else 0.0,
         "seconds": time.time() - started,
         "attempts": attempts,
@@ -402,6 +448,7 @@ def recognize_text(image_path, lang=None, config=None, progress_cb=None):
                        progress_cb=progress_cb)
     laid = ocrlayout.layout_text(result["boxes"], config)
     laid["mode"] = result["mode"]
+    laid["lang"] = result["lang"]
     laid["seconds"] = result["seconds"]
     laid["attempts"] = result["attempts"]
     return laid
@@ -410,10 +457,14 @@ def recognize_text(image_path, lang=None, config=None, progress_cb=None):
 def describe_attempts(attempts):
     """一行字說明各模式跑了什麼（給狀態列／記錄用）。"""
     parts = []
+    several = len({a.get("lang") for a in attempts if a.get("lang")}) > 1
     for attempt in attempts:
+        label = attempt["mode"]
+        if several:
+            label = f"{attempt['lang']}／{label}"
         if attempt.get("skipped"):
-            parts.append(f"{attempt['mode']}：略過（{attempt['skipped']}）")
+            parts.append(f"{label}：略過（{attempt['skipped']}）")
         else:
-            parts.append(f"{attempt['mode']}：信心 {attempt['mean_conf']:.0f}、"
+            parts.append(f"{label}：信心 {attempt['mean_conf']:.0f}、"
                          f"{attempt['seconds'] * 1000:.0f}ms")
     return "；".join(parts)

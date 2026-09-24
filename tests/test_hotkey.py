@@ -43,6 +43,18 @@ base = hk.resolve_hotkey_settings(None)
 check("預設是關閉的（螢幕翻譯的觸發器，由使用者主動打開）",
       base["enabled"] is False)
 check("預設組合鍵合法", hk.parse_combo(base["combo"])["text"] == base["combo"])
+# 預設熱鍵不可以撞到常見的編輯快捷鍵。第一版的 Ctrl+Shift+Z 是 Premiere／
+# Photoshop／Word 的「重做」，註冊成全域熱鍵等於把使用者的重做搶走。
+_COMMON_SHORTCUTS = {
+    "Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Ctrl+C", "Ctrl+V", "Ctrl+X",
+    "Ctrl+A", "Ctrl+S", "Ctrl+Shift+S", "Ctrl+O", "Ctrl+N", "Ctrl+W",
+    "Ctrl+F", "Ctrl+P", "Ctrl+T", "Ctrl+Shift+T",
+    "Alt+F4", "Alt+F8", "Ctrl+K", "Ctrl+M",
+    "Ctrl+D", "Ctrl+Shift+E", "Ctrl+Alt+T",
+}
+_normalized_common = {hk.format_combo(c) for c in _COMMON_SHORTCUTS}
+check("預設熱鍵沒有撞到常見的編輯快捷鍵（重做、複製、存檔…）",
+      base["combo"] not in _normalized_common, base["combo"])
 check("設定檔的值會被讀進來",
       hk.resolve_hotkey_settings(
           {"hotkey": {"combo": "alt+f8", "enabled": True}})["combo"]
