@@ -4,7 +4,8 @@
   },
   "permissions": {
     "allow": [
-      "mcp__github__merge_pull_request"
+      "mcp__github__merge_pull_request",
+      "Edit(.github/promote_releases.txt)"
     ]
   }
 }

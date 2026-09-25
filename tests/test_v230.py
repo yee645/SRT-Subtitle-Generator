@@ -8,8 +8,11 @@ v2.3.0 回歸測試：螢幕畫面翻譯的四個產出物。
 的東西（熱鍵就已經改過一次），所以一律**從程式裡把真值抓出來**再比，不
 在測試裡再寫死一次。
 
-另外守兩件發佈政策上的事：次版先維持測試版（不在轉正清單裡），以及文件
-照實列出沒有在 Windows 上實測的部分。
+另外守文件照實列出沒有在 Windows 上實測的部分。
+
+發佈政策在 2026-09-25 改了：使用者指示「大功能更新要做為正式版發布」，
+v2.2／v2.3 於 v2.3.4 一起轉正。原本「v2.3.0 不在轉正清單」那條因此拿掉，
+改成守「使用者看得到的介紹不再寫測試版」。
 """
 import os
 import re
@@ -60,10 +63,14 @@ check("速覽裡 v2.3 排在最前面（從 v2.1.0 跳上來的人最大的新�
 m = re.search(r'APP_VERSION = "(\d+)\.(\d+)\.(\d+)"', _read("updater.py"))
 version = tuple(int(g) for g in m.groups()) if m else (0, 0, 0)
 check("APP_VERSION 已進到 2.3.0 以上", version >= (2, 3, 0), str(version))
-check("次版先維持測試版：v2.3.0 不在轉正清單（等使用者決定）",
-      not re.search(r"^v2\.3\.0\s*$", promote, re.M))
-check("CHANGELOG 標題標明是測試版", "測試版" in changelog.split("\n", 3)[2]
-      if changelog.startswith("# ") else False, changelog.split("\n", 3)[2])
+for label, text in (("WHATS_NEW_2.3.md", doc), ("程式內速覽 v2.3 條目", dialog_text),
+                    ("README", readme.split("\n## 螢幕畫面翻譯", 1)[-1].split("\n## ", 1)[0])):
+    check(f"{label} 不再把 v2.3 寫成測試版（2026-09-25 起大功能更新做正式版）",
+          "測試版" not in text)
+# 歷史照舊：v2.3.0 那一條是當時以測試版發的，CHANGELOG 不改寫歷史。
+v230_head = re.findall(r"^## (v2\.3\.0\D.*)$", changelog, re.M)
+check("CHANGELOG 的 v2.3.0 那一條保留當時的測試版標記（不改寫歷史）",
+      len(v230_head) == 1 and "測試版" in v230_head[0], str(v230_head))
 
 # ===== 2. 文件講的要跟程式一致 ==========================================
 
@@ -112,10 +119,14 @@ check("程式的預設辨識語言是 auto（文件說『不用選』）",
 
 # ===== 3. 涵蓋上一個正式版以來的全部改動 ================================
 
-last = re.findall(r"^v(\d+\.\d+\.\d+)\s*$", promote, re.M)[-1]
+# 讀者是「v2.2 之前的最後一個正式版」的使用者（v2.2／v2.3 一起轉正之後，
+# 轉正清單的最後一版就不再是讀者手上的版本了）。
+last = max((v for v in re.findall(r"^v(\d+\.\d+\.\d+)\s*$", promote, re.M)
+            if tuple(map(int, v.split("."))) < (2, 2, 0)),
+           key=lambda v: tuple(map(int, v.split("."))))
 check(f"文件寫給上一個正式版（v{last}）的使用者看", f"v{last}" in doc)
-check("文件交代中間的測試版 v2.2.0 並連到它的介紹",
-      "v2.2.0" in doc and "WHATS_NEW_2.2.md" in doc)
+check("文件交代一起到齊的 v2.2 並連到它的介紹",
+      "v2.2" in doc and "WHATS_NEW_2.2.md" in doc)
 
 # ===== 4. 照實寫：隱私與沒實測的部分 ====================================
 
