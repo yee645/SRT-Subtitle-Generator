@@ -125,7 +125,11 @@ else:
                        "模式三：手動字幕模式（從零建立字幕、手動標記時間）":
                            "手動輸入（從零建立字幕、手動標記時間）",
                        "轉寫設定（模式一）": "轉寫設定",
-                       "文字稿（模式二）": "文字稿"}
+                       "文字稿（模式二）": "文字稿",
+                       # v2.3.5：清單編輯列〔字幕健檢〕是 v1.50.0 起的轉址
+                       # 鈕，D-3 訂「原位保留一版、下一版才移除」。它做的事
+                       # （切到健檢中心）由頁籤本身接手，頁籤名稱必須存在。
+                       "字幕健檢": "③ 健檢中心"}
     # C-3 拆掉「一鍵完成」是**一顆變三顆**，不是改名，所以單獨核對：舊按
     # 鈕的三項能力（生成、依設定輸出、批次全自動）新版都要找得到入口，
     # 少一項就是能力真的不見了。
@@ -163,6 +167,9 @@ else:
         # v2.2.0：健檢中心從 Toplevel 變成階段③頁籤內容，「開一個健檢中心
         # 視窗」這件事本身不存在了，改成「切到階段③（順便帶入發佈資料）」。
         "_open_health_center_dialog": "_go_to_health_stage",
+        # v2.3.5：〔字幕健檢〕轉址鈕移除（D-3），它的方法本來就只呼叫
+        # `_go_to_health_stage`。
+        "_open_subtitle_check_dialog": "_go_to_health_stage",
     }
     for old_name, new_name in planned_method_renames.items():
         if old_name in missing_methods and new_name in new_methods:

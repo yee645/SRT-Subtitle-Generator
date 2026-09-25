@@ -328,16 +328,24 @@ else:
     panel.after_cancel(panel._poll_job)
     panel._poll_job = None
 
-    # ---- 舊「字幕健檢」鈕：切頁籤而不是開窗 ----
+    # ---- 舊「字幕健檢」鈕 ----
+    # v2.2.0 時它改成「切到階段③、不開窗」；v2.3.5 依 D-3 整顆移除（轉址
+    # 期走完）。這裡改守：編輯列上已經沒有這顆，而切到③頁籤本身同樣不開窗、
+    # 看到的就是健檢中心。
+    edit_texts = [str(b.cget("text"))
+                  for row in app.cue_edit_frame.winfo_children()
+                  for b in row.winfo_children()]
+    check("清單編輯列已經沒有〔字幕健檢〕轉址鈕（v2.3.5，D-3）",
+          "字幕健檢" not in edit_texts and len(edit_texts) == 8,
+          str(edit_texts))
     app.notebook.select(app.stage_subtitle_tab)
     pump(app, 0.4)
     before = len(toplevels(app))
-    app.cues = [{"index": 1, "start": 0.0, "end": 1.0, "text": "一句"}]
-    app._open_subtitle_check_dialog()
+    app.notebook.select(app.stage_health_tab)
     pump(app, 0.5)
-    check("舊「字幕健檢」入口改成切到階段③，不再開視窗",
+    check("切到階段③就是健檢中心，不再開視窗",
           app.notebook.select() == str(app.stage_health_tab)
-          and len(toplevels(app)) == before,
+          and panel.winfo_ismapped() and len(toplevels(app)) == before,
           f"{app.notebook.select()} / {toplevels(app)}")
 
     # ---- 封面圖／系列影片預設收合，加檔案時自動展開 ----

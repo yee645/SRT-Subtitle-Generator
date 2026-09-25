@@ -136,8 +136,16 @@ check("對話框無 classic tk.Checkbutton/Radiobutton 殘留",
 
 with open(os.path.join(root, "gui", "app.py"), encoding="utf-8") as fp:
     app_src = fp.read()
-check("app.py 有字幕健檢按鈕與 handler",
-      "字幕健檢" in app_src and "_open_subtitle_check_dialog" in app_src)
+# v2.3.5：清單編輯列的〔字幕健檢〕轉址鈕依架構文件 D-3 移除（v1.50.0 起
+# 它只是切到健檢中心）。這裡改守「字幕健檢這項能力仍然在主視窗裡跑得到」：
+# 健檢中心有這一項、它真的呼叫 subtitlecheck、而且健檢中心是主視窗的頁籤。
+with open(os.path.join(root, "gui", "health_aggregator.py"),
+          encoding="utf-8") as fp:
+    agg_src = fp.read()
+check("字幕健檢仍在主視窗：健檢中心有這一項、呼叫 subtitlecheck、是階段③頁籤",
+      'CheckDef("run_subtitle", "字幕健檢' in agg_src
+      and "from subtitle.subtitlecheck import analyze_cues" in agg_src
+      and 'text="③ 健檢中心"' in app_src and "HealthCenterPanel(" in app_src)
 
 from config import DEFAULT_CONFIG
 check("config 預設含 subtitlecheck 區",
