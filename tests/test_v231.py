@@ -153,9 +153,11 @@ check("APP_VERSION 已進到 2.3.1 以上", version >= (2, 3, 1), str(version))
 if "v2.3.0" not in promoted:
     check("v2.3.0 還沒轉正，v2.3.1 也不能轉正", "v2.3.1" not in promoted)
 changelog = _read("CHANGELOG.md")
-head = changelog.split("\n## ", 2)[1].split("\n", 1)[0] if "\n## " in changelog else ""
-check("CHANGELOG 最新一條是 v2.3.1 且標明測試版",
-      head.startswith("v2.3.1") and "測試版" in head, head)
+# 原本檢查「最新一條是 v2.3.1」；v2.3.2 之後最新一條不再是它，改成直接找
+# v2.3.1 那一條（只能有一條），要求不變：標明測試版。
+heads = re.findall(r"^## (v2\.3\.1\D.*)$", changelog, re.M)
+check("CHANGELOG 的 v2.3.1 那一條標明測試版",
+      len(heads) == 1 and "測試版" in heads[0], str(heads))
 
 print()
 if failures:
