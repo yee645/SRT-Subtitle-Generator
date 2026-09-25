@@ -850,7 +850,7 @@ class SrtApp(tk.Tk):
 
     def _build_transcription_section(self, parent):
         """
-        轉寫設定區（「語音轉寫」用）。
+        轉寫設定區（「語音轉寫」與「文字稿對齊」都用）。
 
         v1.52.0：左欄固定 330px 窄寬，原本擠在同一列的「本地模型／語
         言」「兩個勾選＋API 金鑰」拆成獨立列，長說明文字改 wraplength
@@ -1379,10 +1379,17 @@ class SrtApp(tk.Tk):
             self.generate_btn.configure(text="開始生成字幕")
             self.auto_btn.configure(state="normal")
         elif mode == MODE_ALIGN:
-            # 左欄自 v1.52.0 起只剩設定區塊，transcript_frame 是最後一
-            # 個，append 到 interior 末端即為正確位置（不再需要 before=
-            # 錨定；自動化輸出已搬到中欄，不再是左欄的鄰居）。
-            self.transcript_frame.pack(fill="both", pady=(0, 8))
+            # v2.3.2：文字稿對齊要靠語音辨識找出人聲的時間
+            # （`subtitle.aligner.align_transcript` 內部呼叫 `transcribe`），
+            # 引擎、模型、語言、金鑰、轉寫提示全都會用到。以前這一塊在這個
+            # 模式下被收起來，使用者得先切回〔語音轉寫〕設定再切回來。
+            self.transcription_frame.pack(
+                fill="x", pady=(0, 8), before=self.segmentation_frame)
+            # 文字稿是這個模式最主要的輸入，排在轉寫設定前面、緊接著檔
+            # 案選擇。以前它是左欄最後一塊，轉寫設定一加進來（約 330px）
+            # 就會被推到預設視窗的可視範圍外。
+            self.transcript_frame.pack(
+                fill="both", pady=(0, 8), before=self.transcription_frame)
             self.generate_btn.configure(text="開始生成字幕")
             self.auto_btn.configure(state="normal")
         else:
