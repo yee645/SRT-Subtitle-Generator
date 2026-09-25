@@ -639,11 +639,29 @@ class SrtApp(tk.Tk):
             command=self._open_review_window,
         ).pack(anchor="w")
 
+        # v2.3.5：架構文件 C-7「匯入是來源，不是清單操作」。2.0 起的速覽、
+        # README、WHATS_NEW_2.0、遷移指南都告訴使用者〔匯入字幕〕在這一頁，
+        # 按鈕卻一直留在②的清單編輯列——照文件說的位置補上。放在「自動修
+        # 剪」上面：手上已有字幕檔的人，匯入後不必換頁就能剪停頓。
+        subs_card = ttk.LabelFrame(container, text="既有字幕", padding=(10, 8))
+        subs_card.pack(fill="x", pady=(0, 10))
+        ttk.Label(
+            subs_card, foreground="#666666", justify="left", wraplength=900,
+            text="手上已經有字幕檔（.srt／.vtt）就不必重新生成：匯入後到②字幕頁校對，"
+                 "或直接用下面的自動修剪。",
+        ).pack(anchor="w", pady=(0, 6))
+        self.import_subs_btn = ttk.Button(
+            subs_card, text="匯入字幕", width=12,
+            command=self._import_subtitles,
+        )
+        self.import_subs_btn.pack(anchor="w")
+
         trim_card = ttk.LabelFrame(container, text="自動修剪", padding=(10, 8))
         trim_card.pack(fill="x", pady=(0, 10))
         ttk.Label(
             trim_card, foreground="#666666", justify="left", wraplength=900,
-            text="依目前字幕自動找出可剪掉的停頓或重複片段（需先在②字幕頁生成或匯入字幕）。",
+            text="依目前字幕自動找出可剪掉的停頓或重複片段（需先有字幕：在②字幕頁生成，"
+                 "或用上面的〔匯入字幕〕）。",
         ).pack(anchor="w", pady=(0, 6))
         self._build_trim_actions_section(trim_card)
 
@@ -1210,12 +1228,20 @@ class SrtApp(tk.Tk):
     def _build_cue_edit_controls(self, parent):
         """
         字幕列操作按鈕：新增、編輯、刪除、上移、下移、清空、尋找取代、
-        翻譯字幕、匯入字幕、字幕健檢。
+        翻譯字幕。
 
         v1.52.0：10 顆按鈕擠一列實測需要約 1068px，中欄在 1400x800 只
         分到 630px——不只裁切，後面幾顆會被 pack 擠到寬度 1px 形同消失
         （比裁切更嚴重，等於功能整個不見）。拆成兩列解決，10 顆按鈕、
         command、對應功能一個不少。
+
+        v2.3.5：照架構文件 C-7 拿掉兩顆，10 → 8：
+        - 〔匯入字幕〕搬到階段①「既有字幕」卡片（2.0 起的文件一直說它在那裡）。
+        - 〔字幕健檢〕是 v1.50.0 起的轉址鈕，D-3 訂的是「原位保留一版、下一
+          版才移除」，實際從 v1.50.0 留到 v2.3.4；它做的事就是切到③健檢中心
+          頁籤，頁籤本身就在畫面上。
+        C-7 說 8 顆「單列放得下（原型實測）」，實際量不下（見 test_v235），
+        所以維持兩列。
         """
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=(4, 0))
@@ -1242,11 +1268,6 @@ class SrtApp(tk.Tk):
                   command=self._on_find_replace).pack(side="left", padx=2)
         ttk.Button(row2, text="翻譯字幕", width=10,
                   command=self._open_translate_dialog).pack(side="left", padx=2)
-        ttk.Button(row2, text="匯入字幕", width=10,
-                  command=self._import_subtitles).pack(side="left", padx=2)
-        ttk.Button(row2, text="字幕健檢", width=10,
-                  command=self._open_subtitle_check_dialog).pack(
-            side="left", padx=2)
 
     def _build_export_section(self, parent):
         """
@@ -1678,23 +1699,10 @@ class SrtApp(tk.Tk):
             message += f"（略過 {loaded['skipped']} 段無法解析、編碼 {loaded['encoding']}）"
         else:
             message += f"（編碼 {loaded['encoding']}）"
+        # v2.3.5：按鈕在階段①，字幕清單在②——講明下一步在哪裡，免得使用者
+        # 以為沒匯入成功（①這一頁看不到清單）。
+        message += "。到②字幕頁校對，或在這一頁直接剪停頓／剪重複片段。"
         self.status_var.set(message)
-
-    def _open_subtitle_check_dialog(self):
-        """
-        原「字幕健檢」按鈕：v1.50.0 起改開健檢中心，v2.2.0 起改成切到
-        階段③頁籤（健檢中心已內嵌，不再另開視窗）。
-
-        字幕健檢原本不需要選影片就能跑純文字檢查，健檢中心保留這個
-        能力——沒有選影片時只會略過需要媒體檔的項目，不會擋住這裡的
-        呼叫。按鈕原位保留一版，下一版才移除
-        （docs/UI_ARCHITECTURE_2.0.md D-3）。
-        """
-        if not self.cues:
-            messagebox.showinfo("提示", "目前沒有字幕可健檢，請先生成或匯入字幕。")
-            return
-        self._go_to_health_stage()
-        self.status_var.set("「字幕健檢」已整併至健檢中心（階段③）。")
 
     def _open_jumpcut_dialog(self):
         """開啟自動修剪並停在「剪停頓（依字幕）」分頁。"""
