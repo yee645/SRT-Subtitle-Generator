@@ -28,7 +28,7 @@ except ImportError:
     sv_ttk = None
     _HAS_SV_TTK = False
 
-from config import load_config, make_profile, save_config
+from config import describe_preset_state, load_config, make_profile, save_config
 from updater import (APP_VERSION, check_for_update, cleanup_old_version,
                      download_and_apply)
 from subtitle.aligner import align_transcript
@@ -293,6 +293,7 @@ class SrtApp(tk.Tk):
         self._build_preset_section(right)
         self._build_preview_section(right)
         self._build_style_section(right)
+        self._watch_preset_state()
 
         # 階段①③④：對話框入口依 B.4/B.6 搬入對應頁籤。
         self._build_stage_source_tab(self.stage_source_tab)
@@ -1363,6 +1364,37 @@ class SrtApp(tk.Tk):
             btn_row, text="刪除", command=self._delete_preset,
         ).pack(side="left", padx=4)
 
+        # v2.3.3：一組「樣式」其實存了兩樣東西——右邊的字幕外觀，加上左欄
+        # 的斷句設定——但標題與下拉選單都只說「樣式」，套用時左欄的斷句數
+        # 值會被悄悄換掉；改了之後也看不出「還沒存進這一組」
+        # （docs/UI_AUDIT_2.0.md 1.3-②）。這兩行把關係講出來。
+        ttk.Label(
+            frame, foreground="#666666", wraplength=380, justify="left",
+            text=("一組樣式存的是下方的「字幕視覺調整」，加上左欄的「斷句設定」；"
+                  "改了之後要按〔更新目前樣式〕才會存進去。"),
+        ).pack(anchor="w", fill="x", pady=(6, 0))
+        self.preset_state_var = tk.StringVar(value="")
+        self.preset_state_label = ttk.Label(
+            frame, textvariable=self.preset_state_var,
+            wraplength=380, justify="left")
+        self.preset_state_label.pack(anchor="w", fill="x", pady=(2, 0))
+
+    def _watch_preset_state(self):
+        """斷句設定一改就更新習慣設定的狀態行（外觀的變動走 _on_style_change）。"""
+        for var in (self.cjk_limit_var, self.latin_limit_var, self.min_dur_var,
+                    self.max_dur_var, self.pause_gap_var, self.time_offset_var):
+            var.trace_add("write", lambda *_args: self._refresh_preset_state())
+        self._refresh_preset_state()
+
+    def _refresh_preset_state(self):
+        """重算「目前的值跟選取的那一組一不一樣」並顯示在習慣設定區。"""
+        if not hasattr(self, "style_panel") or not hasattr(self, "preset_state_var"):
+            return
+        current = make_profile(self.style_panel.get_style(),
+                               self._read_segmentation_from_ui())
+        self.preset_state_var.set(describe_preset_state(
+            current, self.config_data["presets"], self.preset_var.get()))
+
     # ==================================================================
     # 模式與預覽
     # ==================================================================
@@ -1478,6 +1510,7 @@ class SrtApp(tk.Tk):
         self.config_data["subtitle_style"] = style
         self._save_config_silently()
         self.preview.update_style(style)
+        self._refresh_preset_state()
 
     def _refresh_preview(self):
         """以目前選取字幕（或範例文字）重繪預覽。"""
@@ -1766,7 +1799,9 @@ class SrtApp(tk.Tk):
         self.preview.update_style(self.config_data["subtitle_style"])
         self._refresh_preview()
         self._save_config_silently()
-        self.status_var.set(f"已套用習慣設定：{name}")
+        self._refresh_preset_state()
+        self.status_var.set(
+            f"已套用習慣設定：{name}（字幕外觀與左欄的斷句設定都換成這一組）")
 
     def _save_new_preset(self):
         """以目前介面設定另存為一組新的習慣設定。"""
@@ -1786,6 +1821,7 @@ class SrtApp(tk.Tk):
         self.config_data["active_preset"] = name
         self._refresh_preset_box(name)
         self._save_config_silently()
+        self._refresh_preset_state()
         self.status_var.set(f"已儲存習慣設定：{name}")
 
     def _update_preset(self):
@@ -1795,6 +1831,7 @@ class SrtApp(tk.Tk):
             return
         self.config_data["presets"][name] = self._current_profile()
         self._save_config_silently()
+        self._refresh_preset_state()
         self.status_var.set(f"已更新習慣設定：{name}")
 
     def _delete_preset(self):
@@ -1865,6 +1902,16 @@ class SrtApp(tk.Tk):
 
     def _collect_segmentation_config(self):
         """把介面上的斷句設定寫回設定資料並存檔，數值不合理時做夾限校正。"""
+        self.config_data["segmentation"] = self._read_segmentation_from_ui()
+        self._save_config_silently()
+
+    def _read_segmentation_from_ui(self):
+        """
+        讀出介面上的斷句設定並做夾限校正，**不存檔**。
+
+        v2.3.3 從 `_collect_segmentation_config` 拆出來：習慣設定的狀態行
+        在每次改數字時都要比對一次，那時不該每按一下就寫一次設定檔。
+        """
         seg = dict(self.config_data["segmentation"])
 
         def safe_get(var, fallback):
@@ -1886,9 +1933,7 @@ class SrtApp(tk.Tk):
         seg["max_duration"] = max(seg["min_duration"], min(max_dur, 15.0))
         seg["pause_gap"] = max(0.2, min(pause, 2.0))
         seg["time_offset"] = max(-10.0, min(offset, 10.0))
-
-        self.config_data["segmentation"] = seg
-        self._save_config_silently()
+        return seg
 
     def _collect_automation_config(self):
         """把介面上的自動化輸出設定寫回設定資料並存檔。"""

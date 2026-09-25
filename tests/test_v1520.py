@@ -210,6 +210,11 @@ else:
         # v2.3.0 第 9 項 5b-2：使用者開過螢幕翻譯熱鍵的話，啟動時在背景
         # 建好查譯面板，熱鍵才不必先手動開一次面板才有效。
         "_maybe_start_hotkey",
+        # v2.3.3 UI_AUDIT 1.3-②：習慣設定區顯示「目前的值跟選取的那一組一
+        # 不一樣」。斷句設定的讀取從 `_collect_segmentation_config` 拆出一
+        # 個不存檔的版本，比對時才不會每按一下就寫一次設定檔。
+        "_watch_preset_state", "_refresh_preset_state",
+        "_read_segmentation_from_ui",
     }
     unexpected = added_methods - expected_new_methods
     check("新增的方法都在本版白名單內，沒有夾帶計畫外的新邏輯",

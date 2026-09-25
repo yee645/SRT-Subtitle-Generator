@@ -411,6 +411,54 @@ def make_profile(subtitle_style, segmentation):
     }
 
 
+# 一組習慣設定裡的兩個部分，以及介面上對應的區塊名稱（給狀態文字用）。
+PROFILE_PARTS = (("subtitle_style", "字幕外觀"), ("segmentation", "斷句設定"))
+
+
+def _same_value(a, b):
+    """數值容許滑桿換算造成的微小誤差；其餘型別直接比。"""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return abs(float(a) - float(b)) < 1e-6
+    return a == b
+
+
+def profile_changed_parts(current, preset):
+    """
+    比對介面上目前的值（`current`）與一組已存的習慣設定（`preset`），回傳
+    有差異的部分名稱，例如 ["字幕外觀", "斷句設定"]；完全一致時回傳 []。
+
+    只比兩邊都有的欄位：舊版存下的習慣設定可能少了後來才加的欄位（例如
+    動態字幕），那不算「使用者改過」。
+    """
+    changed = []
+    for key, label in PROFILE_PARTS:
+        cur = (current or {}).get(key) or {}
+        old = (preset or {}).get(key) or {}
+        if any(not _same_value(cur[k], old[k]) for k in cur.keys() & old.keys()):
+            changed.append(label)
+    return changed
+
+
+def describe_preset_state(current, presets, active):
+    """
+    習慣設定區底下那一行狀態文字：目前的值跟選取的那一組一不一樣。
+
+    一組習慣設定存的是「字幕外觀」加上「斷句設定」兩部分，但改了之後不
+    會自動存回去——要按〔更新目前樣式〕。這一行就是讓使用者看得到「現在
+    畫面上的值還沒存進那一組」。
+    """
+    preset = (presets or {}).get(active)
+    if preset is None:
+        return ""
+    changed = profile_changed_parts(current, preset)
+    if not changed:
+        return f"目前的值與「{active}」一致。"
+    return (f"已改過{'、'.join(changed)}，還沒存進「{active}」——"
+            "按〔更新目前樣式〕存起來，或〔另存新樣式〕存成新的一組。")
+
+
 def load_config():
     """載入設定檔；若檔案不存在或損毀，回傳預設設定的複本。"""
     if not os.path.exists(CONFIG_PATH):
