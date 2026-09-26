@@ -146,7 +146,7 @@ Premiere 而把它們稀釋掉**——它們是使用者選這個工具而不是
 | # | 題目 | 為什麼排這裡 | 狀態 |
 |---|---|---|---|
 | 0 | **調研收尾**：Windows 打包大小與啟動時間（CI 實際打包一次）、LGPL 合規作法、影音同步（需要有音效裝置的機器） | 容器驗不到的三件事，決定後面怎麼做 | **大半完成**（2026-09-26）：打包大小與啟動時間已在 Windows 實測，傾向 onedir；授權檔要自己附；Windows 上 opengl32sw／Qt6Quick／Qt6Qml／Qt6Pdf 可拿掉（zip 58→43 MB）。剩影音同步、LGPL 原文核對，見下方「第 0 項調研結果」 |
-| 1 | **`gui_qt/` 骨架**：主視窗、入口開關、共用設定、深淺主題；`release.yml` 加入 PySide6 | 並行策略的地基 | 待做 |
+| 1 | **`gui_qt/` 骨架**：主視窗、入口開關、共用設定、深淺主題；`release.yml` 加入 PySide6 | 並行策略的地基 | **進行中**（2026-09-26）：第一階段骨架＋`--qt` 開關；第二階段 `release.yml` 打包 |
 | 2 | **播放器面板**：`QMediaPlayer` ＋ 影片元件，**字幕疊在真的畫面上預覽**（取代 Canvas 假畫面） | 使用者立刻看得到的第一件事 | 待做 |
 | 3 | **`subtitle/filmstrip.py` ＋ `subtitle/waveform.py`**：縮圖條與波形峰值，帶快取，零 GUI 依賴 | 時間軸的兩種資料來源（Tk 時代實測：5 分鐘片子縮圖 2.5 秒、波形 1.1 秒） | 待做 |
 | 4 | **時間軸元件**（`QGraphicsView`）：縮圖、波形、字幕塊、播放頭、選取、縮放 | 3.0 的門面 | 待做 |
@@ -287,6 +287,51 @@ gnu.org），而且直接決定 Qt 版 zip 是 58 MB 還是可能再小三成多
 作法定案：第 1 項在 `release.yml` 打包 Qt 版時，PyInstaller 跑完後刪掉
 這四個檔（或用 `--exclude-module`／spec 的 `binaries` 過濾），**打包後照樣
 用 `probe_clip.mp4` 播一次**確認沒刪壞，播不出來就讓工作流程失敗。
+
+### 第 1 項第一階段：`gui_qt/` 骨架與入口開關（2026-09-26 開工）
+
+為什麼是這一題：第 0 項剩下的兩件（影音同步要音效裝置、LGPL 原文要讀
+gnu.org）這個環境都做不到，再等也不會變；第 1 項是後面每一項的地基，
+而且拆得出一個**不影響 2.x 出貨**的小階段。
+
+這一階段只做：
+
+- `gui_qt/`：主視窗、四個階段頁籤（名稱與 Tk 版一字不差，老用戶不用重
+  學）、狀態列、深淺主題跟著**同一份** `config.json` 的 `theme`。頁籤內容
+  先放「這一頁還在 Tk 版」的說明，之後每搬一頁換掉一頁。
+- 入口：`python main.py --qt` 開 Qt 版；**Tk 版照舊是預設**。沒裝 PySide6
+  時講清楚要怎麼裝並結束，不會掉進命令列批次模式。
+- 守住 2.x：`gui/` 與 `subtitle/` 都不 import `gui_qt`／PySide6；2.x exe 的
+  spec 明寫排除 PySide6 與 `gui_qt`，打包環境就算裝了 PySide6，exe 也不會
+  暴漲。
+
+**不在這一階段**：`release.yml` 打包 Qt 版（onedir、刪四個檔、打包後播放
+自檢）是第二階段；共用設定的寫回也是之後的事（骨架只讀不寫）。
+
+**第一階段完成（2026-09-26）**：`gui_qt/app.py`、`main.py --qt`、spec 排除、
+`tests/test_qt_skeleton.py`（沒有 PySide6 的環境只跑前兩段，Qt 視窗實測
+略過）。
+
+- 測試先證明會抓錯：五種故意弄壞（`--qt` 判斷移到批次判斷後面、頁籤改
+  名、spec 拿掉排除、把 gui_qt 內部其他 ImportError 吞掉、深色調色盤失
+  效）各自讓對應的檢查失敗。
+- **實測抓到一個真問題**：只呼叫 `styleHints().setColorScheme(Dark)` 在
+  offscreen 平台上完全沒效（底色亮度仍是 239）。改成 Fusion＋明確的深色
+  調色盤，深色 53、淺色 239。Windows 原生樣式跟不跟 `setColorScheme` 沒
+  驗，但改用明確調色盤後這個問題不存在。
+- 截圖（offscreen、深淺兩色）看過：四個頁籤、說明文字、狀態列都清楚。
+- **spec 排除是必要的**（本機 Linux、裝了 PySide6 的環境用 2.x 的 spec 實際
+  打包）：有排除 9.0 MB，拿掉排除 **68.7 MB**——PyInstaller 會順著
+  `main.py` 裡的 `from gui_qt.app import …` 把整個 Qt 拉進 2.x 的 exe。
+  現在 `release.yml` 的打包環境沒裝 PySide6，但第二階段一旦在同一個工作
+  流程裝了，沒有這條排除就會出事。
+- **沒驗到**：Windows 上的實際外觀與高 DPI（容器不是 Windows）；Tk 版與
+  Qt 版同時開時共用設定檔的情況（骨架只讀，暫時不會互相蓋掉）。
+
+**下一步（第二階段）**：`release.yml`（或另一個工作流程）在 Windows 上
+用 onedir 打包 Qt 版、刪掉第 0 項驗過的四個檔、打包後用 `probe_clip.mp4`
+播一次自檢、附授權全文，以 zip 另外附在 Release 上；2.x 的單一 exe 與自動
+更新不動。
 
 ### 螢幕畫面翻譯搬到 Qt 時的參考（2026-09-23 實測）
 

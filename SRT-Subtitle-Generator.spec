@@ -22,7 +22,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['torch', 'torchvision', 'torchaudio', 'scipy', 'whisper', 'numba', 'llvmlite', 'tensorflow', 'matplotlib', 'pandas', 'sympy', 'networkx'],
+    excludes=['torch', 'torchvision', 'torchaudio', 'scipy', 'whisper', 'numba', 'llvmlite', 'tensorflow', 'matplotlib', 'pandas', 'sympy', 'networkx',
+              # 3.0 預覽版另外打包（onedir）；2.x 的單一 exe 不帶 Qt，打包環境裝了 PySide6 也一樣。
+              'PySide6', 'shiboken6', 'gui_qt'],
     noarchive=False,
     optimize=0,
 )
