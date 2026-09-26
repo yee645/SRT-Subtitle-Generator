@@ -150,11 +150,14 @@ def main():
         "```",
     ]
     text = "\n".join(lines)
-    print(text)
+    # 先寫摘要檔、再印：windows-latest 的主控台編碼是 cp1252，印中文會丟
+    # UnicodeEncodeError（第一次跑就是死在這裡，數字已經量完卻沒進摘要）。
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as fh:
             fh.write(text + "\n")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    print(text)
     # 任何一次沒寫出結果就算失敗：量不到的數字不能當成量到了。
     bad = [r for r in report["onefile_runs"] + report["onedir_runs"] if "error" in r]
     return 1 if bad else 0

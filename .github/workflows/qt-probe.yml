@@ -19,6 +19,9 @@ jobs:
   measure:
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      # 主控台預設 cp1252，量測腳本印中文會失敗；統一用 UTF-8。
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
 
