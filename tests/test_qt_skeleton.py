@@ -185,6 +185,27 @@ if PySide6 is not None:
     check("不認得的 theme 當淺色（同 Tk 版）",
           qt_app.theme_scheme("sepia") == qt_app.theme_scheme("light"))
 
+    # --- 自檢模式：打包後的成品就是靠它證明沒刪壞 ---
+    import subprocess as sp  # noqa: E402
+    clip = os.path.join(ROOT, "research", "qt_probe", "probe_clip.mp4")
+    qt_env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    for label, target, want_ok in (("真的影片", clip, True),
+                                   ("不存在的影片", os.path.join(tmp, "none.mp4"), False)):
+        out = os.path.join(tmp, f"selftest_{want_ok}.json")
+        proc = sp.run([sys.executable, "-B", "main.py", "--qt", "--selftest", out, target],
+                      cwd=ROOT, env=qt_env, capture_output=True, timeout=120)
+        res = json.load(open(out, encoding="utf-8")) if os.path.exists(out) else {}
+        if want_ok:
+            check("自檢播真的影片：結束碼 0、ok、解出畫格、播到結尾",
+                  proc.returncode == 0 and res.get("ok") is True
+                  and res.get("frames_decoded", 0) > 0
+                  and res.get("media_status") == "EndOfMedia", f"rc={proc.returncode} {res}")
+            check("自檢結果帶四個頁籤名稱（主視窗也一起驗了）", res.get("tabs") == tk_tabs,
+                  str(res.get("tabs")))
+        else:
+            check("自檢播不存在的影片：結束碼 1、ok 為 False",
+                  proc.returncode == 1 and res.get("ok") is False, f"rc={proc.returncode} {res}")
+
 print()
 if failures:
     print(f"失敗 {len(failures)} 項：{', '.join(failures)}")

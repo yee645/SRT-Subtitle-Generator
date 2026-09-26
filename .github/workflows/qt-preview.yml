@@ -1,0 +1,51 @@
+# 3.0 預覽版（Qt）在 Windows 上打包＋自檢。見 docs/ROADMAP_3.0.md 第 1 項第二階段。
+#
+# 只打包、不發佈：不建 Release、不動 tag，成品只上傳成這次執行的 artifact。
+# 2.x 的單一 exe 與自動更新由 release.yml 負責，這裡完全不碰。只有動到 Qt
+# 相關檔案的 PR 與手動觸發會跑。
+name: Qt preview build (3.0)
+
+on:
+  pull_request:
+    paths:
+      - "gui_qt/**"
+      - "packaging/**"
+      - "research/qt_probe/probe_clip.mp4"
+      - ".github/workflows/qt-preview.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # 主控台預設 cp1252，腳本印中文會失敗；統一用 UTF-8。
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PySide6 and PyInstaller
+        # QtMultimedia 在 PySide6-Addons，要裝完整的 PySide6（第 0 項實測）。
+        run: pip install pyinstaller PySide6
+
+      - name: Build (onedir)
+        # onedir：啟動 0.3 秒 vs onefile 2.6 秒，zip 後下載量相同（第 0 項實測）。
+        run: pyinstaller --noconfirm --onedir --windowed --paths . --name SRT-Subtitle-Generator-Qt packaging/qt_entry.py
+
+      - name: Slim, licenses, self-test, zip
+        run: python packaging/qt_preview.py dist/SRT-Subtitle-Generator-Qt SRT-Subtitle-Generator-Qt.exe research/qt_probe/probe_clip.mp4
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qt-preview
+          path: |
+            qt_preview_report.json
+            SRT-Subtitle-Generator-Qt-preview-*.zip

@@ -146,7 +146,7 @@ Premiere 而把它們稀釋掉**——它們是使用者選這個工具而不是
 | # | 題目 | 為什麼排這裡 | 狀態 |
 |---|---|---|---|
 | 0 | **調研收尾**：Windows 打包大小與啟動時間（CI 實際打包一次）、LGPL 合規作法、影音同步（需要有音效裝置的機器） | 容器驗不到的三件事，決定後面怎麼做 | **大半完成**（2026-09-26）：打包大小與啟動時間已在 Windows 實測，傾向 onedir；授權檔要自己附；Windows 上 opengl32sw／Qt6Quick／Qt6Qml／Qt6Pdf 可拿掉（zip 58→43 MB）。剩影音同步、LGPL 原文核對，見下方「第 0 項調研結果」 |
-| 1 | **`gui_qt/` 骨架**：主視窗、入口開關、共用設定、深淺主題；`release.yml` 加入 PySide6 | 並行策略的地基 | **進行中**（2026-09-26）：第一階段骨架＋`--qt` 開關；第二階段 `release.yml` 打包 |
+| 1 | **`gui_qt/` 骨架**：主視窗、入口開關、共用設定、深淺主題；`release.yml` 加入 PySide6 | 並行策略的地基 | **進行中**：第一階段骨架＋`--qt` 開關已完成（2026-09-26）；第二階段 Windows 打包與自檢已完成（2026-09-27，zip 43.8 MB、自檢通過）；第三階段附到 Release 待做 |
 | 2 | **播放器面板**：`QMediaPlayer` ＋ 影片元件，**字幕疊在真的畫面上預覽**（取代 Canvas 假畫面） | 使用者立刻看得到的第一件事 | 待做 |
 | 3 | **`subtitle/filmstrip.py` ＋ `subtitle/waveform.py`**：縮圖條與波形峰值，帶快取，零 GUI 依賴 | 時間軸的兩種資料來源（Tk 時代實測：5 分鐘片子縮圖 2.5 秒、波形 1.1 秒） | 待做 |
 | 4 | **時間軸元件**（`QGraphicsView`）：縮圖、波形、字幕塊、播放頭、選取、縮放 | 3.0 的門面 | 待做 |
@@ -332,6 +332,54 @@ gnu.org）這個環境都做不到，再等也不會變；第 1 項是後面每�
 用 onedir 打包 Qt 版、刪掉第 0 項驗過的四個檔、打包後用 `probe_clip.mp4`
 播一次自檢、附授權全文，以 zip 另外附在 Release 上；2.x 的單一 exe 與自動
 更新不動。
+
+### 第 1 項第二階段：Qt 預覽版在 Windows 上打包與自檢（2026-09-27 開工）
+
+為什麼是這一題：第一階段只驗了從原始碼跑；3.0 最大的未知是「打包成
+Windows 成品後還能不能動」。第 0 項已經知道要 onedir、要刪哪四個檔、要自
+己附授權，這一階段把它們變成一條**每次都會跑的**打包流程。
+
+這一階段只做：
+
+- `gui_qt` 加自檢模式：`--selftest <結果.json> <影片>` 開主視窗、真的播放一
+  支影片、數解出幾格、寫結果後自己關掉。打包後的成品用它驗「沒刪壞」。
+- `packaging/qt_preview.py`：PyInstaller 跑完後刪掉第 0 項驗過的四個檔
+  （**只在 Windows 刪**——Linux 拿掉 Quick／Qml 播放器就不能動）、放授權
+  全文與第三方元件說明、打 zip。
+- 新工作流程 `qt-preview.yml`（windows-latest）：打包 → 自檢 → 成品上傳
+  成 artifact。**只在動到 Qt 相關檔案的 PR 與手動觸發時跑**。
+
+**不在這一階段**：把 zip 附到 Release（要動 `release.yml`，2.x 發版流程
+不能冒險，等這條流程在 PR 上穩定跑過再接）。2.x 的單一 exe 與自動更新
+不動。
+
+**第二階段完成（2026-09-27）**：`gui_qt/selftest.py`、`packaging/qt_entry.py`、
+`packaging/qt_preview.py`、`packaging/licenses/`、`.github/workflows/qt-preview.yml`、
+`tests/test_qt_preview_pack.py`。
+
+**Windows 實測**（PR #149 的 CI，run 36265999395，windows-latest、Python
+3.11.9）：
+
+| | 數字 |
+|---|---|
+| PyInstaller onedir | 147.7 MB |
+| 刪掉四個檔、加授權後 | **110.6 MB**，**zip 43.8 MB** |
+| 自檢（真的播放 probe_clip.mp4） | 3 次都通過：解出 50 格、播到結尾，每次 2.1～2.7 秒（含開視窗） |
+| 自檢驗到的主視窗 | 標題「SRT 字幕生成器 3.0 預覽版（v2.3.5）」、四個頁籤與 Tk 版相同 |
+| 整條工作流程 | 約 1 分 40 秒（安裝 40 秒、打包 27 秒、收尾＋自檢 18 秒） |
+
+- 打包入口直接進 `gui_qt`，所以 Tk 版沒被帶進去；zip 比第 0 項的探針（43.2
+  MB）只多 0.6 MB。
+- 自檢**擋得住壞成品**（本機 Linux 實測）：拿掉 Qt6Quick 後 3 次都 0 格、
+  結束碼 1、不打 zip。
+- 授權全文取自 Debian base-files 附的 FSF 原文（gnu.org 被出口政策擋，
+  沒有繞過）；**LGPL 條文細節仍未核對**，第三方說明是照一般做法寫的。
+- **沒驗到**：聲音、真的上螢幕、Windows 實機外觀與高 DPI。
+
+**下一步（第三階段）**：`release.yml` 發版時也跑這條打包，把 zip 附到同一個
+Release（2.x 的 exe 與 `updater.py` 的 `ASSET_NAME` 不變，自動更新不會去抓
+zip）。動 `release.yml` 要格外小心：它壞了 2.x 就發不了版，所以要先讓 Qt
+打包那一步失敗時不影響 2.x 的 exe 上傳。
 
 ### 螢幕畫面翻譯搬到 Qt 時的參考（2026-09-23 實測）
 

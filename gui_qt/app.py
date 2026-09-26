@@ -120,12 +120,26 @@ class MainWindow(QMainWindow):
             "3.0 預覽版：目前只有外框，功能請先用一般版。")
 
 
+SELFTEST_FLAG = "--selftest"
+
+
 def main(argv=None):
-    """建立並執行 Qt 版。回傳事件迴圈的結束碼。"""
+    """
+    建立並執行 Qt 版。回傳事件迴圈的結束碼。
+
+    `--selftest <結果.json> <影片>`：打包後的自檢模式（見 gui_qt/selftest.py）。
+    """
     argv = list(sys.argv if argv is None else argv)
     app = QApplication.instance() or QApplication(argv[:1])
     data = config.load_config()
     apply_theme(app, data.get("theme", "light"))
     win = MainWindow(data)
+    if SELFTEST_FLAG in argv:
+        at = argv.index(SELFTEST_FLAG)
+        if len(argv) < at + 3:
+            print("用法：--selftest <結果.json> <影片>", file=sys.stderr)
+            return 2
+        from gui_qt import selftest
+        return selftest.run(app, win, argv[at + 1], argv[at + 2])
     win.show()
     return app.exec()
