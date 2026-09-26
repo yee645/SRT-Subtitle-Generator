@@ -320,6 +320,11 @@ gnu.org）這個環境都做不到，再等也不會變；第 1 項是後面每�
   調色盤，深色 53、淺色 239。Windows 原生樣式跟不跟 `setColorScheme` 沒
   驗，但改用明確調色盤後這個問題不存在。
 - 截圖（offscreen、深淺兩色）看過：四個頁籤、說明文字、狀態列都清楚。
+- **spec 排除是必要的**（本機 Linux、裝了 PySide6 的環境用 2.x 的 spec 實際
+  打包）：有排除 9.0 MB，拿掉排除 **68.7 MB**——PyInstaller 會順著
+  `main.py` 裡的 `from gui_qt.app import …` 把整個 Qt 拉進 2.x 的 exe。
+  現在 `release.yml` 的打包環境沒裝 PySide6，但第二階段一旦在同一個工作
+  流程裝了，沒有這條排除就會出事。
 - **沒驗到**：Windows 上的實際外觀與高 DPI（容器不是 Windows）；Tk 版與
   Qt 版同時開時共用設定檔的情況（骨架只讀，暫時不會互相蓋掉）。
 
