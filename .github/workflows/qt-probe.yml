@@ -1,0 +1,68 @@
+# 3.0 工作清單第 0 項的量測：PySide6 版在 Windows 上打包後多大、多快開起來。
+#
+# 只量測、不發佈：不建 Release、不動 tag、不上傳到任何發佈位置，結果只寫進
+# 這次執行的摘要（Summary）與成品（artifact）。只有動到 research/qt_probe/ 或
+# 本檔的 PR 才會觸發，平常的 PR 與發版流程不受影響。
+name: Qt probe (3.0 research)
+
+on:
+  pull_request:
+    paths:
+      - "research/qt_probe/**"
+      - ".github/workflows/qt-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # 主控台預設 cp1252，量測腳本印中文會失敗；統一用 UTF-8。
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 與 release.yml 打包 2.x exe 用的版本相同，數字才比得起來。
+          python-version: "3.11"
+
+      - name: Install PySide6 and PyInstaller
+        # QtMultimedia／QtMultimediaWidgets 在 PySide6-Addons，不在 Essentials，
+        # 所以裝完整的 PySide6。
+        run: pip install pyinstaller PySide6
+
+      - name: Installed wheel sizes
+        shell: python
+        run: |
+          import importlib.metadata as md, os
+          for dist in ("PySide6", "PySide6_Essentials", "PySide6_Addons", "shiboken6"):
+              try:
+                  files = md.distribution(dist).files or []
+              except md.PackageNotFoundError:
+                  print(dist, "not installed"); continue
+              total = sum(os.path.getsize(f.locate()) for f in files if os.path.exists(f.locate()))
+              print(f"{dist} {md.version(dist)}: {total/1e6:.1f} MB installed")
+
+      - name: Unfrozen run (shows which multimedia backend Qt loads)
+        run: python research/qt_probe/qt_probe.py unfrozen.json; type unfrozen.json
+
+      - name: Build onefile
+        run: pyinstaller --noconfirm --onefile --windowed --name qt_probe_onefile research/qt_probe/qt_probe.py
+
+      - name: Build onedir
+        run: pyinstaller --noconfirm --onedir --windowed --name qt_probe_onedir research/qt_probe/qt_probe.py
+
+      - name: Measure
+        run: python research/qt_probe/measure.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qt-probe-report
+          path: |
+            qt_probe_report.json
+            unfrozen.json
