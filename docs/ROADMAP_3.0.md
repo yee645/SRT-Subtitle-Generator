@@ -159,6 +159,43 @@ Premiere 而把它們稀釋掉**——它們是使用者選這個工具而不是
 | 11 | **既有功能逐頁搬到 Qt**：字幕編輯、翻譯、樣式、健檢中心、**螢幕畫面翻譯**、各對話框 | 追平 Tk 版才能切預設；與 2~10 穿插進行 | 待做 |
 | 12 | **切換預設 ＋ 四個產出物**（`docs/WHATS_NEW_3.0.md`、CHANGELOG、README、新介面的導覽） | 沿用 2.x 的轉正前置條件 | 待做 |
 
+### 第 0 項調研結果（2026-09-26，進行中）
+
+量測工具：`research/qt_probe/`（探針＋量測腳本）與
+`.github/workflows/qt-probe.yml`（windows-latest，只量測、不發佈，只在動到
+這兩處的 PR 觸發）。探針載入 3.0 會用到的 QtWidgets／QtMultimedia／
+QtMultimediaWidgets，建一個帶影片元件與播放器的主視窗，顯示後自報時間並
+自行關閉。
+
+**已確認（讀套件本身，不是憑記憶）**：
+
+- **QtMultimedia／QtMultimediaWidgets 在 `PySide6-Addons`，不在
+  `PySide6-Essentials`。** 只裝精簡版不夠，打包環境要裝完整的 `PySide6`。
+- **授權**：`PySide6`、`PySide6-Essentials`、`PySide6-Addons`、`shiboken6`
+  6.11.2 的套件中繼資料都寫 `LGPL-3.0-only OR GPL-2.0-only OR
+  GPL-3.0-only`，另有商業授權。Qt 自帶的 FFmpeg 在啟動時自報「FFmpeg
+  version 7.1.5 LGPL version 2.1 or later」。
+- **wheel 裡沒有任何授權全文**（dist-info 只有 METADATA，沒有 LICENSE 檔），
+  所以 PyInstaller 打包出來的成品**一個授權檔都沒有**（本機 onefile、onedir
+  兩種都確認過）。要守 LGPL，至少得自己把授權全文與「用了哪些 LGPL 元件、
+  原始碼在哪」的說明放進成品——這件事**不會自動發生**。
+- LGPL 條文細節（onefile 算不算讓使用者「能替換函式庫」、要附原始碼還是附
+  取得方式）**這次沒有核對原文**：gnu.org 被這個環境的出口政策擋下，沒有
+  繞過。在核對原文之前，**onedir（Qt 的 DLL 是分開的檔案，可以直接替換）
+  是比較不會出錯的選擇**；是否真的必要留待核對後定案。
+
+**本機 Linux 參考數字**（不是 Windows，只看量級；Linux 上 PyInstaller 會把
+Qt 函式庫複製兩份，onedir 偏大）：
+
+| | onefile | onedir |
+|---|---|---|
+| 大小 | 79 MB | 321 MB（379 檔，zip 後 126 MB） |
+| 啟動牆上時間（第一次／其餘中位數） | 1.47／1.37 秒（多半是解壓） | 0.22／0.22 秒 |
+
+對照：目前 2.x 的 Tk 版 exe 是 23.7 MB（onefile）。
+
+**Windows 數字**：待 PR #146 的 CI 跑完填入。
+
 ### 螢幕畫面翻譯搬到 Qt 時的參考（2026-09-23 實測）
 
 在 Xvfb、`xcb` 平台下：Qt 的 `QScreen.grabWindow` 截一塊 560x84 的畫面
