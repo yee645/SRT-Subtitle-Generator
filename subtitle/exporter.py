@@ -237,8 +237,18 @@ BURN_PLAY_RES = (1920, 1080)
 
 
 def _ass_margin_v(position_y: float, play_y: int) -> int:
-    """ASS 的垂直邊距（與 `_ass_alignment` 一起決定字幕上下位置）。"""
-    return max(int(play_y * (1.0 - float(position_y))), 10)
+    """
+    ASS 的垂直邊距（與 `_ass_alignment` 一起決定字幕上下位置）。
+
+    置底時是字的底邊到畫面下緣的距離、置頂時是字的頂邊到畫面上緣的距離，
+    所以兩者都讓字落在 `position_y` 那條線上：置底用 `1 - position_y`、
+    置頂用 `position_y`。v2.3.5 以前置頂也用 `1 - position_y`，`0.15` 會燒
+    在畫面 85% 高處（接近底部），跟預覽畫在上方不一致。置中時 ASS 忽略邊距。
+    """
+    position_y = float(position_y)
+    if _ass_alignment(position_y) == 8:
+        return max(int(play_y * position_y), 10)
+    return max(int(play_y * (1.0 - position_y)), 10)
 
 
 def burn_layout(style: Mapping | None, frame_w: float, frame_h: float) -> dict:

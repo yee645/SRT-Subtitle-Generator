@@ -323,6 +323,8 @@ if PySide6 is not None:
             "預設（置底 0.88、26、邊 2）": ({}, "第二句 Subtitle Test"),
             "大字（60、邊 4）": ({"font_size": 60, "stroke_width": 4}, "第二句 Subtitle Test"),
             "置中 0.5": ({"position_y": 0.5, "font_size": 48}, "第二句 Subtitle Test"),
+            "置頂 0.15（v2.3.6 修正後在上方）": ({"position_y": 0.15, "font_size": 48},
+                                             "第二句 Subtitle Test"),
             "兩行": ({"font_size": 48}, "第一行字幕\n第二行 Test"),
         }
         for name, (extra, text) in cases.items():
