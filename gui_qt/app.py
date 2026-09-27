@@ -139,7 +139,8 @@ class MainWindow(QMainWindow):
         note.setWordWrap(True)
         note.setContentsMargins(12, 8, 12, 0)
         layout.addWidget(note)
-        self.player_panel = PlayerPanel()
+        # 字幕樣式與 Tk 版同一份（config 的 subtitle_style），疊加層照燒錄的規則畫。
+        self.player_panel = PlayerPanel(style=self.config_data.get("subtitle_style"))
         layout.addWidget(self.player_panel, 1)
         return page
 
