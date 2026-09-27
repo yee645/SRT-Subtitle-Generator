@@ -232,6 +232,69 @@ def _ass_alignment(position_y: float) -> int:
     return 5
 
 
+# 燒錄用的 ASS 座標系：一律 1920×1080，libass 依實際畫面等比縮放。
+BURN_PLAY_RES = (1920, 1080)
+
+
+def _ass_margin_v(position_y: float, play_y: int) -> int:
+    """
+    ASS 的垂直邊距（與 `_ass_alignment` 一起決定字幕上下位置）。
+
+    置底時是字的底邊到畫面下緣的距離、置頂時是字的頂邊到畫面上緣的距離，
+    所以兩者都讓字落在 `position_y` 那條線上：置底用 `1 - position_y`、
+    置頂用 `position_y`。v2.3.5 以前置頂也用 `1 - position_y`，`0.15` 會燒
+    在畫面 85% 高處（接近底部），跟預覽畫在上方不一致。置中時 ASS 忽略邊距。
+    """
+    position_y = float(position_y)
+    if _ass_alignment(position_y) == 8:
+        return max(int(play_y * position_y), 10)
+    return max(int(play_y * (1.0 - position_y)), 10)
+
+
+def burn_layout(style: Mapping | None, frame_w: float, frame_h: float) -> dict:
+    """
+    燒錄時字幕在一個 frame_w×frame_h 的畫面上會長什麼樣、放在哪。
+
+    給預覽用（3.0 的 Qt 播放器疊加層），讓預覽與燒錄結果一致。算法與
+    `cues_to_ass` 共用 `_ass_alignment`／`_ass_margin_v`，兩邊不會各說各話：
+
+    * 字級、邊框、邊距都以 PlayRes 1080 高為基準，依 frame_h 等比縮放；
+    * **水平一律置中**——ASS 的 Alignment 2／5／8 都是水平置中，
+      `position_x` 燒錄時不會用到；
+    * anchor 為 "bottom"：字的底邊在 anchor_y；"top"：字的頂邊在 anchor_y；
+      "middle"：字的垂直中心在 anchor_y（畫面中央，ASS 置中時忽略邊距）。
+
+    零 GUI 依賴，回傳純資料。
+    """
+    style = style or {}
+    play_y = BURN_PLAY_RES[1]
+    scale = float(frame_h) / play_y if play_y else 1.0
+    position_y = float(style.get("position_y", 0.88))
+    align = _ass_alignment(position_y)
+    margin = _ass_margin_v(position_y, play_y) * scale
+    if align == 2:
+        anchor, anchor_y = "bottom", float(frame_h) - margin
+    elif align == 8:
+        anchor, anchor_y = "top", margin
+    else:
+        anchor, anchor_y = "middle", float(frame_h) / 2
+    words = []
+    if style.get("emphasis_enabled"):
+        words = parse_emphasis_words(str(style.get("emphasis_words") or ""))
+    return {
+        "font_family": style.get("font_family", "Microsoft JhengHei"),
+        "font_px": max(int(style.get("font_size", 26)), 1) * scale,
+        "outline_px": max(int(style.get("stroke_width", 2)), 0) * scale,
+        "text_color": style.get("text_color", "#FFFFFF"),
+        "stroke_color": style.get("stroke_color", "#000000"),
+        "anchor": anchor,
+        "anchor_y": anchor_y,
+        "center_x": float(frame_w) / 2,
+        "emphasis_words": words,
+        "emphasis_color": style.get("emphasis_color", "#FFD700"),
+    }
+
+
 def cues_to_ass(cues: Iterable[Mapping], style: Mapping | None = None,
                 resolution: tuple[int, int] = (1920, 1080),
                 margin_lr: int | None = None) -> str:
@@ -249,7 +312,7 @@ def cues_to_ass(cues: Iterable[Mapping], style: Mapping | None = None,
     stroke_width = max(int(style.get("stroke_width", 2)), 0)
     align = _ass_alignment(float(style.get("position_y", 0.88)))
     play_x, play_y = resolution
-    margin_v = max(int(play_y * (1.0 - float(style.get("position_y", 0.88)))), 10)
+    margin_v = _ass_margin_v(style.get("position_y", 0.88), play_y)
     margin_side = 20 if margin_lr is None else max(int(margin_lr), 0)
 
     header = (
