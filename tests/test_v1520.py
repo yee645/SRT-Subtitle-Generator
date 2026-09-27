@@ -302,6 +302,9 @@ if old_app_src is not None:
         "subtitle/hotkey.py",       # 第 9 項第一階段：全域熱鍵（全新）
         "subtitle/speech.py",       # 第 9 項第一階段：朗讀（全新）
         "subtitle/screentranslate.py",  # 第 9 項第一階段：螢幕翻譯流程層（全新）
+        # 3.0 第 2 項：某一刻該顯示哪一句字幕。播放器疊加層與之後的時間軸
+        # 共用，放核心層才不會兩邊各寫一份（全新檔案，零 GUI 依賴）。
+        "subtitle/cuetime.py",
         # v2.3.1 D-1：模式摘掉舊編號，以下只改錯誤訊息字串與註解，沒有動任
         # 何函式或公開名稱（下面「公開名稱一個不少」那條照樣守著）。
         "subtitle/errors.py", "subtitle/aligner.py", "subtitle/segmenter.py",
