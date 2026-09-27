@@ -102,6 +102,11 @@ def _placeholder_page(summary):
     return page
 
 
+def _subtitle_page_note():
+    return QLabel("這一頁先搬過來的是播放器：字幕疊在真的影片畫面上。"
+                  "生成、校對、翻譯、樣式還在一般版（不加 --qt）。")
+
+
 class MainWindow(QMainWindow):
     """3.0 預覽版主視窗。"""
 
@@ -113,11 +118,30 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
+        self.player_panel = None
         for name, summary in STAGES:
-            self.tabs.addTab(_placeholder_page(summary), name)
+            if name == "② 字幕":
+                self.tabs.addTab(self._subtitle_page(), name)
+            else:
+                self.tabs.addTab(_placeholder_page(summary), name)
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(
-            "3.0 預覽版：目前只有外框，功能請先用一般版。")
+            "3.0 預覽版：目前只有外框與②的播放器，其餘功能請先用一般版。")
+
+    def _subtitle_page(self):
+        """② 字幕：播放器面板（第 2 項）＋一行說明其餘功能在哪。"""
+        from gui_qt.player import PlayerPanel
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        note = _subtitle_page_note()
+        note.setWordWrap(True)
+        note.setContentsMargins(12, 8, 12, 0)
+        layout.addWidget(note)
+        self.player_panel = PlayerPanel()
+        layout.addWidget(self.player_panel, 1)
+        return page
 
 
 SELFTEST_FLAG = "--selftest"
