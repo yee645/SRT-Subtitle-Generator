@@ -10,11 +10,13 @@
 2. 授權全文是真的 FSF 原文、三份都有；第三方說明列出 PySide6／Qt／FFmpeg
    與實際打包進去的 FFmpeg 檔名。
 3. **自檢不通過就不打 zip、結束碼 1**；通過才打，zip 內以資料夾名開頭。
-4. 工作流程：只打包不發佈（權限唯讀、不碰 Release）、入口是 qt_entry、
-   2.x 的 release.yml 沒被牽動。
+4. 工作流程：qt-preview.yml 只打包不發佈（權限唯讀、不碰 Release）、入口
+   是 qt_entry。release.yml（第三階段）：Qt 工作等 exe 附上之後才跑、失敗
+   不影響 2.x、只上傳 zip、打包指令與 qt-preview.yml 逐字相同。
 """
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -153,7 +155,52 @@ check("qt-preview 入口是 packaging/qt_entry.py（雙擊就開 Qt 版，不是
 check("qt-preview 用 onedir（第 0 項結論）", "--onedir" in wf and "--onefile" not in wf)
 check("qt-preview 打包後跑自檢收尾", "packaging/qt_preview.py" in wf)
 check("動到 gui_qt 的 PR 會觸發 qt-preview", '"gui_qt/**"' in wf)
-check("2.x 的 release.yml 沒有裝 PySide6", "PySide6" not in _read(".github/workflows/release.yml"))
+
+# --- release.yml：第三階段把 zip 附到 Release，但 2.x 的 exe 不能被牽連 ---
+# 用文字切工作（測試不引入 PyYAML）：頂層 jobs 底下兩格縮排的鍵就是工作名。
+rel = _read(".github/workflows/release.yml")
+jobs_at = rel.index("\njobs:\n")
+job_heads = [(m.start(), m.group(1)) for m in
+             re.finditer(r"^  ([\w-]+):\s*$", rel[jobs_at:], re.M)]
+jobs = {}
+for i, (start, name) in enumerate(job_heads):
+    end = job_heads[i + 1][0] if i + 1 < len(job_heads) else len(rel) - jobs_at
+    jobs[name] = rel[jobs_at + start:jobs_at + end]
+# 註解行不算（下一個工作上方的說明註解會落在前一個工作的切片裡）。
+jobs = {k: "\n".join(ln for ln in v.splitlines() if not ln.lstrip().startswith("#"))
+        for k, v in jobs.items()}
+main_job, qt_job = jobs.get("build-and-release", ""), jobs.get("qt-preview", "")
+check("release.yml 有 build-and-release 與 qt-preview 兩個工作",
+      set(jobs) == {"build-and-release", "qt-preview"}, str(list(jobs)))
+check("2.x 那個工作沒有裝 PySide6（收緊原檢查：只看 2.x 工作本身）",
+      "PySide6" not in main_job and "pip install pyinstaller openai zhconv sv-ttk" in main_job)
+check("2.x 那個工作照舊上傳 exe、照舊用 spec 打包",
+      "dist/SRT-Subtitle-Generator.exe" in main_job
+      and "pyinstaller SRT-Subtitle-Generator.spec" in main_job)
+check("Qt 工作等 2.x 工作做完才開始（exe 已經附上）",
+      re.search(r"^    needs: build-and-release\s*$", qt_job, re.M) is not None)
+check("Qt 工作失敗不影響 2.x（continue-on-error: true）",
+      re.search(r"^    continue-on-error: true\s*$", qt_job, re.M) is not None)
+check("Release 已存在、跳過建置時 Qt 工作也跳過",
+      "needs.build-and-release.outputs.created == 'true'" in qt_job
+      and "created: ${{ steps.resolve.outputs.exists != 'true' }}" in main_job
+      and "id: resolve" in main_job and 'fp.write(f"exists={exists}\\n")' in main_job)
+check("Qt 工作只上傳預覽版 zip，不碰 exe",
+      "SRT-Subtitle-Generator-Qt-preview-*.zip" in qt_job
+      and "SRT-Subtitle-Generator.exe" not in qt_job)
+check("自動更新只認 exe（Release 上多一個 zip 不會被誤抓）",
+      'ASSET_NAME = "SRT-Subtitle-Generator.exe"' in _read("updater.py"))
+
+
+def _run_lines(text):
+    return [ln.strip() for ln in text.splitlines() if ln.strip().startswith(
+        ("run: pip install pyinstaller PySide6", "run: pyinstaller --noconfirm --onedir",
+         "run: python packaging/qt_preview.py"))]
+
+
+check("Release 的 Qt 打包與 PR 上驗過的 qt-preview.yml 逐字相同（不會出現兩套）",
+      len(_run_lines(qt_job)) == 3 and _run_lines(qt_job) == _run_lines(wf),
+      f"{_run_lines(qt_job)} != {_run_lines(wf)}")
 check("qt_entry 直接進 gui_qt（不經 main.py 的 Tk 預設）",
       "from gui_qt.app import main" in _read("packaging/qt_entry.py")
       and "gui.app" not in _read("packaging/qt_entry.py"))
