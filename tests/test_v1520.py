@@ -305,6 +305,10 @@ if old_app_src is not None:
         # 3.0 第 2 項：某一刻該顯示哪一句字幕。播放器疊加層與之後的時間軸
         # 共用，放核心層才不會兩邊各寫一份（全新檔案，零 GUI 依賴）。
         "subtitle/cuetime.py",
+        # 3.0 第 2 項第二階段：burn_layout（預覽照燒錄的位置與大小畫）。
+        # 與 cues_to_ass 同檔、共用對齊與邊距的算法；cues_to_ass 只把原本
+        # 內嵌的邊距算式換成同一個函式，輸出逐字相同（測試比對）。
+        "subtitle/exporter.py",
         # v2.3.1 D-1：模式摘掉舊編號，以下只改錯誤訊息字串與註解，沒有動任
         # 何函式或公開名稱（下面「公開名稱一個不少」那條照樣守著）。
         "subtitle/errors.py", "subtitle/aligner.py", "subtitle/segmenter.py",

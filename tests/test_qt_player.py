@@ -12,7 +12,12 @@
    - 換一份字幕，畫面上那句**立刻**換掉（不必等下一格或再跳一次）；
    - 真的播到結尾；
    - 白字黑邊：字的白色部分沒有被黑邊吃掉（實際踩過：描邊畫在字上面）。
+3. 第二階段：`burn_layout`（不需要 PySide6）與 `cues_to_ass` 的對齊、邊距一
+   致；有 PySide6＋ffmpeg（libass）＋文泉驛字型時，**跟真的燒錄出來的畫面比
+   對**：字的外框四邊差距都在 4px 內（字級換算前差兩成，實際量到的）。樣式
+   的文字色、邊框色、無邊框、重點字上色都真的畫出來。
 """
+import inspect
 import json
 import os
 import random
@@ -24,6 +29,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from subtitle.cuetime import CueIndex, cue_at  # noqa: E402
+from subtitle.exporter import BURN_PLAY_RES, burn_layout, cues_to_ass  # noqa: E402
 
 failures = []
 
@@ -91,6 +97,32 @@ check("隨機 200 組字幕 × 50 個時間點，與逐句暴力比對完全一�
 src = open(os.path.join(ROOT, "subtitle", "cuetime.py"), encoding="utf-8").read()
 check("cuetime 零 GUI 依賴（不 import tkinter／PySide6）",
       not re.search(r"^\s*(from|import)\s+(tkinter|PySide6)", src, re.M))
+
+# ===== 1b. burn_layout：預覽照燒錄的規則算 ================================
+
+for py in (0.0, 0.1, 0.33, 0.34, 0.5, 0.65, 0.66, 0.88, 0.99, 1.0):
+    header = cues_to_ass([{"start": 0, "end": 1, "text": "x"}], {"position_y": py})
+    fields = re.search(r"^Style: Default,.*$", header, re.M).group(0).split(",")
+    align, margin_v = int(fields[18]), int(fields[21])
+    look = burn_layout({"position_y": py}, 1920, 1080)
+    expect = {2: ("bottom", 1080 - margin_v), 8: ("top", margin_v), 5: ("middle", 540)}[align]
+    check(f"position_y={py}：burn_layout 的對齊與基準線 = cues_to_ass 寫進 ASS 的",
+          (look["anchor"], round(look["anchor_y"])) == expect, f"{look} vs {expect}")
+
+half = burn_layout({"font_size": 40, "stroke_width": 3, "position_y": 0.9}, 960, 540)
+check("畫面一半大（540 高）→ 字級、邊框、邊距都是 1080 時的一半",
+      half["font_px"] == 20 and half["outline_px"] == 1.5
+      and round(half["anchor_y"]) == 540 - 54, str(half))
+check("水平一律置中（燒錄的 ASS 對齊 2／5／8 都置中，position_x 用不到）",
+      burn_layout({"position_x": 0.1}, 1000, 500)["center_x"] == 500
+      == burn_layout({"position_x": 0.9}, 1000, 500)["center_x"])
+check("預覽換算的 PlayRes 與燒錄預設解析度一致",
+      inspect.signature(cues_to_ass).parameters["resolution"].default
+      == BURN_PLAY_RES)
+check("重點字只在啟用時才帶出來",
+      burn_layout({"emphasis_words": "甲"}, 10, 10)["emphasis_words"] == []
+      and sorted(burn_layout({"emphasis_enabled": True, "emphasis_words": "甲 乙"},
+                      10, 10)["emphasis_words"]) == ["乙", "甲"])
 
 # ===== 2. 播放器（需要 PySide6） =========================================
 
@@ -225,6 +257,89 @@ if PySide6 is not None:
     got, ref = white_pixels(outlined), white_pixels(fill_only)
     check("白字黑邊：白色部分至少保留單純填字的 90%（黑邊畫在字外面、不是蓋在字上）",
           ref > 0 and got >= 0.9 * ref, f"{got} vs {ref}")
+
+    # --- 第二階段：樣式真的套上 ---
+    from PySide6.QtCore import QRectF as _QRectF  # noqa: E402
+    from gui_qt.player import place_subtitle  # noqa: E402
+
+    def render(text, style, w=640, h=360):
+        img = QImage(w, h, QImage.Format_RGB32)
+        img.fill(QColor(0, 0, 0))
+        it = OutlinedText()
+        it.setText(text)
+        place_subtitle(it, _QRectF(0, 0, w, h), style)
+        p = QPainter(img)
+        p.translate(it.pos())
+        it.paint(p, None)
+        p.end()
+        return img
+
+    def count(img, pred):
+        return sum(1 for y in range(0, img.height()) for x in range(0, img.width())
+                   if pred(QColor(img.pixel(x, y))))
+
+    red = render("紅字 Red", {"text_color": "#FF0000", "stroke_color": "#00FF00",
+                              "stroke_width": 3, "font_size": 60})
+    check("文字色照樣式（紅）", count(red, lambda c: c.red() > 200 and c.green() < 60) > 50)
+    check("邊框色照樣式（綠）", count(red, lambda c: c.green() > 200 and c.red() < 60) > 50)
+    bare = render("無邊框", {"text_color": "#FFFFFF", "stroke_color": "#00FF00",
+                            "stroke_width": 0, "font_size": 60})
+    check("邊框寬 0 → 沒有邊框色", count(bare, lambda c: c.green() > 200 and c.red() < 60) == 0)
+    emph = render("這是重點字", {"text_color": "#FFFFFF", "font_size": 60,
+                              "emphasis_enabled": True, "emphasis_words": "重點",
+                              "emphasis_color": "#0000FF"})
+    check("重點字上色（藍）", count(emph, lambda c: c.blue() > 200 and c.red() < 60) > 50)
+
+    panel.set_style({"font_size": 80, "position_y": 0.5})
+    mid = panel.subtitle_item.mapRectToScene(panel.subtitle_item.text_rect())
+    vr = panel._video_rect()
+    check("set_style：換成置中，畫面上那句立刻移到畫面中央（誤差 3px）",
+          abs(mid.center().y() - vr.center().y()) <= 3, f"{mid.center().y()} vs {vr.center().y()}")
+
+    # --- 跟真的燒錄比對（ffmpeg＋libass） ---
+    import shutil  # noqa: E402
+    import subprocess  # noqa: E402
+    from PySide6.QtGui import QFontDatabase  # noqa: E402
+
+    FONT = "WenQuanYi Zen Hei"
+    has_libass = bool(shutil.which("ffmpeg")) and " ass " in subprocess.run(
+        ["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True).stdout
+    if not has_libass or FONT not in QFontDatabase.families():
+        print(f"SKIP 沒有 ffmpeg（libass）或 {FONT} 字型：略過與真的燒錄比對")
+    else:
+        W, H = 1280, 720
+
+        def bbox(img):
+            xs, ys = [], []
+            for y in range(img.height()):
+                for x in range(img.width()):
+                    c = QColor(img.pixel(x, y))
+                    if c.red() + c.green() + c.blue() > 60:
+                        xs.append(x)
+                        ys.append(y)
+            return (min(xs), min(ys), max(xs), max(ys)) if xs else None
+
+        cases = {
+            "預設（置底 0.88、26、邊 2）": ({}, "第二句 Subtitle Test"),
+            "大字（60、邊 4）": ({"font_size": 60, "stroke_width": 4}, "第二句 Subtitle Test"),
+            "置中 0.5": ({"position_y": 0.5, "font_size": 48}, "第二句 Subtitle Test"),
+            "兩行": ({"font_size": 48}, "第一行字幕\n第二行 Test"),
+        }
+        for name, (extra, text) in cases.items():
+            style = dict({"font_family": FONT, "stroke_color": "#808080"}, **extra)
+            ass = os.path.join(tmp, "burn.ass")
+            with open(ass, "w", encoding="utf-8") as fh:
+                fh.write(cues_to_ass([{"start": 0, "end": 5, "text": text}], style))
+            png = os.path.join(tmp, "burn.png")
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                            f"color=black:s={W}x{H}:d=1", "-vf", f"ass={ass}",
+                            "-frames:v", "1", png], check=True, cwd=tmp)
+            burned = bbox(QImage(png))
+            ours = bbox(render(text, style, W, H))
+            diff = [ours[i] - burned[i] for i in range(4)] if burned and ours else None
+            check(f"跟真的燒錄比對「{name}」：字的外框四邊都在 4px 內",
+                  diff is not None and max(abs(d) for d in diff) <= 4,
+                  f"燒錄 {burned} 預覽 {ours} 差 {diff}")
 
     win.close()
 

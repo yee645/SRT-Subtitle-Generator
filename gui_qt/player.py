@@ -11,8 +11,12 @@ Tk 版的「預覽」是 Canvas 畫的假畫面（`gui/preview_panel.py`），�
 「這一刻顯示哪一句」交給 `subtitle/cuetime.py`（核心層、零 GUI 依賴），時
 間軸之後也用同一個。
 
-這一階段還沒做：套用 config 的字幕樣式（字型、位置、顏色）、與字幕清單雙
-向同步、鍵盤快捷鍵。見 `docs/ROADMAP_3.0.md` 第 2 項。
+字幕的字型、字級、顏色、邊框、上下位置與重點字照 config 的字幕樣式，位置與
+大小由 `subtitle/exporter.py` 的 `burn_layout` 算——與燒錄用同一套規則，預
+覽長得跟燒出來的一樣（水平一律置中，因為燒錄就是這樣）。
+
+還沒做：逐字動態字幕的預覽、與字幕清單雙向同步、鍵盤快捷鍵。見
+`docs/ROADMAP_3.0.md` 第 2 項。
 """
 import os
 
@@ -29,12 +33,8 @@ from PySide6.QtWidgets import (
 )
 
 from subtitle.cuetime import CueIndex
+from subtitle.exporter import burn_layout, split_emphasis_segments
 from subtitle.importer import load_subtitle_file
-
-# 字幕離畫面底部的距離，占畫面高度的比例（與燒錄預設的下邊距同一個量級）。
-BOTTOM_MARGIN_RATIO = 0.06
-# 字級占畫面高度的比例：720p 約 36px，與燒錄預設相近。
-FONT_HEIGHT_RATIO = 0.05
 
 
 def format_clock(ms):
@@ -46,11 +46,12 @@ def format_clock(ms):
 
 class OutlinedText(QGraphicsItem):
     """
-    白字黑邊的字幕文字，多行各自置中。
+    有邊框的字幕文字，多行各自置中，可指定文字色、邊框色與寬度、重點字上色。
 
-    不用 `QGraphicsSimpleTextItem.setPen`：那個描邊是畫在字的**上面**，黑
-    邊把白字吃掉一半，截圖上幾乎讀不出來（實際踩到）。這裡先用粗黑筆描
-    外框、再把白字填在上面——跟燒錄出來的字幕同一種畫法。
+    不用 `QGraphicsSimpleTextItem.setPen`：那個描邊是畫在字的**上面**，邊框
+    把字吃掉一半，截圖上幾乎讀不出來（實際踩到）。這裡先用粗筆描外框、再
+    把字填在上面——跟燒錄（libass）同一種畫法：ASS 的 Outline 是字形外擴
+    的寬度，所以筆寬是它的兩倍（一半被字蓋住）。
     """
 
     def __init__(self):
@@ -58,6 +59,11 @@ class OutlinedText(QGraphicsItem):
         self._text = ""
         self._font = QFont()
         self._outline = 3.0
+        self._text_color = QColor(255, 255, 255)
+        self._stroke_color = QColor(0, 0, 0)
+        self._emphasis_words = []
+        self._emphasis_color = QColor(255, 215, 0)
+        self._runs = []          # [(QPainterPath, QColor)]
         self._path = QPainterPath()
         self._rect = QRectF()
 
@@ -73,8 +79,16 @@ class OutlinedText(QGraphicsItem):
 
     def setFont(self, font):  # noqa: N802
         self._font = QFont(font)
-        # 描邊粗細跟著字級走：字大邊也要粗，不然大字的邊細得像沒有。
-        self._outline = max(2.0, font.pixelSize() / 12.0)
+        self._rebuild()
+
+    def set_look(self, text_color, stroke_color, outline_px,
+                 emphasis_words=(), emphasis_color="#FFD700"):
+        """文字色、邊框色、邊框寬（像素，0＝無邊框）、重點字與其顏色。"""
+        self._text_color = QColor(text_color)
+        self._stroke_color = QColor(stroke_color)
+        self._outline = max(0.0, float(outline_px))
+        self._emphasis_words = list(emphasis_words)
+        self._emphasis_color = QColor(emphasis_color)
         self._rebuild()
 
     def _rebuild(self):
@@ -82,16 +96,28 @@ class OutlinedText(QGraphicsItem):
         metrics = QFontMetricsF(self._font)
         lines = self._text.split("\n") if self._text else []
         widest = max((metrics.horizontalAdvance(ln) for ln in lines), default=0.0)
-        path = QPainterPath()
+        runs, whole = [], QPainterPath()
         for i, line in enumerate(lines):
             x = (widest - metrics.horizontalAdvance(line)) / 2
-            path.addText(QPointF(x, metrics.ascent() + i * metrics.lineSpacing()),
-                         self._font, line)
-        self._path = path
+            baseline = metrics.ascent() + i * metrics.lineSpacing()
+            pieces = (split_emphasis_segments(line, self._emphasis_words)
+                      if self._emphasis_words else [(line, False)])
+            for piece, emphasized in pieces:
+                path = QPainterPath()
+                path.addText(QPointF(x, baseline), self._font, piece)
+                runs.append((path, self._emphasis_color if emphasized else self._text_color))
+                whole.addPath(path)
+                x += metrics.horizontalAdvance(piece)
+        self._runs, self._path = runs, whole
         height = metrics.lineSpacing() * len(lines) if lines else 0.0
         pad = self._outline
         self._rect = QRectF(-pad, -pad, widest + 2 * pad, height + 2 * pad)
         self.update()
+
+    def text_rect(self):
+        """字本身（不含邊框留白）在項目座標裡的範圍：對齊用。"""
+        pad = self._outline
+        return self._rect.adjusted(pad, pad, -pad, -pad)
 
     def boundingRect(self):  # noqa: N802
         return self._rect
@@ -100,10 +126,12 @@ class OutlinedText(QGraphicsItem):
         if not self._text:
             return
         painter.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor(0, 0, 0), self._outline * 2)
-        pen.setJoinStyle(Qt.RoundJoin)
-        painter.strokePath(self._path, pen)
-        painter.fillPath(self._path, QBrush(QColor(255, 255, 255)))
+        if self._outline > 0:
+            pen = QPen(self._stroke_color, self._outline * 2)
+            pen.setJoinStyle(Qt.RoundJoin)
+            painter.strokePath(self._path, pen)
+        for path, color in self._runs:
+            painter.fillPath(path, QBrush(color))
 
 
 class _VideoView(QGraphicsView):
@@ -119,8 +147,9 @@ class _VideoView(QGraphicsView):
 class PlayerPanel(QWidget):
     """播放器面板：開影片、載字幕、播放／暫停、拖曳跳轉，字幕疊在畫面上。"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, style=None):
         super().__init__(parent)
+        self._style = dict(style or {})
         self._index = CueIndex([])
         self._subtitle_path = ""
 
@@ -198,6 +227,11 @@ class PlayerPanel(QWidget):
         data = load_subtitle_file(path)
         self.set_cues(data["cues"], path)
         return data
+
+    def set_style(self, style):
+        """換字幕樣式（config 的 subtitle_style）；畫面上那句立刻重畫。"""
+        self._style = dict(style or {})
+        self._place_subtitle()
 
     def toggle_play(self):
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -286,13 +320,43 @@ class PlayerPanel(QWidget):
         self._place_subtitle()
 
     def _place_subtitle(self):
-        rect = self._video_rect()
-        font = QFont(self.subtitle_item.font())
-        font.setPixelSize(max(12, int(rect.height() * FONT_HEIGHT_RATIO)))
-        self.subtitle_item.setFont(font)
-        box = self.subtitle_item.boundingRect()
-        # 外框從 (-描邊, -描邊) 開始（描邊留白），置中要扣掉這段偏移，否則
-        # 字幕會往左上偏幾個像素（測試量到偏 2.7px）。
-        x = rect.left() + (rect.width() - box.width()) / 2 - box.left()
-        y = rect.bottom() - rect.height() * BOTTOM_MARGIN_RATIO - box.height() - box.top()
-        self.subtitle_item.setPos(x, y)
+        place_subtitle(self.subtitle_item, self._video_rect(), self._style)
+
+
+def ass_font(family, size_px):
+    """
+    換算成跟 libass 一樣大的 QFont。
+
+    ASS 的 Fontsize 是**整行高度**（字型的上伸＋下伸），Qt 的 pixelSize 是
+    字身（em）。直接拿來用，字會比燒錄出來的大兩成左右（跟真的燒錄比對量
+    到的）。先用 size_px 當 pixelSize 量出行高，再等比縮回去。
+    """
+    font = QFont(family)
+    font.setPixelSize(max(1, round(size_px)))
+    metrics = QFontMetricsF(font)
+    line = metrics.ascent() + metrics.descent()
+    if line > 0:
+        font.setPixelSize(max(1, round(size_px * size_px / line)))
+    return font
+
+
+def place_subtitle(item, rect, style):
+    """
+    依字幕樣式把 item 擺到影片矩形 rect 裡燒錄時會出現的位置、套上燒錄時的
+    大小與顏色。抽成獨立函式，測試才能拿同一套擺法畫在圖上跟真的燒錄比對。
+    """
+    look = burn_layout(style, rect.width(), rect.height())
+    item.setFont(ass_font(look["font_family"], look["font_px"]))
+    item.set_look(look["text_color"], look["stroke_color"], look["outline_px"],
+                  look["emphasis_words"], look["emphasis_color"])
+    # 對齊看的是字本身（不含邊框留白），跟 libass 用字的範圍對齊一樣。
+    box = item.text_rect()
+    x = rect.left() + look["center_x"] - box.width() / 2 - box.left()
+    anchor_y = rect.top() + look["anchor_y"]
+    if look["anchor"] == "bottom":
+        y = anchor_y - box.height() - box.top()
+    elif look["anchor"] == "top":
+        y = anchor_y - box.top()
+    else:
+        y = anchor_y - box.height() / 2 - box.top()
+    item.setPos(x, y)
