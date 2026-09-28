@@ -35,7 +35,7 @@ TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
          "test_screentranslate.py",
          "test_screentranslate_gui.py", "test_v230.py", "test_v231.py",
          "test_v232.py", "test_v233.py", "test_v235.py", "test_v236.py",
-         "test_qt_skeleton.py", "test_qt_preview_pack.py", "test_qt_player.py", "test_waveform.py"]
+         "test_qt_skeleton.py", "test_qt_preview_pack.py", "test_qt_player.py", "test_waveform.py", "test_filmstrip.py"]
 
 
 def main() -> int:
