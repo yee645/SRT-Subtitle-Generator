@@ -116,12 +116,14 @@ else:
     check("整支：片長剛好塞滿視窗寬度",
           abs(view.scene_width() - (view.viewport().width() - 2)) < 1.5,
           f"{view.scene_width()} vs {view.viewport().width()}")
-    view.set_zoom(40, 0, 0)
-    check("縮放後字幕塊跟著重算（每秒 40px → 1 秒在 x=40）",
-          abs(view.cue_rects()[0].left() - 40) < 0.5)
+    view.set_zoom(100, 0, 0)
+    check("縮放後字幕塊跟著重算（每秒 100px → 1～4 秒在 x=100、寬 300）",
+          abs(view.cue_rects()[0].left() - 100) < 0.5 and abs(view.cue_rects()[0].width() - 300) < 0.5,
+          str(view.cue_rects()[0]))
 
-    # Ctrl＋滾輪：滑鼠底下那一秒不動
-    view.set_zoom(40, 0, 0)
+    # Ctrl＋滾輪：滑鼠底下那一秒不動（場景要比視窗寬才有得捲：拉到每秒 200px，
+    # 20 秒 = 4000px；從 5 秒附近開始看）
+    view.set_zoom(200, 5, 0)
     x = 300
     before = view.seconds_at(x)
     wheel = QWheelEvent(QPointF(x, 50), QPointF(view.mapToGlobal(QPoint(x, 50))), QPoint(0, 0),
@@ -129,7 +131,7 @@ else:
                         Qt.ScrollPhase.NoScrollPhase, False)
     app.sendEvent(view.viewport(), wheel)
     after = view.seconds_at(x)
-    check("Ctrl＋滾輪往上 → 拉近一級", abs(view.px_per_sec - 40 * tl.ZOOM_STEP) < 1e-6,
+    check("Ctrl＋滾輪往上 → 拉近一級", abs(view.px_per_sec - 200 * tl.ZOOM_STEP) < 1e-6,
           str(view.px_per_sec))
     check("Ctrl＋滾輪縮放時滑鼠底下那一秒不動（差 1 像素內）",
           abs(after - before) * view.px_per_sec <= 1.0, f"{before} → {after}")
@@ -184,8 +186,28 @@ else:
           lumas == sorted(lumas) and lumas[-1] - lumas[0] > 100, str(lumas))
     img.save(os.path.join(tmp, "timeline_view.png"))
 
+    # 拉近並捲到 6～16 秒：波形要照捲動位置畫（7 秒安靜、11 秒大聲）
+    view.set_zoom(100, 6, 0)
+    wait(50)
+    img2 = view.viewport().grab().toImage()
+
+    def wave_column(img_, view_x):
+        n = 0
+        for yy in range(tl.ROW_Y["wave"], tl.ROW_Y["wave"] + tl.WAVE_H):
+            c = QColor(img_.pixel(view_x, yy))
+            if abs(c.red() - wave_color.red()) + abs(c.green() - wave_color.green()) \
+                    + abs(c.blue() - wave_color.blue()) < 60:
+                n += 1
+        return n
+
+    quiet_col = sum(wave_column(img2, int((t - 6) * 100)) for t in (6.8, 7.0, 7.2, 7.5)) / 4
+    loud_col = sum(wave_column(img2, int((t - 6) * 100)) for t in (10.5, 11.0, 11.5, 12.0)) / 4
+    check("捲動後：7 秒一帶安靜、11 秒一帶大聲（波形照捲動位置畫）",
+          loud_col > 30 and quiet_col < 5, f"大聲 {loud_col}、安靜 {quiet_col}")
+
     # ----- 接進播放器 -----
     win = qt_app.MainWindow({"subtitle_style": {}})
+    win.tabs.setCurrentIndex(1)  # 使用者要在②頁才開得了片子
     win.resize(1280, 800)
     win.show()
     panel = win.player_panel
@@ -202,6 +224,19 @@ else:
           os.path.isdir(os.path.join(tmp, waveform.CACHE_DIR))
           and os.path.isdir(os.path.join(tmp, filmstrip.CACHE_DIR)))
 
+    win.resize(1000, 800)
+    wait(200)
+    check("「整支」模式下視窗變窄 → 重新塞滿",
+          abs(panel.timeline.scene_width() - (panel.timeline.viewport().width() - 2)) < 2,
+          f"{panel.timeline.scene_width()} vs {panel.timeline.viewport().width()}")
+    panel.zoom_in_btn.click()
+    zoomed = panel.timeline.px_per_sec
+    win.resize(1280, 800)
+    wait(200)
+    check("自己拉近過 → 視窗變寬也不再自動塞滿", abs(panel.timeline.px_per_sec - zoomed) < 1e-6,
+          f"{panel.timeline.px_per_sec} vs {zoomed}")
+    panel.fit_btn.click()
+
     panel.set_cues([{"start": 2, "end": 5, "text": "大聲那段"}])
     check("載字幕 → 時間軸上出現字幕塊", len(panel.timeline.cue_rects()) == 1)
 
@@ -215,6 +250,29 @@ else:
     check("播放器位置 → 播放頭跟著到 3 秒",
           wait_until(lambda: abs(panel.timeline.playhead.line().x1() - 3 * panel.timeline.px_per_sec) < 3, 5000),
           f"{panel.timeline.playhead.line().x1()} vs {3 * panel.timeline.px_per_sec}")
+
+    # 晚到的結果（編號不是最新的）一律丟掉
+    current = panel.timeline.peaks
+    fake = waveform.Peaks(100)
+    panel.loader.peaksReady.emit(panel.loader.generation - 1, fake)
+    panel.loader.filmstripReady.emit(panel.loader.generation - 1, None)
+    wait(100)
+    check("舊編號的結果晚到 → 丟掉，不蓋掉目前的波形與縮圖",
+          panel.timeline.peaks is current and panel.timeline.filmstrip is not None)
+
+    # 沒有 ffmpeg：兩列都寫清楚缺什麼、怎麼裝
+    real_which = tl.shutil.which
+    tl.shutil.which = lambda name: None
+    try:
+        panel.open_video(video)
+        ok = wait_until(lambda: "ffmpeg" in panel.timeline.wave_note
+                        and "ffmpeg" in panel.timeline.thumb_note, 5000)
+    finally:
+        tl.shutil.which = real_which
+    check("沒有 ffmpeg → 波形列與縮圖列都寫「需要 ffmpeg」與自動安裝的位置",
+          ok and "自動安裝 ffmpeg" in panel.timeline.wave_note
+          and panel.timeline.peaks is None and panel.timeline.filmstrip is None,
+          f"{panel.timeline.wave_note} / {panel.timeline.thumb_note}")
 
     # 沒有音軌的片子
     silent = os.path.join(tmp, "noaudio.mp4")

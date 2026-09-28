@@ -216,6 +216,7 @@ class TimelineView(QGraphicsView):
         self.thumb_note = "開啟影片後會在這裡排出縮圖。"
         self.cues = []
         self.position_ms = 0
+        self._fit_mode = False
         self._pixmaps = {}
         self._dragging = False
 
@@ -291,7 +292,7 @@ class TimelineView(QGraphicsView):
                 width = self.viewport().width()
                 self.horizontalScrollBar().setValue(int(x - width * 0.1))
 
-    def set_zoom(self, px_per_sec, anchor_sec=None, anchor_x=None):
+    def set_zoom(self, px_per_sec, anchor_sec=None, anchor_x=None, keep_fit=False):
         """
         換縮放倍率。anchor_sec／anchor_x：縮放後讓這一秒仍落在視窗的 anchor_x
         像素處（Ctrl＋滾輪用滑鼠位置）；省略時保持畫面中央那一秒不動。
@@ -302,6 +303,7 @@ class TimelineView(QGraphicsView):
             anchor_sec = (left + right) / 2
             anchor_x = self.viewport().width() / 2
         self.px_per_sec = new
+        self._fit_mode = keep_fit  # 使用者自己縮放過就不再自動塞滿
         self._relayout()
         self.horizontalScrollBar().setValue(int(round(anchor_sec * new - anchor_x)))
 
@@ -314,7 +316,8 @@ class TimelineView(QGraphicsView):
     def zoom_to_fit(self):
         """整支片子剛好塞滿視窗寬度。"""
         if self.duration > 0:
-            self.set_zoom(max(self.viewport().width() - 2, 1) / self.duration, 0, 0)
+            self.set_zoom(max(self.viewport().width() - 2, 1) / self.duration, 0, 0,
+                          keep_fit=True)
 
     def visible_range(self):
         """目前看得到的時間範圍（秒）。"""
@@ -357,6 +360,13 @@ class TimelineView(QGraphicsView):
         return [item.rect() for item, _label in self.cue_items]
 
     # ---- 事件 ----------------------------------------------------------
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        # 「整支」模式下視窗變寬變窄都重新塞滿（一開片子時視窗常常還沒排好版，
+        # 那時量到的寬度不是最後的寬度）。
+        if self._fit_mode:
+            self.zoom_to_fit()
 
     def changeEvent(self, event):  # noqa: N802 —— 深淺主題切換時換色
         super().changeEvent(event)
@@ -416,10 +426,8 @@ class TimelineView(QGraphicsView):
         self.set_position(self.position_ms, follow=False)
 
     def _build_cues(self):
-        for item, label in self.cue_items:
-            self.scene_.removeItem(item)
-            if label is not None:
-                self.scene_.removeItem(label)
+        for item, _label in self.cue_items:
+            self.scene_.removeItem(item)  # 文字是它的子項目，會一起拿掉
         self.cue_items = []
         pps = self.px_per_sec
         font = QFont(self.font())
