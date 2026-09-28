@@ -15,8 +15,11 @@ Tk 版的「預覽」是 Canvas 畫的假畫面（`gui/preview_panel.py`），�
 大小由 `subtitle/exporter.py` 的 `burn_layout` 算——與燒錄用同一套規則，預
 覽長得跟燒出來的一樣（水平一律置中，因為燒錄就是這樣）。
 
+畫面下方是時間軸（`gui_qt/timeline.py`，第 4 項）：縮圖、波形、字幕塊、播
+放頭，跟播放器雙向同步——播放時播放頭跟著走，點時間軸就跳過去。
+
 還沒做：逐字動態字幕的預覽、與字幕清單雙向同步、鍵盤快捷鍵。見
-`docs/ROADMAP_3.0.md` 第 2 項。
+`docs/ROADMAP_3.0.md` 第 2、4 項。
 """
 import os
 
@@ -32,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
 from subtitle.cuetime import CueIndex
 from subtitle.exporter import burn_layout, split_emphasis_segments
 from subtitle.importer import load_subtitle_file
@@ -182,17 +186,32 @@ class PlayerPanel(QWidget):
         self.time_label = QLabel(format_clock(0) + " / " + format_clock(0))
         self.info_label = QLabel("還沒開啟影片。")
 
+        self.timeline = TimelineView()
+        self.loader = TimelineLoader(self)
+        self._fitted = False
+        self.zoom_out_btn = QPushButton("拉遠")
+        self.zoom_in_btn = QPushButton("拉近")
+        self.fit_btn = QPushButton("整支")
+        for w in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn):
+            w.setToolTip("時間軸縮放（也可以按住 Ctrl 轉滾輪）")
+
         controls = QHBoxLayout()
         for w in (self.open_btn, self.subs_btn, self.play_btn):
             controls.addWidget(w)
         controls.addWidget(self.slider, 1)
         controls.addWidget(self.time_label)
 
+        footer = QHBoxLayout()
+        footer.addWidget(self.info_label, 1)
+        for w in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn):
+            footer.addWidget(w)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.addWidget(self.view, 1)
         layout.addLayout(controls)
-        layout.addWidget(self.info_label)
+        layout.addWidget(self.timeline)
+        layout.addLayout(footer)
 
         self.open_btn.clicked.connect(self._choose_video)
         self.subs_btn.clicked.connect(self._choose_subtitles)
@@ -205,6 +224,13 @@ class PlayerPanel(QWidget):
         self.player.mediaStatusChanged.connect(self._on_media_status)
         self.video_item.nativeSizeChanged.connect(lambda _size: self._layout())
         self.view.resized.connect(self._layout)
+        self.timeline.seekRequested.connect(self.player.setPosition)
+        self.zoom_out_btn.clicked.connect(self.timeline.zoom_out)
+        self.zoom_in_btn.clicked.connect(self.timeline.zoom_in)
+        self.fit_btn.clicked.connect(self.timeline.zoom_to_fit)
+        self.loader.peaksReady.connect(self._on_peaks)
+        self.loader.filmstripReady.connect(self._on_filmstrip)
+        self.loader.failed.connect(self._on_timeline_failed)
 
     # ---- 對外 ----------------------------------------------------------
 
@@ -213,11 +239,16 @@ class PlayerPanel(QWidget):
         self.play_btn.setEnabled(True)
         self.slider.setEnabled(True)
         self.info_label.setText(f"影片：{os.path.basename(path)}" + self._subs_note())
+        # 時間軸：清掉上一支的資料，背景重新抽（舊的工作取消、晚到的結果丟掉）
+        self._fitted = False
+        self.timeline.reset("正在分析波形…", "正在抽縮圖…")
+        self.loader.load(os.path.abspath(path))
 
     def set_cues(self, cues, source=""):
-        """換一份字幕；畫面上的那句立刻跟著更新（不必等下一格）。"""
+        """換一份字幕；畫面上的那句與時間軸上的字幕塊立刻跟著更新。"""
         self._index = CueIndex(cues)
         self._subtitle_path = source
+        self.timeline.set_cues(cues)
         self._show_at(self.player.position())
         name = os.path.basename(self.player.source().toLocalFile())
         self.info_label.setText((f"影片：{name}" if name else "還沒開啟影片。")
@@ -273,10 +304,40 @@ class PlayerPanel(QWidget):
         self.time_label.setText(
             f"{format_clock(ms)} / {format_clock(self.player.duration())}")
         self._show_at(ms)
+        self.timeline.set_position(ms)
 
     def _on_duration(self, ms):
         self.slider.setRange(0, ms)
+        self.timeline.set_duration(ms / 1000.0)
+        if ms > 0 and not self._fitted:
+            # 一開片子先讓整支塞滿時間軸，要細看再拉近
+            self._fitted = True
+            self.timeline.zoom_to_fit()
         self._on_position(self.player.position())
+
+    def _on_peaks(self, gen, peaks):
+        if gen == self.loader.generation:
+            self.timeline.set_peaks(peaks)
+
+    def _on_filmstrip(self, gen, strip):
+        if gen == self.loader.generation:
+            self.timeline.set_filmstrip(strip)
+
+    def _on_timeline_failed(self, gen, kind, reason):
+        if gen != self.loader.generation:
+            return
+        if reason == FFMPEG_MISSING:  # 不是片子的問題，講清楚缺什麼
+            what = "波形" if kind == "wave" else "縮圖"
+            note = f"時間軸的{what}{reason}"
+            if kind == "wave":
+                self.timeline.set_peaks(None, note)
+            else:
+                self.timeline.set_filmstrip(None, note)
+            return
+        if kind == "wave":
+            self.timeline.set_peaks(None, f"這支影片沒有可畫的波形（{reason}）")
+        else:
+            self.timeline.set_filmstrip(None, f"這支影片抽不出縮圖（{reason}）")
 
     def _on_state(self, state):
         playing = state == QMediaPlayer.PlaybackState.PlayingState

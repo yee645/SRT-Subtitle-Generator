@@ -155,6 +155,10 @@ def main(argv=None):
     `--selftest <結果.json> <影片>`：打包後的自檢模式（見 gui_qt/selftest.py）。
     """
     argv = list(sys.argv if argv is None else argv)
+    # 一般版「自動安裝 ffmpeg」裝好的執行檔兩版共用：加進本行程的 PATH
+    # （時間軸的波形與縮圖要用；不改系統設定）。
+    from subtitle.ffmpeg_setup import ensure_ffmpeg_on_path
+    ensure_ffmpeg_on_path()
     app = QApplication.instance() or QApplication(argv[:1])
     data = config.load_config()
     apply_theme(app, data.get("theme", "light"))
