@@ -499,7 +499,7 @@ class TimelineView(QGraphicsView):
             self._drag_times = cueedit.drag_edge(
                 self._source, index, edge, t, duration=self.duration or None,
                 snap_to=[self.position_ms / 1000.0], snap_tolerance=SNAP_PX / pps)
-            self._build_cues()
+            self._refresh_cue(index)
             event.accept()
             return
         if self._dragging:
@@ -564,34 +564,43 @@ class TimelineView(QGraphicsView):
     def _build_cues(self):
         for item, _label in self.cue_items:
             self.scene_.removeItem(item)  # 文字是它的子項目，會一起拿掉
-        self.cue_items = []
+        self.cue_items = [self._make_cue_item(index, cue) for index, cue in self.cues]
+
+    def _refresh_cue(self, index):
+        """只重畫一句（拖曳中每次滑鼠移動都會呼叫；上千句時不能每次全部重建）。"""
+        for k, (i, cue) in enumerate(self.cues):
+            if i == index:
+                self.scene_.removeItem(self.cue_items[k][0])
+                self.cue_items[k] = self._make_cue_item(index, cue)
+                return
+
+    def _make_cue_item(self, index, cue):
         pps = self.px_per_sec
         font = QFont(self.font())
         font.setPixelSize(12)
-        for index, cue in self.cues:
-            start, end = self.cue_times(index)
-            rect = QRectF(start * pps, ROW_Y["cues"] + 3, max((end - start) * pps, 1.0), CUE_H - 6)
-            item = QGraphicsRectItem(rect)
-            if index == self.selected:
-                item.setBrush(QBrush(self.colors["cue_sel"]))
-                item.setPen(QPen(self.colors["cue_sel_pen"], 2))
-                item.setZValue(2)  # 選取的那句疊在鄰句上面，邊框看得全
-            else:
-                item.setBrush(QBrush(self.colors["cue"]))
-                item.setPen(QPen(self.colors["cue"].darker(140), 1))
-                item.setZValue(1)
-            item.setToolTip(str(cue.get("text", "")))
-            self.scene_.addItem(item)
-            label = None
-            text = " ".join(str(cue.get("text", "")).split())
-            if rect.width() > 24 and text:
-                label = QGraphicsSimpleTextItem(text, item)
-                label.setFont(font)
-                label.setBrush(QBrush(self.colors["cue_text"]))
-                label.setPos(rect.left() + 4, rect.top() + (rect.height() - 14) / 2)
-                # 字比方塊長就截掉：子項目裁到父項目的外框
-                item.setFlag(QGraphicsItem.ItemClipsChildrenToShape, True)
-            self.cue_items.append((item, label))
+        start, end = self.cue_times(index)
+        rect = QRectF(start * pps, ROW_Y["cues"] + 3, max((end - start) * pps, 1.0), CUE_H - 6)
+        item = QGraphicsRectItem(rect)
+        if index == self.selected:
+            item.setBrush(QBrush(self.colors["cue_sel"]))
+            item.setPen(QPen(self.colors["cue_sel_pen"], 2))
+            item.setZValue(2)  # 選取的那句疊在鄰句上面，邊框看得全
+        else:
+            item.setBrush(QBrush(self.colors["cue"]))
+            item.setPen(QPen(self.colors["cue"].darker(140), 1))
+            item.setZValue(1)
+        item.setToolTip(str(cue.get("text", "")))
+        self.scene_.addItem(item)
+        label = None
+        text = " ".join(str(cue.get("text", "")).split())
+        if rect.width() > 24 and text:
+            label = QGraphicsSimpleTextItem(text, item)
+            label.setFont(font)
+            label.setBrush(QBrush(self.colors["cue_text"]))
+            label.setPos(rect.left() + 4, rect.top() + (rect.height() - 14) / 2)
+            # 字比方塊長就截掉：子項目裁到父項目的外框
+            item.setFlag(QGraphicsItem.ItemClipsChildrenToShape, True)
+        return item, label
 
 
 class TimelineLoader(QObject):

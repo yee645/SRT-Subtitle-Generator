@@ -184,6 +184,33 @@ else:
     check("抓在邊旁邊 3px 往右移 20px → 邊移動 0.5 秒（不會一按就跳到滑鼠上）",
           changes == [(1, 5.0, 8.5)], str(changes))
 
+    # ----- 拖曳中只重畫被拖的那一句（上千句時不能每動一下就全部重建） -----
+    view.set_cues(source)
+    view.set_position(0, follow=False)
+    QTest.mousePress(vp, Qt.LeftButton, Qt.NoModifier, QPoint(x_of(8) - 1, CUE_Y))
+    others = [view.cue_items[0][0], view.cue_items[2][0]]  # 按下時會選取、重畫一次，之後才算
+    for k in range(1, 6):
+        QTest.mouseMove(vp, QPoint(x_of(8) - 1 + 4 * k, CUE_Y))
+    same = [view.cue_items[0][0], view.cue_items[2][0]]
+    QTest.mouseRelease(vp, Qt.LeftButton, Qt.NoModifier, QPoint(x_of(8) + 19, CUE_Y))
+    check("拖曳中其他句的方塊沒被重建（同一個項目）", all(a is b for a, b in zip(others, same)))
+    t0 = __import__("time").perf_counter()
+    big = [{"start": i * 0.5, "end": i * 0.5 + 0.4, "text": f"第 {i} 句"} for i in range(2000)]
+    view.set_duration(1000)
+    view.set_cues(big)
+    view.set_zoom(200, 10, 0)
+    QTest.mousePress(vp, Qt.LeftButton, Qt.NoModifier, QPoint(x_of(10.4) - 1, CUE_Y))
+    t1 = __import__("time").perf_counter()
+    for k in range(1, 31):
+        QTest.mouseMove(vp, QPoint(x_of(10.4) - 1 - k, CUE_Y))
+    per_move = (__import__("time").perf_counter() - t1) / 30 * 1000
+    QTest.mouseRelease(vp, Qt.LeftButton, Qt.NoModifier, QPoint(x_of(10.4) - 31, CUE_Y))
+    print(f"INFO 2000 句：建立 {(t1 - t0) * 1000:.0f} ms、拖曳每次移動 {per_move:.2f} ms")
+    check("2000 句時拖曳每次移動 < 30 ms", per_move < 30, f"{per_move:.1f} ms")
+    view.set_duration(20)
+    view.set_zoom(40, 0, 0)
+    view.set_cues(source)
+
     # ----- 放棄與沒動 -----
     view.set_cues(source)
     view.set_position(0, follow=False)
