@@ -332,7 +332,7 @@ class PlayerPanel(QWidget):
         self._saved_cues = [dict(c) for c in self.cues]
         note = f"已存到 {os.path.basename(path)}"
         if result["backup"]:
-            note += f"（原檔留在 {os.path.basename(result['backup'])}）"
+            note += f"；原檔留在 {os.path.basename(result['backup'])}"
         self._save_note = note
         self._refresh_info()
         return True
