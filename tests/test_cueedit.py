@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-3.0 第 4 項第二階段：`subtitle/cueedit.py`——拖曳字幕塊的邊改時間的規則。
+3.0 第 4 項第二、三階段：`subtitle/cueedit.py`——拖曳字幕塊的邊改時間的規則、
+復原／重做、存回字幕檔。
 
 零 GUI 依賴，任何環境都跑。時間軸（Qt）的拖曳測試在 test_qt_timeline.py。
 """
@@ -115,8 +116,116 @@ check("with_times：只改那一句的時間，其餘欄位保留",
       str(new))
 check("with_times：不改到傳進來的清單", CUES[1]["start"] == 4.0 and new[1] is not CUES[1])
 
+# ===== 第三階段：復原／重做、改過幾處、存檔 =====
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
+
+from subtitle.importer import load_subtitle_file  # noqa: E402
+
+h = cueedit.EditHistory()
+check("新的紀錄：不能復原也不能重做", not h.can_undo() and not h.can_redo() and h.undo(CUES) is None
+      and h.redo(CUES) is None)
+cur = cueedit.with_times(CUES, 1, 4.0, 6.8)
+h.record(1, (4.0, 6.0), (4.0, 6.8))
+cur2 = cueedit.with_times(cur, 0, 0.5, 3.0)
+h.record(0, (1.0, 3.0), (0.5, 3.0))
+back, idx = h.undo(cur2)
+check("復原：最後一筆先退（第 0 句回到 1～3）", idx == 0 and back[0]["start"] == 1.0 and back[1]["end"] == 6.8,
+      f"{idx} {back[:2]}")
+back2, idx2 = h.undo(back)
+check("再復原：第 1 句回到 4～6，整份回到原樣", idx2 == 1 and cueedit.changed_count(back2, CUES) == 0,
+      str(back2))
+check("復原到底：不能再復原、可以重做", not h.can_undo() and h.can_redo())
+fwd, idx3 = h.redo(back2)
+check("重做：照原順序重來（先第 1 句）", idx3 == 1 and fwd[1]["end"] == 6.8 and fwd[0]["start"] == 1.0, str(fwd[:2]))
+check("復原／重做不改到傳進去的清單", back2[1]["end"] == 6.0 and CUES[1]["end"] == 6.0)
+h.record(2, (7.5, 9.0), (7.5, 8.0))
+check("做了新的修改 → 重做那一疊清掉", not h.can_redo() and h.redo(fwd) is None)
+h.record(2, (7.5, 8.0), (7.5, 8.0))
+before_len = len(h._done)
+check("沒變的修改不記（按住邊沒動）", len(h._done) == before_len)
+small = cueedit.EditHistory(limit=3)
+for k in range(5):
+    small.record(0, (k, 10), (k + 1, 10))
+steps = 0
+while small.undo(CUES) is not None:
+    steps += 1
+check("紀錄有上限（limit=3 → 最多復原 3 步）", steps == 3, str(steps))
+
+check("changed_count：一樣 → 0", cueedit.changed_count(CUES, [dict(c) for c in CUES]) == 0)
+check("changed_count：改了兩句 → 2", cueedit.changed_count(cur2, CUES) == 2)
+check("changed_count：浮點誤差不算改過（0.1+0.2 vs 0.3）",
+      cueedit.changed_count([{"start": 0.1 + 0.2, "end": 1}], [{"start": 0.3, "end": 1}]) == 0)
+check("changed_count：句數不同，多出來的算改過", cueedit.changed_count(CUES[:2], CUES) == 1)
+
+tmp = tempfile.mkdtemp()
+try:
+    # 真的會遇到的原檔：Big5（cp950）編碼、帶斜體標記——載入時標記被拿掉、存回
+    # 時改成 UTF-8，所以第一次覆蓋前一定要留原檔。
+    original = ("1\r\n00:00:01,000 --> 00:00:03,000\r\n<i>第一句</i>\r\n\r\n"
+                "2\r\n00:00:04,000 --> 00:00:06,000\r\n第二句\r\n").encode("cp950")
+    srt = os.path.join(tmp, "片子.srt")
+    with open(srt, "wb") as fp:
+        fp.write(original)
+    loaded = load_subtitle_file(srt)
+    check("測資：原檔是 cp950、載入時拿掉斜體", loaded["encoding"] == "cp950"
+          and loaded["cues"][0]["text"] == "第一句", str(loaded))
+    edited = cueedit.with_times(loaded["cues"], 1, 4.25, 6.5)
+    result = cueedit.save_cues(edited, srt)
+    check("存檔：回傳存到哪、這次做了備份", result == {"path": srt, "backup": srt + ".bak"}, str(result))
+    with open(srt + ".bak", "rb") as fp:
+        check("備份檔跟原檔一個位元組都不差（cp950、斜體都在）", fp.read() == original)
+    again = load_subtitle_file(srt)
+    check("存完再讀回來：時間是改過的、文字一樣、句數一樣",
+          [(c["start"], c["end"], c["text"]) for c in again["cues"]]
+          == [(1.0, 3.0, "第一句"), (4.25, 6.5, "第二句")], str(again["cues"]))
+    check("存成 UTF-8", again["encoding"] in ("utf-8", "utf-8-sig"), again["encoding"])
+    result2 = cueedit.save_cues(cueedit.with_times(edited, 0, 1.5, 3.0), srt)
+    with open(srt + ".bak", "rb") as fp:
+        kept = fp.read()
+    check("第二次存：不再做備份，.bak 保住的還是最早的原檔", result2["backup"] is None and kept == original)
+    check("資料夾裡沒有留下暫存檔", sorted(os.listdir(tmp)) == ["片子.srt", "片子.srt.bak"], str(os.listdir(tmp)))
+
+    vtt = os.path.join(tmp, "b.vtt")
+    cueedit.save_cues(CUES, vtt)
+    check("存成 .vtt：照副檔名、讀得回來、新檔不做備份",
+          [(c["start"], c["end"]) for c in load_subtitle_file(vtt)["cues"]] == [(1.0, 3.0), (4.0, 6.0), (7.5, 9.0)]
+          and not os.path.exists(vtt + ".bak"))
+    for bad, why in ((os.path.join(tmp, "c.ass"), "副檔名不是 .srt／.vtt"), (os.path.join(tmp, "d"), "沒有副檔名")):
+        try:
+            cueedit.save_cues(CUES, bad)
+            check(f"存檔：{why} → 報錯", False)
+        except ValueError:
+            check(f"存檔：{why} → 報錯、沒寫出檔案", not os.path.exists(bad))
+    try:
+        cueedit.save_cues([], os.path.join(tmp, "e.srt"))
+        check("存檔：沒有字幕 → 報錯", False)
+    except ValueError:
+        check("存檔：沒有字幕 → 報錯", not os.path.exists(os.path.join(tmp, "e.srt")))
+
+    # 寫到一半失敗（換名那一步出錯）：原檔原封不動、暫存檔清掉
+    with open(srt, "rb") as fp:
+        before_fail = fp.read()
+    real_replace = cueedit.os.replace
+
+    def broken_replace(_src, _dst):
+        raise OSError("磁碟滿了（測試）")
+    cueedit.os.replace = broken_replace
+    try:
+        cueedit.save_cues(CUES, srt)
+        check("換名失敗 → 報錯", False)
+    except OSError:
+        with open(srt, "rb") as fp:
+            check("換名失敗 → 原檔原封不動、暫存檔清掉",
+                  fp.read() == before_fail and sorted(os.listdir(tmp)) == ["b.vtt", "片子.srt", "片子.srt.bak"],
+                  str(os.listdir(tmp)))
+    finally:
+        cueedit.os.replace = real_replace
+finally:
+    shutil.rmtree(tmp, ignore_errors=True)
+
 print()
 if failures:
     print(f"{len(failures)} 項失敗")
     sys.exit(1)
-print("cueedit（拖曳改時間的規則）測試全數通過。")
+print("cueedit（拖曳改時間的規則、復原重做、存檔）測試全數通過。")

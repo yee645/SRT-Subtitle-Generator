@@ -247,12 +247,9 @@ class PlayerPanel(QWidget):
         self.undo_btn.clicked.connect(self.undo)
         self.redo_btn.clicked.connect(self.redo)
         self.save_btn.clicked.connect(self.save)
-        # 快捷鍵只在這一頁（焦點在播放器面板裡）有效，其他頁以後有自己的復原
-        for keys, slot in ((QKeySequence.StandardKey.Undo, self.undo),
-                           (QKeySequence.StandardKey.Redo, self.redo),
-                           (QKeySequence("Ctrl+Y"), self.redo),
-                           (QKeySequence.StandardKey.Save, self.save)):
-            shortcut = QShortcut(keys, self)
+        # 快捷鍵只在這一頁（焦點在播放器面板裡）有效，其他頁以後有自己的復原。
+        for seq, slot in edit_shortcuts(self.undo, self.redo, self.save):
+            shortcut = QShortcut(seq, self)
             shortcut.setContext(Qt.WidgetWithChildrenShortcut)
             shortcut.activated.connect(slot)
         self._update_edit_buttons()
@@ -515,6 +512,28 @@ class PlayerPanel(QWidget):
 
     def _place_subtitle(self):
         place_subtitle(self.subtitle_item, self._video_rect(), self._style)
+
+
+def edit_shortcuts(undo, redo, save):
+    """
+    [(按鍵, 動作)]：各平台的標準按鍵，重做再補上 Ctrl+Y 與 Ctrl+Shift+Z（兩種習慣都
+    有人用）。**同一組按鍵只註冊一次**——Windows 與部分 Linux 的標準「重做」本來就
+    含 Ctrl+Y，重複註冊時 Qt 判定為衝突，兩個都不觸發。
+    """
+    wanted = (
+        (QKeySequence.keyBindings(QKeySequence.StandardKey.Undo), undo),
+        (QKeySequence.keyBindings(QKeySequence.StandardKey.Redo)
+         + [QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")], redo),
+        (QKeySequence.keyBindings(QKeySequence.StandardKey.Save), save),
+    )
+    out, seen = [], set()
+    for sequences, slot in wanted:
+        for seq in sequences:
+            text = seq.toString(QKeySequence.PortableText)
+            if text and text not in seen:
+                seen.add(text)
+                out.append((seq, slot))
+    return out
 
 
 def ass_font(family, size_px):
