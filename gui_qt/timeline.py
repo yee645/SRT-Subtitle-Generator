@@ -12,6 +12,14 @@
 - 點一下或按住拖曳 → `seekRequested(毫秒)`；播放頭跑出畫面時自動捲過去。
 - 背景抽波形與縮圖（Python 執行緒＋Qt 訊號跨執行緒排隊回主執行緒）；換片子
   時舊的工作被取消，晚到的結果用「第幾次載入」的編號丟掉，不會畫錯片子。
+
+第二階段（選取與拖曳改時間）：
+
+- 點字幕塊 → 選取（高亮）並跳到那句開頭；點字幕列的空白處 → 取消選取、照常跳轉。
+- 滑鼠移到字幕塊左右邊 `EDGE_PX` 像素內，游標變成左右箭頭；按住拖曳改那一邊
+  的時間，放開才送出 `cueTimesChanged(第幾句, 開始, 結束)`；拖曳中按 Esc 放棄。
+- 能拖到哪裡由 `subtitle/cueedit.py` 決定（不重疊鄰句、至少 0.1 秒、不出片
+  頭片尾、靠近播放頭或鄰句的邊會吸附），這裡只換算像素與畫。
 """
 
 from __future__ import annotations
@@ -26,6 +34,7 @@ from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QGraphicsItem, QGraphicsLineItem, QGraphicsRectItem,
                                QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView)
 
+from subtitle import cueedit
 from subtitle import filmstrip as filmstrip_mod
 from subtitle import waveform as waveform_mod
 
@@ -51,6 +60,9 @@ MIN_PX_PER_SEC = 2.0
 MAX_PX_PER_SEC = 400.0
 DEFAULT_PX_PER_SEC = 40.0
 ZOOM_STEP = 1.25
+
+EDGE_PX = 6   # 字幕塊左右邊多少像素內算「抓到邊」
+SNAP_PX = 8   # 離吸附點（播放頭、鄰句的邊）多少像素內就貼上去
 
 # 刻度間距候選（秒）：挑讓兩個標籤之間至少 MIN_LABEL_PX 的最小那個。
 TICK_STEPS = (0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600)
@@ -97,6 +109,8 @@ def _palette_colors(view):
         "tick": QColor(text.red(), text.green(), text.blue(), 140),
         "wave": QColor("#3f9be0") if dark else QColor("#1f6fb2"),
         "cue": QColor("#c9892f") if dark else QColor("#e0a040"),
+        "cue_sel": QColor("#ffd27a") if dark else QColor("#ffc85a"),
+        "cue_sel_pen": QColor("#ffffff") if dark else QColor("#1a1a1a"),
         "cue_text": QColor("#101010"),
         "playhead": QColor("#e0403a"),
         "note": QColor(text.red(), text.green(), text.blue(), 170),
@@ -205,6 +219,8 @@ class TimelineView(QGraphicsView):
     """時間軸：縮圖、波形、字幕塊、播放頭；點一下跳轉，Ctrl＋滾輪縮放。"""
 
     seekRequested = Signal(int)
+    cueSelected = Signal(int)                    # 第幾句（set_cues 傳進來的清單位置）；-1＝取消選取
+    cueTimesChanged = Signal(int, float, float)  # 第幾句、新的開始、新的結束（秒）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -214,7 +230,11 @@ class TimelineView(QGraphicsView):
         self.filmstrip = None
         self.wave_note = "開啟影片後會在這裡畫出波形。"
         self.thumb_note = "開啟影片後會在這裡排出縮圖。"
-        self.cues = []
+        self.cues = []             # [(在 set_cues 清單裡的位置, cue)]，只放畫得出來的
+        self._source = []          # set_cues 傳進來的整份清單（複本），拖曳規則要看鄰句
+        self.selected = -1
+        self._edge_drag = None     # 拖曳中：(第幾句, "start"/"end", 原本的開始, 原本的結束, 按下的秒數)
+        self._drag_times = None    # 拖曳中目前的 (開始, 結束)
         self.position_ms = 0
         self._fit_mode = False
         self._pixmaps = {}
@@ -228,6 +248,8 @@ class TimelineView(QGraphicsView):
         self.setRenderHint(QPainter.Antialiasing, False)
         self.setViewportUpdateMode(QGraphicsView.MinimalViewportUpdate)
         self.setFrameShape(QGraphicsView.NoFrame)
+        # 沒按鍵時也要收到滑鼠移動，才能在碰到字幕塊的邊時換游標
+        self.viewport().setMouseTracking(True)
         self.setFixedHeight(TOTAL_H + self.horizontalScrollBar().sizeHint().height() + 2)
         self.colors = _palette_colors(self)
 
@@ -267,9 +289,53 @@ class TimelineView(QGraphicsView):
             self.thumb_note = note
         self.thumbs.update()
 
-    def set_cues(self, cues):
-        self.cues = [c for c in (cues or []) if float(c.get("end", 0)) > float(c.get("start", 0))]
+    def set_cues(self, cues, keep_selection=False):
+        """換一份字幕。keep_selection：同一份字幕改過時間後重畫，選取留著。"""
+        self._source = [dict(c) for c in (cues or [])]
+        self.cues = [(i, c) for i, c in enumerate(self._source)
+                     if float(c.get("end", 0)) > float(c.get("start", 0))]
+        if not keep_selection or not any(i == self.selected for i, _c in self.cues):
+            self.selected = -1
+        self._edge_drag = self._drag_times = None
         self._build_cues()
+
+    def select_cue(self, index, seek=True):
+        """選取第 index 句（-1＝取消）；seek 時跳到那句開頭。"""
+        if not any(i == index for i, _c in self.cues):
+            index = -1
+        changed = index != self.selected
+        self.selected = index
+        self._build_cues()
+        if changed:
+            self.cueSelected.emit(index)
+        if seek and index >= 0:
+            ms = int(round(float(self._source[index]["start"]) * 1000))
+            self.set_position(ms)
+            self.seekRequested.emit(ms)
+
+    def cue_hit(self, view_pos):
+        """
+        視窗座標落在哪一句的哪裡：(第幾句, "start"/"end"/"body")，不在字幕塊上是
+        None。只看字幕列；重疊時開始得晚的那句在上面（與畫面、CueIndex 一致）。
+        """
+        scene = self.mapToScene(int(view_pos.x()), int(view_pos.y()))
+        if not ROW_Y["cues"] <= scene.y() <= ROW_Y["cues"] + CUE_H:
+            return None
+        pps = self.px_per_sec
+        t = scene.x() / pps
+        hits = []
+        for index, cue in self.cues:
+            start, end = float(cue["start"]), float(cue["end"])
+            part = cueedit.edge_at(start, end, t, EDGE_PX / pps)
+            if part is not None:
+                hits.append((start, index, part))
+        if not hits:
+            return None
+        # 抓邊優先（兩句接在一起時，接縫上抓到的是邊不是另一句的身體），
+        # 其次開始得最晚的那句。
+        hits.sort(key=lambda h: (h[2] != cueedit.BODY, h[0], h[1]))
+        _start, index, part = hits[-1]
+        return index, part
 
     def reset(self, note_wave, note_thumbs):
         """換片子：清掉舊的資料，列上寫狀態。"""
@@ -356,8 +422,15 @@ class TimelineView(QGraphicsView):
         return pixmap
 
     def cue_rects(self):
-        """每一句字幕在場景裡的矩形（給測試與之後的拖曳編輯用）。"""
+        """每一句字幕在場景裡的矩形（給測試與拖曳編輯用；順序同 self.cues）。"""
         return [item.rect() for item, _label in self.cue_items]
+
+    def cue_times(self, index):
+        """第 index 句目前的 (開始, 結束)；拖曳中回傳拖到的位置。"""
+        if self._edge_drag and self._edge_drag[0] == index and self._drag_times:
+            return self._drag_times
+        cue = self._source[index]
+        return float(cue["start"]), float(cue["end"])
 
     # ---- 事件 ----------------------------------------------------------
 
@@ -390,24 +463,87 @@ class TimelineView(QGraphicsView):
 
     def mousePressEvent(self, event):  # noqa: N802
         if event.button() == Qt.LeftButton and self.duration > 0:
+            pos = event.position()
+            hit = self.cue_hit(pos)
+            if hit is not None and hit[1] != cueedit.BODY:
+                index, edge = hit
+                start, end = self.cue_times(index)
+                if index != self.selected:
+                    self.select_cue(index, seek=False)
+                pressed = self.mapToScene(int(pos.x()), 0).x() / self.px_per_sec
+                self._edge_drag = (index, edge, start, end, pressed)
+                self._drag_times = (start, end)
+                self.setFocus(Qt.MouseFocusReason)  # 讓 Esc 收得到
+                event.accept()
+                return
+            if hit is not None:
+                self.select_cue(hit[0])
+                event.accept()
+                return
+            if self._in_cue_row(pos):
+                self.select_cue(-1, seek=False)
             self._dragging = True
-            self._request_seek(event.position().x())
+            self._request_seek(pos.x())
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):  # noqa: N802
-        if self._dragging:
-            self._request_seek(event.position().x())
+        pos = event.position()
+        if self._edge_drag:
+            index, edge, start0, end0, pressed = self._edge_drag
+            pps = self.px_per_sec
+            # 邊移動的量＝滑鼠移動的量：抓在邊旁邊幾個像素也不會一按就跳到滑鼠上
+            t = (start0 if edge == cueedit.START else end0) \
+                + self.mapToScene(int(pos.x()), 0).x() / pps - pressed
+            self._drag_times = cueedit.drag_edge(
+                self._source, index, edge, t, duration=self.duration or None,
+                snap_to=[self.position_ms / 1000.0], snap_tolerance=SNAP_PX / pps)
+            self._refresh_cue(index)
             event.accept()
             return
+        if self._dragging:
+            self._request_seek(pos.x())
+            event.accept()
+            return
+        hit = self.cue_hit(pos)
+        if hit is not None and hit[1] != cueedit.BODY:
+            self.viewport().setCursor(Qt.SizeHorCursor)
+        else:
+            self.viewport().unsetCursor()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):  # noqa: N802
         self._dragging = False
+        if self._edge_drag:
+            index, _edge, start0, end0, _pressed = self._edge_drag
+            start, end = self._drag_times
+            self._edge_drag = self._drag_times = None
+            if (start, end) != (start0, end0):
+                self._source[index]["start"] = start
+                self._source[index]["end"] = end
+                self._build_cues()
+                self.cueTimesChanged.emit(index, start, end)
+            else:
+                self._build_cues()
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
+    def keyPressEvent(self, event):  # noqa: N802
+        if event.key() == Qt.Key_Escape and self._edge_drag:
+            # 拖到一半反悔：回到原本的時間，什麼都不送出
+            self._edge_drag = self._drag_times = None
+            self._build_cues()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     # ---- 內部 ----------------------------------------------------------
+
+    def _in_cue_row(self, view_pos):
+        y = self.mapToScene(int(view_pos.x()), int(view_pos.y())).y()
+        return ROW_Y["cues"] <= y <= ROW_Y["cues"] + CUE_H
 
     def _request_seek(self, view_x):
         ms = int(round(self.seconds_at(view_x) * 1000))
@@ -428,28 +564,43 @@ class TimelineView(QGraphicsView):
     def _build_cues(self):
         for item, _label in self.cue_items:
             self.scene_.removeItem(item)  # 文字是它的子項目，會一起拿掉
-        self.cue_items = []
+        self.cue_items = [self._make_cue_item(index, cue) for index, cue in self.cues]
+
+    def _refresh_cue(self, index):
+        """只重畫一句（拖曳中每次滑鼠移動都會呼叫；上千句時不能每次全部重建）。"""
+        for k, (i, cue) in enumerate(self.cues):
+            if i == index:
+                self.scene_.removeItem(self.cue_items[k][0])
+                self.cue_items[k] = self._make_cue_item(index, cue)
+                return
+
+    def _make_cue_item(self, index, cue):
         pps = self.px_per_sec
         font = QFont(self.font())
         font.setPixelSize(12)
-        for cue in self.cues:
-            start, end = float(cue["start"]), float(cue["end"])
-            rect = QRectF(start * pps, ROW_Y["cues"] + 3, max((end - start) * pps, 1.0), CUE_H - 6)
-            item = QGraphicsRectItem(rect)
+        start, end = self.cue_times(index)
+        rect = QRectF(start * pps, ROW_Y["cues"] + 3, max((end - start) * pps, 1.0), CUE_H - 6)
+        item = QGraphicsRectItem(rect)
+        if index == self.selected:
+            item.setBrush(QBrush(self.colors["cue_sel"]))
+            item.setPen(QPen(self.colors["cue_sel_pen"], 2))
+            item.setZValue(2)  # 選取的那句疊在鄰句上面，邊框看得全
+        else:
             item.setBrush(QBrush(self.colors["cue"]))
             item.setPen(QPen(self.colors["cue"].darker(140), 1))
-            item.setToolTip(str(cue.get("text", "")))
-            self.scene_.addItem(item)
-            label = None
-            text = " ".join(str(cue.get("text", "")).split())
-            if rect.width() > 24 and text:
-                label = QGraphicsSimpleTextItem(text, item)
-                label.setFont(font)
-                label.setBrush(QBrush(self.colors["cue_text"]))
-                label.setPos(rect.left() + 4, rect.top() + (rect.height() - 14) / 2)
-                # 字比方塊長就截掉：子項目裁到父項目的外框
-                item.setFlag(QGraphicsItem.ItemClipsChildrenToShape, True)
-            self.cue_items.append((item, label))
+            item.setZValue(1)
+        item.setToolTip(str(cue.get("text", "")))
+        self.scene_.addItem(item)
+        label = None
+        text = " ".join(str(cue.get("text", "")).split())
+        if rect.width() > 24 and text:
+            label = QGraphicsSimpleTextItem(text, item)
+            label.setFont(font)
+            label.setBrush(QBrush(self.colors["cue_text"]))
+            label.setPos(rect.left() + 4, rect.top() + (rect.height() - 14) / 2)
+            # 字比方塊長就截掉：子項目裁到父項目的外框
+            item.setFlag(QGraphicsItem.ItemClipsChildrenToShape, True)
+        return item, label
 
 
 class TimelineLoader(QObject):

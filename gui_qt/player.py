@@ -16,7 +16,9 @@ Tk 版的「預覽」是 Canvas 畫的假畫面（`gui/preview_panel.py`），�
 覽長得跟燒出來的一樣（水平一律置中，因為燒錄就是這樣）。
 
 畫面下方是時間軸（`gui_qt/timeline.py`，第 4 項）：縮圖、波形、字幕塊、播
-放頭，跟播放器雙向同步——播放時播放頭跟著走，點時間軸就跳過去。
+放頭，跟播放器雙向同步——播放時播放頭跟著走，點時間軸就跳過去。點字幕塊跳
+到那句開頭；拖字幕塊的左右邊改時間，放開後回寫到 `self.cues`，畫面上的字幕立
+刻照新時間顯示（還沒有存檔，資訊列標示「尚未存檔」）。
 
 還沒做：逐字動態字幕的預覽、與字幕清單雙向同步、鍵盤快捷鍵。見
 `docs/ROADMAP_3.0.md` 第 2、4 項。
@@ -36,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
+from subtitle import cueedit
 from subtitle.cuetime import CueIndex
 from subtitle.exporter import burn_layout, split_emphasis_segments
 from subtitle.importer import load_subtitle_file
@@ -156,6 +159,8 @@ class PlayerPanel(QWidget):
         self._style = dict(style or {})
         self._index = CueIndex([])
         self._subtitle_path = ""
+        self.cues = []          # 目前的字幕（複本）；時間軸上拖曳改的時間回寫到這裡
+        self.edits = 0          # 載入之後改過幾次時間（還沒有存檔功能，先標示出來）
 
         self.scene = QGraphicsScene(self)
         self.view = _VideoView(self.scene)
@@ -225,6 +230,7 @@ class PlayerPanel(QWidget):
         self.video_item.nativeSizeChanged.connect(lambda _size: self._layout())
         self.view.resized.connect(self._layout)
         self.timeline.seekRequested.connect(self.player.setPosition)
+        self.timeline.cueTimesChanged.connect(self._on_cue_times)
         self.zoom_out_btn.clicked.connect(self.timeline.zoom_out)
         self.zoom_in_btn.clicked.connect(self.timeline.zoom_in)
         self.fit_btn.clicked.connect(self.timeline.zoom_to_fit)
@@ -246,9 +252,11 @@ class PlayerPanel(QWidget):
 
     def set_cues(self, cues, source=""):
         """換一份字幕；畫面上的那句與時間軸上的字幕塊立刻跟著更新。"""
-        self._index = CueIndex(cues)
+        self.cues = [dict(c) for c in (cues or [])]
+        self.edits = 0
+        self._index = CueIndex(self.cues)
         self._subtitle_path = source
-        self.timeline.set_cues(cues)
+        self.timeline.set_cues(self.cues)
         self._show_at(self.player.position())
         name = os.path.basename(self.player.source().toLocalFile())
         self.info_label.setText((f"影片：{name}" if name else "還沒開啟影片。")
@@ -280,7 +288,22 @@ class PlayerPanel(QWidget):
         if not len(self._index):
             return "　字幕：尚未載入"
         name = os.path.basename(self._subtitle_path) if self._subtitle_path else "（目前的字幕）"
-        return f"　字幕：{name}，{len(self._index)} 句"
+        note = f"　字幕：{name}，{len(self._index)} 句"
+        if self.edits:
+            note += f"（時間改過 {self.edits} 處，尚未存檔）"
+        return note
+
+    def _on_cue_times(self, index, start, end):
+        """時間軸上拖了某句的邊：回寫字幕清單，畫面上的那句立刻照新時間顯示。"""
+        if not 0 <= index < len(self.cues):
+            return
+        self.cues = cueedit.with_times(self.cues, index, start, end)
+        self.edits += 1
+        self._index = CueIndex(self.cues)
+        self._show_at(self.player.position())
+        name = os.path.basename(self.player.source().toLocalFile())
+        self.info_label.setText((f"影片：{name}" if name else "還沒開啟影片。")
+                                + self._subs_note())
 
     def _choose_video(self):
         path, _ = QFileDialog.getOpenFileName(
