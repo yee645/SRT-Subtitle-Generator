@@ -135,6 +135,7 @@ else:
           f"{tv.cue_rects()[1]} {tv.selected}")
     key(Qt.Key_Z)
     check("再 Ctrl+Z → 整份回到載入時的樣子", times() == [(1.0, 3.0), (6.0, 8.0)], str(times()))
+    check("復原改到「甲」→ 選取換到「甲」（原本選的是乙）", tv.selected == 0, str(tv.selected))
     check("畫面上 4 秒處的「甲」消失（復原後字幕照舊時間顯示）", panel.current_subtitle_text() == "",
           repr(panel.current_subtitle_text()))
     check("回到載入時的樣子 → 不顯示改過、復原鍵不能按、重做可以",
@@ -170,6 +171,9 @@ else:
 
     # ----- 沒有檔名 → 問路徑 -----
     panel.set_cues([{"start": 1, "end": 2, "text": "新的"}])
+    key(Qt.Key_Z)
+    check("換一份字幕 → 復原紀錄清掉（Ctrl+Z 不會把上一份的修改套到這份）",
+          not panel.undo_btn.isEnabled() and times() == [(1.0, 2.0)], str(times()))
     asked = []
     panel._ask_save_path = lambda suggested: asked.append(suggested) or ""
     check("沒有檔名、問路徑時按取消 → 不存", panel.save() is False and asked == [""], str(asked))

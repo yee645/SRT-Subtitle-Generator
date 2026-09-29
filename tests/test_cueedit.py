@@ -141,9 +141,9 @@ check("重做：照原順序重來（先第 1 句）", idx3 == 1 and fwd[1]["end
 check("復原／重做不改到傳進去的清單", back2[1]["end"] == 6.0 and CUES[1]["end"] == 6.0)
 h.record(2, (7.5, 9.0), (7.5, 8.0))
 check("做了新的修改 → 重做那一疊清掉", not h.can_redo() and h.redo(fwd) is None)
-h.record(2, (7.5, 8.0), (7.5, 8.0))
 before_len = len(h._done)
-check("沒變的修改不記（按住邊沒動）", len(h._done) == before_len)
+h.record(2, (7.5, 8.0), (7.5, 8.0))
+check("沒變的修改不記（按住邊沒動）", len(h._done) == before_len, f"{before_len} → {len(h._done)}")
 small = cueedit.EditHistory(limit=3)
 for k in range(5):
     small.record(0, (k, 10), (k + 1, 10))
