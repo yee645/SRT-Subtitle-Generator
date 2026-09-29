@@ -161,8 +161,9 @@ else:
           changes[-1] == (1, 7.0, 10.0) and changes.count((1, 7.0, 10.0)) == 1, str(changes))
     check("微調不跳轉播放器", seeks == [], str(seeks))
     n = len(changes)
-    QTest.keyClick(view, Qt.Key_Right, Qt.ControlModifier)
-    check("Ctrl+→ 不算微調", len(changes) == n, str(changes[n:]))
+    QTest.keyClick(view, Qt.Key_Left, Qt.ControlModifier)  # 往左還有空間：真的微調的話會送出
+    QTest.keyClick(view, Qt.Key_Left, Qt.AltModifier)
+    check("Ctrl+← 與 Alt+← 不算微調（留給之後的快捷鍵）", len(changes) == n, str(changes[n:]))
     view.select_cue(-1, seek=False)
     before_scroll = view.horizontalScrollBar().value()
     QTest.keyClick(view, Qt.Key_Right)

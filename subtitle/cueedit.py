@@ -152,7 +152,7 @@ def move_cue(cues, index, seconds, duration=None, snap_to=(), snap_tolerance=0.0
         high = limit if high is None else min(high, limit)
     t = max(t, low)
     if high is not None:
-        t = min(t, max(high, low))
+        t = min(t, high)  # high ≥ 原本的開始 ≥ low：原地不動一定合法，不會夾出空區間
     return t / 1000.0, (t + length) / 1000.0
 
 
