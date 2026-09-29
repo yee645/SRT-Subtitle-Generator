@@ -14,6 +14,9 @@
 * 吸附：離吸附點（播放頭、鄰句的邊）夠近就貼上去——吸附後的值一樣要過上面
   的界線。
 
+第四階段加上整句移動（`move_cue`）：長度不變，前後移動；界線與吸附規則同上
+（開始或結束任一邊靠近吸附點都算），鍵盤微調也走這裡。
+
 第三階段加上復原／重做與存檔：
 
 * `EditHistory`：每一筆是「第幾句、改之前的 (開始, 結束)、改之後的」，復原
@@ -112,6 +115,45 @@ def drag_edge(cues, index, edge, seconds, duration=None, snap_to=(), snap_tolera
         low = start + min_ms
         end = max(t, low) if high is None else min(max(t, low), max(high, low))
     return start / 1000.0, end / 1000.0
+
+
+def move_cue(cues, index, seconds, duration=None, snap_to=(), snap_tolerance=0.0):
+    """
+    把第 index 句整句移到 seconds 開始（長度不變），回傳合法的 (開始, 結束) 秒數。
+    不能移進鄰句（原本就重疊的不會更重疊）、不出片頭、不過片尾；開始或結束離吸
+    附點（snap_to 與鄰句的邊）夠近就貼上去，取最近的那個。
+    """
+    cue = cues[index]
+    start, end = _ms(cue["start"]), _ms(cue["end"])
+    length = end - start
+    prev_end, next_start = neighbours(cues, index)
+    t = _ms(seconds)
+    tolerance = _ms(snap_tolerance)
+    if tolerance > 0:
+        best = None
+        for target in list(snap_to or ()) + [prev_end, next_start]:
+            if target is None:
+                continue
+            target = _ms(target)
+            for offset in (0, length):  # 開始貼上去，或結束貼上去
+                gap = abs(target - (t + offset))
+                if gap <= tolerance and (best is None or gap < best[0]):
+                    best = (gap, target - offset)
+        if best is not None:
+            t = best[1]
+    low = 0
+    if prev_end is not None:
+        low = max(low, min(_ms(prev_end), start))
+    high = None
+    if next_start is not None:
+        high = max(_ms(next_start), end) - length
+    if duration:
+        limit = max(_ms(duration), end) - length
+        high = limit if high is None else min(high, limit)
+    t = max(t, low)
+    if high is not None:
+        t = min(t, max(high, low))
+    return t / 1000.0, (t + length) / 1000.0
 
 
 def edge_at(start, end, seconds, tolerance):

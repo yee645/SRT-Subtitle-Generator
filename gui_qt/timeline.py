@@ -20,6 +20,13 @@
   的時間，放開才送出 `cueTimesChanged(第幾句, 開始, 結束)`；拖曳中按 Esc 放棄。
 - 能拖到哪裡由 `subtitle/cueedit.py` 決定（不重疊鄰句、至少 0.1 秒、不出片
   頭片尾、靠近播放頭或鄰句的邊會吸附），這裡只換算像素與畫。
+
+第四階段（整句移動與鍵盤微調）：
+
+- 按住字幕塊的身體拖超過 `MOVE_START_PX` → 整句前後移動（長度不變），游標是抓
+  手；沒拖動就放開＝點選（放開時才跳到那句開頭）。
+- 選取後 ←／→ 整句移動 `NUDGE_SEC`，按住 Shift 移動 `NUDGE_BIG_SEC`。
+- 都走同一個 `cueTimesChanged`，所以復原／重做與存檔不用另外處理。
 """
 
 from __future__ import annotations
@@ -63,6 +70,9 @@ ZOOM_STEP = 1.25
 
 EDGE_PX = 6   # 字幕塊左右邊多少像素內算「抓到邊」
 SNAP_PX = 8   # 離吸附點（播放頭、鄰句的邊）多少像素內就貼上去
+MOVE_START_PX = 4  # 按住字幕塊身體移動超過這麼多像素才算「整句拖曳」，以內是點選
+NUDGE_SEC = 0.1    # ←／→ 微調選取那句一次移動多少秒
+NUDGE_BIG_SEC = 1.0  # 按住 Shift 時
 
 # 刻度間距候選（秒）：挑讓兩個標籤之間至少 MIN_LABEL_PX 的最小那個。
 TICK_STEPS = (0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600)
@@ -233,7 +243,9 @@ class TimelineView(QGraphicsView):
         self.cues = []             # [(在 set_cues 清單裡的位置, cue)]，只放畫得出來的
         self._source = []          # set_cues 傳進來的整份清單（複本），拖曳規則要看鄰句
         self.selected = -1
-        self._edge_drag = None     # 拖曳中：(第幾句, "start"/"end", 原本的開始, 原本的結束, 按下的秒數)
+        # 拖曳字幕塊：(第幾句, "start"/"end"/"body", 原本的開始, 原本的結束, 按下的秒數,
+        # 按下的 x, 是否已經開始動)。抓身體要移動超過 MOVE_START_PX 才算拖（不然是點選）。
+        self._edge_drag = None
         self._drag_times = None    # 拖曳中目前的 (開始, 結束)
         self.position_ms = 0
         self._fit_mode = False
@@ -465,19 +477,19 @@ class TimelineView(QGraphicsView):
         if event.button() == Qt.LeftButton and self.duration > 0:
             pos = event.position()
             hit = self.cue_hit(pos)
-            if hit is not None and hit[1] != cueedit.BODY:
-                index, edge = hit
+            if hit is not None:
+                # 抓邊：馬上開始拖。抓身體：先選取，移動超過 MOVE_START_PX 才算整句
+                # 拖曳；沒動就放開＝點選，放開時才跳到那句開頭（拖曳中播放頭不動，
+                # 才能當吸附點）。
+                index, part = hit
                 start, end = self.cue_times(index)
                 if index != self.selected:
                     self.select_cue(index, seek=False)
                 pressed = self.mapToScene(int(pos.x()), 0).x() / self.px_per_sec
-                self._edge_drag = (index, edge, start, end, pressed)
+                self._edge_drag = (index, part, start, end, pressed, pos.x(),
+                                   part != cueedit.BODY)
                 self._drag_times = (start, end)
-                self.setFocus(Qt.MouseFocusReason)  # 讓 Esc 收得到
-                event.accept()
-                return
-            if hit is not None:
-                self.select_cue(hit[0])
+                self.setFocus(Qt.MouseFocusReason)  # 讓 Esc 與 ←／→ 收得到
                 event.accept()
                 return
             if self._in_cue_row(pos):
@@ -491,14 +503,23 @@ class TimelineView(QGraphicsView):
     def mouseMoveEvent(self, event):  # noqa: N802
         pos = event.position()
         if self._edge_drag:
-            index, edge, start0, end0, pressed = self._edge_drag
+            index, part, start0, end0, pressed, press_x, active = self._edge_drag
+            if not active:
+                if abs(pos.x() - press_x) < MOVE_START_PX:
+                    event.accept()
+                    return
+                self._edge_drag = (index, part, start0, end0, pressed, press_x, True)
+                self.viewport().setCursor(Qt.ClosedHandCursor)
             pps = self.px_per_sec
-            # 邊移動的量＝滑鼠移動的量：抓在邊旁邊幾個像素也不會一按就跳到滑鼠上
-            t = (start0 if edge == cueedit.START else end0) \
-                + self.mapToScene(int(pos.x()), 0).x() / pps - pressed
-            self._drag_times = cueedit.drag_edge(
-                self._source, index, edge, t, duration=self.duration or None,
-                snap_to=[self.position_ms / 1000.0], snap_tolerance=SNAP_PX / pps)
+            # 移動的量＝滑鼠移動的量：抓在邊旁邊幾個像素也不會一按就跳到滑鼠上
+            delta = self.mapToScene(int(pos.x()), 0).x() / pps - pressed
+            common = dict(duration=self.duration or None,
+                          snap_to=[self.position_ms / 1000.0], snap_tolerance=SNAP_PX / pps)
+            if part == cueedit.BODY:
+                self._drag_times = cueedit.move_cue(self._source, index, start0 + delta, **common)
+            else:
+                base = start0 if part == cueedit.START else end0
+                self._drag_times = cueedit.drag_edge(self._source, index, part, base + delta, **common)
             self._refresh_cue(index)
             event.accept()
             return
@@ -507,25 +528,27 @@ class TimelineView(QGraphicsView):
             event.accept()
             return
         hit = self.cue_hit(pos)
-        if hit is not None and hit[1] != cueedit.BODY:
-            self.viewport().setCursor(Qt.SizeHorCursor)
-        else:
+        if hit is None:
             self.viewport().unsetCursor()
+        elif hit[1] == cueedit.BODY:
+            self.viewport().setCursor(Qt.OpenHandCursor)
+        else:
+            self.viewport().setCursor(Qt.SizeHorCursor)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):  # noqa: N802
         self._dragging = False
         if self._edge_drag:
-            index, _edge, start0, end0, _pressed = self._edge_drag
+            index, part, start0, end0, _pressed, _x, active = self._edge_drag
             start, end = self._drag_times
             self._edge_drag = self._drag_times = None
-            if (start, end) != (start0, end0):
-                self._source[index]["start"] = start
-                self._source[index]["end"] = end
-                self._build_cues()
-                self.cueTimesChanged.emit(index, start, end)
+            if part == cueedit.BODY and not active:
+                self.select_cue(index)  # 沒拖動＝點選：跳到那句開頭
             else:
-                self._build_cues()
+                self._commit_times(index, (start0, end0), (start, end))
+            hit = self.cue_hit(event.position())
+            if hit is not None and hit[1] == cueedit.BODY:
+                self.viewport().setCursor(Qt.OpenHandCursor)
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -537,7 +560,29 @@ class TimelineView(QGraphicsView):
             self._build_cues()
             event.accept()
             return
+        if (event.key() in (Qt.Key_Left, Qt.Key_Right) and self.selected >= 0
+                and not self._edge_drag
+                and not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)):
+            # ←／→ 微調選取的那句（整句移動，規則同拖曳、不吸附）；Shift 一次移動多一點
+            step = NUDGE_BIG_SEC if event.modifiers() & Qt.ShiftModifier else NUDGE_SEC
+            step = -step if event.key() == Qt.Key_Left else step
+            index = self.selected
+            before = self.cue_times(index)
+            after = cueedit.move_cue(self._source, index, before[0] + step,
+                                     duration=self.duration or None)
+            self._commit_times(index, before, after)
+            event.accept()
+            return
         super().keyPressEvent(event)
+
+    def _commit_times(self, index, before, after):
+        """拖曳或微調結束：時間有變就寫回、重畫、送出 cueTimesChanged。"""
+        if tuple(after) != tuple(before):
+            self._source[index]["start"], self._source[index]["end"] = after
+            self._build_cues()
+            self.cueTimesChanged.emit(index, after[0], after[1])
+        else:
+            self._build_cues()
 
     # ---- 內部 ----------------------------------------------------------
 
