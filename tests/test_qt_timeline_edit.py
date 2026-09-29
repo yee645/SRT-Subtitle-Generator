@@ -209,6 +209,17 @@ else:
     view.select_cue(7, seek=False)
     check("選不存在的句子 → 當成取消", view.selected == -1)
 
+    # ----- 重疊的字幕：抓邊優先於另一句的身體 -----
+    view.set_cues([{"start": 4, "end": 6, "text": "甲"}, {"start": 5, "end": 9, "text": "乙（蓋住甲的結尾）"}])
+    hit = view.cue_hit(QPoint(x_of(6) - 2, CUE_Y))
+    check("「甲」的結尾被「乙」蓋住 → 滑鼠在那個邊上抓到的是「甲」的右邊，不是「乙」的身體",
+          hit == (0, "end"), str(hit))
+    hit = view.cue_hit(QPoint(x_of(7), CUE_Y))
+    check("只在「乙」上 → 乙的身體", hit == (1, "body"), str(hit))
+    hit = view.cue_hit(QPoint(x_of(5.5), CUE_Y))
+    check("兩句的身體重疊處 → 開始得晚的「乙」（與畫面上顯示的那句一致）", hit == (1, "body"), str(hit))
+    view.set_cues(source)
+
     # ----- 拉近後照樣抓得到邊（每秒 200px） -----
     view.set_zoom(200, 4, 0)  # 視窗左邊 = 4 秒
     changes.clear()
