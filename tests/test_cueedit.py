@@ -116,6 +116,42 @@ check("with_times：只改那一句的時間，其餘欄位保留",
       str(new))
 check("with_times：不改到傳進來的清單", CUES[1]["start"] == 4.0 and new[1] is not CUES[1])
 
+# ===== 第四階段：整句移動 =====
+check("整句移動：一般情況（4～6 → 4.5 開始 → 4.5～6.5，長度不變）",
+      cueedit.move_cue(CUES, 1, 4.5) == (4.5, 6.5))
+check("整句移動：不能移進上一句（移到 2 → 停在 3～5）", cueedit.move_cue(CUES, 1, 2) == (3.0, 5.0))
+check("整句移動：不能移進下一句（移到 7 → 停在 5.5～7.5）", cueedit.move_cue(CUES, 1, 7) == (5.5, 7.5))
+check("整句移動：第一句不能移到 0 秒以前", cueedit.move_cue(CUES, 0, -5) == (0.0, 2.0))
+check("整句移動：最後一句不能移過片尾（片長 10 → 8.5～10）",
+      cueedit.move_cue(CUES, 2, 20, duration=10) == (8.5, 10.0))
+check("整句移動：不知道片長就不限", cueedit.move_cue(CUES, 2, 20) == (20.0, 21.5))
+check("整句移動：兩句中間剛好塞得下（上一句結束 3、下一句開始 7.5，長 2 → 可以停在 3～5 或 5.5～7.5）",
+      cueedit.move_cue(CUES, 1, 3) == (3.0, 5.0) and cueedit.move_cue(CUES, 1, 5.5) == (5.5, 7.5))
+check("整句移動：開始靠近上一句的結尾 → 吸上去（3.05 → 3）",
+      cueedit.move_cue(CUES, 1, 3.05, snap_tolerance=0.1) == (3.0, 5.0))
+check("整句移動：結束靠近下一句的開始 → 吸上去（開始 5.45、結束 7.45 → 7.5）",
+      cueedit.move_cue(CUES, 1, 5.45, snap_tolerance=0.1) == (5.5, 7.5))
+check("整句移動：結束靠近播放頭 → 結束貼上播放頭（播放頭 6.8，結束 6.75）",
+      cueedit.move_cue(CUES, 1, 4.75, snap_to=[6.8], snap_tolerance=0.1) == (4.8, 6.8))
+check("整句移動：開始與結束都有吸附點時取最近的（開始離 4.6 差 0.02、結束離 6.7 差 0.05）",
+      cueedit.move_cue(CUES, 1, 4.62, snap_to=[6.67, 4.6], snap_tolerance=0.1) == (4.6, 6.6))
+check("整句移動：超出容許不吸", cueedit.move_cue(CUES, 1, 4.4, snap_to=[4.6], snap_tolerance=0.1) == (4.4, 6.4))
+check("整句移動：吸附後一樣要過界線（播放頭在上一句裡）",
+      cueedit.move_cue(CUES, 1, 2.6, snap_to=[2.5], snap_tolerance=0.2) == (3.0, 5.0))
+overlap2 = [{"start": 1.0, "end": 5.0}, {"start": 4.0, "end": 8.0}, {"start": 7.0, "end": 9.0}]
+check("整句移動：原本兩邊都重疊 → 哪邊都不能更重疊，原地不動",
+      cueedit.move_cue(overlap2, 1, 3.0) == (4.0, 8.0) and cueedit.move_cue(overlap2, 1, 5.0) == (4.0, 8.0),
+      f"{cueedit.move_cue(overlap2, 1, 3.0)} {cueedit.move_cue(overlap2, 1, 5.0)}")
+got = cueedit.move_cue(CUES, 1, 4.1234567)
+check("整句移動：取整毫秒、長度精確不變", got == (4.123, 6.123), str(got))
+check("整句移動：原本就超過片尾的句子 → 可以往前、不能再往後（片長 8.5，第三句 7.5～9）",
+      cueedit.move_cue(CUES, 2, 8, duration=8.5) == (7.5, 9.0)
+      and cueedit.move_cue(CUES, 2, 7, duration=8.5) == (7.0, 8.5),
+      f"{cueedit.move_cue(CUES, 2, 8, duration=8.5)} {cueedit.move_cue(CUES, 2, 7, duration=8.5)}")
+long_cue = [{"start": 0.0, "end": 12.0}]
+check("整句移動：比片長還長的句子（原本就超過）→ 不動也不壞", cueedit.move_cue(long_cue, 0, 3, duration=10) == (0.0, 12.0),
+      str(cueedit.move_cue(long_cue, 0, 3, duration=10)))
+
 # ===== 第三階段：復原／重做、改過幾處、存檔 =====
 import shutil  # noqa: E402
 import tempfile  # noqa: E402
