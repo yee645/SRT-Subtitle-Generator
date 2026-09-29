@@ -174,10 +174,24 @@ def edge_at(start, end, seconds, tolerance):
 
 
 def with_times(cues, index, start, end):
-    """回傳改過第 index 句時間的新清單（其餘句子與欄位原封不動，不改到傳進來的清單）。"""
+    """
+    回傳改過第 index 句時間的新清單（其餘句子與欄位原封不動，不改到傳進來的清單）。
+
+    整句移動（開始與結束移動一樣多）時，逐字時間軸（cue["words"]）跟著平移——
+    不然 karaoke／word 動態字幕的字會跟聲音錯開。只拖一邊時逐字時間不動：燒錄與
+    預覽本來就把字的時間夾在句子範圍內。
+    """
     out = [dict(c) for c in cues]
-    out[index]["start"] = float(start)
-    out[index]["end"] = float(end)
+    cue = out[index]
+    shift_ms = _ms(start) - _ms(cue["start"])
+    if cue.get("words") and shift_ms and _ms(end) - _ms(cue["end"]) == shift_ms:
+        shift = shift_ms / 1000.0
+        cue["words"] = [dict(w, start=round(float(w["start"]) + shift, 3),
+                             end=round(float(w["end"]) + shift, 3))
+                        if "start" in w and "end" in w else dict(w)
+                        for w in cue["words"]]
+    cue["start"] = float(start)
+    cue["end"] = float(end)
     return out
 
 

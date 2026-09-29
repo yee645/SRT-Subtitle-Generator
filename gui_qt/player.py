@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
 from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
 from subtitle import cueedit
 from subtitle.cuetime import CueIndex
-from subtitle.exporter import burn_layout, split_emphasis_segments
+from subtitle.exporter import burn_layout, dynamic_frame, split_emphasis_segments
 from subtitle.importer import load_subtitle_file
 
 
@@ -72,6 +72,8 @@ class OutlinedText(QGraphicsItem):
         self._stroke_color = QColor(0, 0, 0)
         self._emphasis_words = []
         self._emphasis_color = QColor(255, 215, 0)
+        self._segments = None    # 逐字動態字幕：[(片段, 是否亮起)]；None＝一般整句
+        self.pop_scale = 1.0     # word 模式剛出現的字的縮放（place_subtitle 依對齊點套用）
         self._runs = []          # [(QPainterPath, QColor)]
         self._path = QPainterPath()
         self._rect = QRectF()
@@ -85,6 +87,20 @@ class OutlinedText(QGraphicsItem):
     def setText(self, text):  # noqa: N802 —— 與 Qt 項目同名，呼叫端不用改
         self._text = text or ""
         self._rebuild()
+
+    def set_segments(self, segments, scale=1.0):
+        """逐字動態字幕：整句分成片段、亮起的片段用重點色（與燒錄的 highlight 同色）。"""
+        self._segments = list(segments)
+        self._text = "".join(piece for piece, _lit in self._segments)
+        self.pop_scale = float(scale)
+        self._rebuild()
+
+    def clear_segments(self):
+        self._segments = None
+        self.pop_scale = 1.0
+
+    def segments(self):
+        return list(self._segments) if self._segments is not None else None
 
     def setFont(self, font):  # noqa: N802
         self._font = QFont(font)
@@ -109,8 +125,13 @@ class OutlinedText(QGraphicsItem):
         for i, line in enumerate(lines):
             x = (widest - metrics.horizontalAdvance(line)) / 2
             baseline = metrics.ascent() + i * metrics.lineSpacing()
-            pieces = (split_emphasis_segments(line, self._emphasis_words)
-                      if self._emphasis_words else [(line, False)])
+            if self._segments is not None:
+                # 燒錄時逐字動態字幕不套重點字，只有「目前的字」換色
+                pieces = self._segments
+            elif self._emphasis_words:
+                pieces = split_emphasis_segments(line, self._emphasis_words)
+            else:
+                pieces = [(line, False)]
             for piece, emphasized in pieces:
                 path = QPainterPath()
                 path.addText(QPointF(x, baseline), self._font, piece)
@@ -161,6 +182,7 @@ class PlayerPanel(QWidget):
         self._style = dict(style or {})
         self._index = CueIndex([])
         self._subtitle_path = ""
+        self._shown = ("", None, 1.0)  # 疊加層目前畫的是什麼：(文字, 片段, 縮放)
         self.cues = []          # 目前的字幕（複本）；時間軸上拖曳改的時間回寫到這裡
         self.history = cueedit.EditHistory()
         self._saved_cues = []   # 上次存檔（或載入）時的樣子：拿來算「改過幾處」
@@ -292,6 +314,7 @@ class PlayerPanel(QWidget):
     def set_style(self, style):
         """換字幕樣式（config 的 subtitle_style）；畫面上那句立刻重畫。"""
         self._style = dict(style or {})
+        self._show_at(self.player.position())  # 動態模式可能換了：照新模式重算這一刻
         self._place_subtitle()
 
     def toggle_play(self):
@@ -485,12 +508,31 @@ class PlayerPanel(QWidget):
         self.info_label.setText(f"無法播放：{message}")
 
     def _show_at(self, ms):
-        cue = self._index.at(ms / 1000.0)
-        text = cue["text"] if cue else ""
-        if text != self.subtitle_item.text() or bool(text) != self.subtitle_item.isVisible():
+        seconds = ms / 1000.0
+        cue = self._index.at(seconds)
+        mode = str(self._style.get("dynamic_mode") or "off")
+        frame = dynamic_frame(cue, mode, seconds) if cue else None
+        if frame is None:
+            state = (cue["text"] if cue else "", None, 1.0)
+        else:
+            # 逐字動態字幕（karaoke／word）：照燒錄的規則算這一刻顯示什麼
+            state = ("".join(p for p, _lit in frame["segments"]),
+                     tuple(frame["segments"]), round(frame["scale"], 3))
+        if state == self._shown:
+            return
+        self._shown = state
+        text, segments, scale = state
+        if segments is None:
+            self.subtitle_item.clear_segments()
             self.subtitle_item.setText(text)
-            self.subtitle_item.setVisible(bool(text))
-            self._place_subtitle()
+        else:
+            self.subtitle_item.set_segments(segments, scale)
+        self.subtitle_item.setVisible(bool(text))
+        self._place_subtitle()
+
+    def current_subtitle_segments(self):
+        """逐字動態字幕此刻的片段 [(片段, 是否亮起)]；一般整句時是 None。給測試用。"""
+        return self.subtitle_item.segments() if self.subtitle_item.isVisible() else None
 
     def _video_rect(self):
         """影片在場景裡實際占的矩形（保持比例、置中）。"""
@@ -573,3 +615,9 @@ def place_subtitle(item, rect, style):
     else:
         y = anchor_y - box.height() / 2 - box.top()
     item.setPos(x, y)
+    # word 模式的彈出縮放：以對齊點為中心（置底縮向底邊中央、置頂縮向頂邊中央），
+    # 跟 libass 排版時先縮放字形、再依對齊點擺放的結果一樣。
+    scale = getattr(item, "pop_scale", 1.0)
+    origin_y = {"bottom": box.bottom(), "top": box.top()}.get(look["anchor"], box.center().y())
+    item.setTransformOriginPoint(QPointF(box.center().x(), origin_y))
+    item.setScale(scale)
