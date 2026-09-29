@@ -18,7 +18,8 @@ Tk 版的「預覽」是 Canvas 畫的假畫面（`gui/preview_panel.py`），�
 畫面下方是時間軸（`gui_qt/timeline.py`，第 4 項）：縮圖、波形、字幕塊、播
 放頭，跟播放器雙向同步——播放時播放頭跟著走，點時間軸就跳過去。點字幕塊跳
 到那句開頭；拖字幕塊的左右邊改時間，放開後回寫到 `self.cues`，畫面上的字幕立
-刻照新時間顯示（還沒有存檔，資訊列標示「尚未存檔」）。
+刻照新時間顯示。改時間可以復原／重做（Ctrl+Z／Ctrl+Y），存回載入的 .srt／.vtt
+（Ctrl+S，第一次覆蓋前留一份 `.bak`）；有沒存的修改時，換字幕或關視窗會先問。
 
 還沒做：逐字動態字幕的預覽、與字幕清單雙向同步、鍵盤快捷鍵。見
 `docs/ROADMAP_3.0.md` 第 2、4 項。
@@ -27,7 +28,8 @@ import os
 
 from PySide6.QtCore import QPointF, QRectF, QSizeF, Qt, QUrl, Signal
 from PySide6.QtGui import (
-    QBrush, QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen,
+    QBrush, QColor, QFont, QFontMetricsF, QKeySequence, QPainter, QPainterPath, QPen,
+    QShortcut,
 )
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
@@ -160,7 +162,9 @@ class PlayerPanel(QWidget):
         self._index = CueIndex([])
         self._subtitle_path = ""
         self.cues = []          # 目前的字幕（複本）；時間軸上拖曳改的時間回寫到這裡
-        self.edits = 0          # 載入之後改過幾次時間（還沒有存檔功能，先標示出來）
+        self.history = cueedit.EditHistory()
+        self._saved_cues = []   # 上次存檔（或載入）時的樣子：拿來算「改過幾處」
+        self._save_note = ""    # 剛存完檔的說明（存到哪、備份在哪），下一次修改就拿掉
 
         self.scene = QGraphicsScene(self)
         self.view = _VideoView(self.scene)
@@ -194,6 +198,12 @@ class PlayerPanel(QWidget):
         self.timeline = TimelineView()
         self.loader = TimelineLoader(self)
         self._fitted = False
+        self.undo_btn = QPushButton("復原")
+        self.redo_btn = QPushButton("重做")
+        self.save_btn = QPushButton("存字幕")
+        self.undo_btn.setToolTip("復原上一次改的時間（Ctrl+Z）")
+        self.redo_btn.setToolTip("重做（Ctrl+Y 或 Ctrl+Shift+Z）")
+        self.save_btn.setToolTip("存回載入的字幕檔（Ctrl+S）；第一次覆蓋前會把原檔留一份 .bak")
         self.zoom_out_btn = QPushButton("拉遠")
         self.zoom_in_btn = QPushButton("拉近")
         self.fit_btn = QPushButton("整支")
@@ -208,6 +218,9 @@ class PlayerPanel(QWidget):
 
         footer = QHBoxLayout()
         footer.addWidget(self.info_label, 1)
+        for w in (self.undo_btn, self.redo_btn, self.save_btn):
+            footer.addWidget(w)
+        footer.addSpacing(12)
         for w in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn):
             footer.addWidget(w)
 
@@ -231,6 +244,18 @@ class PlayerPanel(QWidget):
         self.view.resized.connect(self._layout)
         self.timeline.seekRequested.connect(self.player.setPosition)
         self.timeline.cueTimesChanged.connect(self._on_cue_times)
+        self.undo_btn.clicked.connect(self.undo)
+        self.redo_btn.clicked.connect(self.redo)
+        self.save_btn.clicked.connect(self.save)
+        # 快捷鍵只在這一頁（焦點在播放器面板裡）有效，其他頁以後有自己的復原
+        for keys, slot in ((QKeySequence.StandardKey.Undo, self.undo),
+                           (QKeySequence.StandardKey.Redo, self.redo),
+                           (QKeySequence("Ctrl+Y"), self.redo),
+                           (QKeySequence.StandardKey.Save, self.save)):
+            shortcut = QShortcut(keys, self)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(slot)
+        self._update_edit_buttons()
         self.zoom_out_btn.clicked.connect(self.timeline.zoom_out)
         self.zoom_in_btn.clicked.connect(self.timeline.zoom_in)
         self.fit_btn.clicked.connect(self.timeline.zoom_to_fit)
@@ -253,14 +278,14 @@ class PlayerPanel(QWidget):
     def set_cues(self, cues, source=""):
         """換一份字幕；畫面上的那句與時間軸上的字幕塊立刻跟著更新。"""
         self.cues = [dict(c) for c in (cues or [])]
-        self.edits = 0
+        self.history.clear()
+        self._saved_cues = [dict(c) for c in self.cues]
+        self._save_note = ""
         self._index = CueIndex(self.cues)
         self._subtitle_path = source
         self.timeline.set_cues(self.cues)
         self._show_at(self.player.position())
-        name = os.path.basename(self.player.source().toLocalFile())
-        self.info_label.setText((f"影片：{name}" if name else "還沒開啟影片。")
-                                + self._subs_note())
+        self._refresh_info()
 
     def load_subtitles(self, path):
         data = load_subtitle_file(path)
@@ -284,26 +309,109 @@ class PlayerPanel(QWidget):
 
     # ---- 內部 ----------------------------------------------------------
 
+    def unsaved_changes(self):
+        """跟上次存檔（或載入）時相比，時間不一樣的句數。"""
+        return cueedit.changed_count(self.cues, self._saved_cues)
+
+    def undo(self):
+        self._step(self.history.undo(self.cues))
+
+    def redo(self):
+        self._step(self.history.redo(self.cues))
+
+    def save(self):
+        """存回載入的字幕檔；沒有檔名（或不是 .srt／.vtt）時先問要存到哪。回傳是否存成功。"""
+        path = self._subtitle_path
+        if not path or os.path.splitext(path)[1].lower() not in (".srt", ".vtt"):
+            path = self._ask_save_path(path)
+            if not path:
+                return False
+        try:
+            result = cueedit.save_cues(self.cues, path)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "存字幕", f"沒有存成功：{exc}")
+            return False
+        self._subtitle_path = path
+        self._saved_cues = [dict(c) for c in self.cues]
+        note = f"已存到 {os.path.basename(path)}"
+        if result["backup"]:
+            note += f"（原檔留在 {os.path.basename(result['backup'])}）"
+        self._save_note = note
+        self._refresh_info()
+        return True
+
+    def maybe_discard(self):
+        """有沒存的修改時先問：存檔／放棄／取消。回傳 True＝可以繼續（已存或放棄）。"""
+        if not self.unsaved_changes():
+            return True
+        answer = self._ask_discard()
+        if answer == "save":
+            return self.save()
+        return answer == "discard"
+
     def _subs_note(self):
         if not len(self._index):
             return "　字幕：尚未載入"
         name = os.path.basename(self._subtitle_path) if self._subtitle_path else "（目前的字幕）"
         note = f"　字幕：{name}，{len(self._index)} 句"
-        if self.edits:
-            note += f"（時間改過 {self.edits} 處，尚未存檔）"
+        changed = self.unsaved_changes()
+        if changed:
+            note += f"（時間改過 {changed} 處，尚未存檔）"
+        elif self._save_note:
+            note += f"（{self._save_note}）"
         return note
+
+    def _refresh_info(self):
+        name = os.path.basename(self.player.source().toLocalFile())
+        self.info_label.setText((f"影片：{name}" if name else "還沒開啟影片。")
+                                + self._subs_note())
+        self._update_edit_buttons()
+
+    def _update_edit_buttons(self):
+        self.undo_btn.setEnabled(self.history.can_undo())
+        self.redo_btn.setEnabled(self.history.can_redo())
+        self.save_btn.setEnabled(bool(self.cues))
 
     def _on_cue_times(self, index, start, end):
         """時間軸上拖了某句的邊：回寫字幕清單，畫面上的那句立刻照新時間顯示。"""
         if not 0 <= index < len(self.cues):
             return
+        before = (self.cues[index]["start"], self.cues[index]["end"])
+        self.history.record(index, before, (start, end))
         self.cues = cueedit.with_times(self.cues, index, start, end)
-        self.edits += 1
+        self._after_edit()
+
+    def _step(self, result):
+        """套用復原或重做的結果：時間軸重畫並選取改到的那句（看得到剛剛變了什麼）。"""
+        if result is None:
+            return
+        self.cues, index = result
+        self.timeline.set_cues(self.cues, keep_selection=True)
+        self.timeline.select_cue(index, seek=False)
+        self._after_edit()
+
+    def _after_edit(self):
+        self._save_note = ""
         self._index = CueIndex(self.cues)
         self._show_at(self.player.position())
-        name = os.path.basename(self.player.source().toLocalFile())
-        self.info_label.setText((f"影片：{name}" if name else "還沒開啟影片。")
-                                + self._subs_note())
+        self._refresh_info()
+
+    def _ask_save_path(self, suggested):
+        base = os.path.splitext(suggested)[0] + ".srt" if suggested else ""
+        path, _ = QFileDialog.getSaveFileName(self, "存字幕", base, "SRT 字幕 (*.srt);;WebVTT 字幕 (*.vtt)")
+        return path
+
+    def _ask_discard(self):
+        """回傳 "save"／"discard"／"cancel"。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("還沒存檔")
+        box.setText(f"字幕的時間改過 {self.unsaved_changes()} 處，還沒存檔。")
+        save = box.addButton("存檔", QMessageBox.AcceptRole)
+        discard = box.addButton("不存，放棄修改", QMessageBox.DestructiveRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        return "save" if clicked is save else "discard" if clicked is discard else "cancel"
 
     def _choose_video(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -312,6 +420,8 @@ class PlayerPanel(QWidget):
             self.open_video(path)
 
     def _choose_subtitles(self):
+        if not self.maybe_discard():
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "載入字幕", "", "字幕 (*.srt *.vtt)")
         if not path:
