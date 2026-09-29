@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
+from subtitle import cueedit
 from subtitle.cuetime import CueIndex
 from subtitle.exporter import burn_layout, split_emphasis_segments
 from subtitle.importer import load_subtitle_file
@@ -296,8 +297,7 @@ class PlayerPanel(QWidget):
         """時間軸上拖了某句的邊：回寫字幕清單，畫面上的那句立刻照新時間顯示。"""
         if not 0 <= index < len(self.cues):
             return
-        self.cues[index]["start"] = start
-        self.cues[index]["end"] = end
+        self.cues = cueedit.with_times(self.cues, index, start, end)
         self.edits += 1
         self._index = CueIndex(self.cues)
         self._show_at(self.player.position())

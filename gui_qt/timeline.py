@@ -233,7 +233,7 @@ class TimelineView(QGraphicsView):
         self.cues = []             # [(在 set_cues 清單裡的位置, cue)]，只放畫得出來的
         self._source = []          # set_cues 傳進來的整份清單（複本），拖曳規則要看鄰句
         self.selected = -1
-        self._edge_drag = None     # 拖曳中：(第幾句, "start"/"end", 原本的開始, 原本的結束)
+        self._edge_drag = None     # 拖曳中：(第幾句, "start"/"end", 原本的開始, 原本的結束, 按下的秒數)
         self._drag_times = None    # 拖曳中目前的 (開始, 結束)
         self.position_ms = 0
         self._fit_mode = False
@@ -248,6 +248,8 @@ class TimelineView(QGraphicsView):
         self.setRenderHint(QPainter.Antialiasing, False)
         self.setViewportUpdateMode(QGraphicsView.MinimalViewportUpdate)
         self.setFrameShape(QGraphicsView.NoFrame)
+        # 沒按鍵時也要收到滑鼠移動，才能在碰到字幕塊的邊時換游標
+        self.viewport().setMouseTracking(True)
         self.setFixedHeight(TOTAL_H + self.horizontalScrollBar().sizeHint().height() + 2)
         self.colors = _palette_colors(self)
 
@@ -468,7 +470,8 @@ class TimelineView(QGraphicsView):
                 start, end = self.cue_times(index)
                 if index != self.selected:
                     self.select_cue(index, seek=False)
-                self._edge_drag = (index, edge, start, end)
+                pressed = self.mapToScene(int(pos.x()), 0).x() / self.px_per_sec
+                self._edge_drag = (index, edge, start, end, pressed)
                 self._drag_times = (start, end)
                 self.setFocus(Qt.MouseFocusReason)  # 讓 Esc 收得到
                 event.accept()
@@ -488,9 +491,11 @@ class TimelineView(QGraphicsView):
     def mouseMoveEvent(self, event):  # noqa: N802
         pos = event.position()
         if self._edge_drag:
-            index, edge, _s, _e = self._edge_drag
+            index, edge, start0, end0, pressed = self._edge_drag
             pps = self.px_per_sec
-            t = self.mapToScene(int(pos.x()), 0).x() / pps
+            # 邊移動的量＝滑鼠移動的量：抓在邊旁邊幾個像素也不會一按就跳到滑鼠上
+            t = (start0 if edge == cueedit.START else end0) \
+                + self.mapToScene(int(pos.x()), 0).x() / pps - pressed
             self._drag_times = cueedit.drag_edge(
                 self._source, index, edge, t, duration=self.duration or None,
                 snap_to=[self.position_ms / 1000.0], snap_tolerance=SNAP_PX / pps)
@@ -511,7 +516,7 @@ class TimelineView(QGraphicsView):
     def mouseReleaseEvent(self, event):  # noqa: N802
         self._dragging = False
         if self._edge_drag:
-            index, _edge, start0, end0 = self._edge_drag
+            index, _edge, start0, end0, _pressed = self._edge_drag
             start, end = self._drag_times
             self._edge_drag = self._drag_times = None
             if (start, end) != (start0, end0):
