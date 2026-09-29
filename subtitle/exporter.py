@@ -185,6 +185,29 @@ def _dynamic_event_times(words: list, cue_start: float,
     return events
 
 
+def _dynamic_words(cue: Mapping) -> list:
+    """cue 裡可用的逐字資料（空字——例如被尋找取代刪成空字串——不算）。"""
+    return [w for w in (cue.get("words") or []) if (w.get("word") or "").strip()]
+
+
+def _karaoke_parts(texts: list, index: int) -> list:
+    """
+    karaoke 模式第 index 個字亮起時的整句：[(片段, 是否亮起)]。字與字之間
+    要不要空一格依「原始文字」判斷（中日文字之間、標點前不空）。
+    """
+    parts = []
+    previous_raw = ""
+    for i, raw in enumerate(texts):
+        if parts and raw and previous_raw \
+                and raw[0] not in _NO_LEADING_SPACE \
+                and not _is_cjk_char(raw[0]) \
+                and not _is_cjk_char(previous_raw[-1]):
+            parts.append((" ", False))
+        parts.append((raw, i == index))
+        previous_raw = raw
+    return parts
+
+
 def _dynamic_dialogues(cue: Mapping, mode: str, highlight_tag: str) -> list:
     """
     把一個帶逐字時間軸的 cue 展開成多個 ASS Dialogue 文字內容。
@@ -192,8 +215,7 @@ def _dynamic_dialogues(cue: Mapping, mode: str, highlight_tag: str) -> list:
     回傳 [(start, end, text), ...]；呼叫端負責組 Dialogue 行。
     karaoke：整句顯示、當前字換色；word：只顯示當前字並帶彈出動畫。
     """
-    # 空字（例如被尋找取代刪成空字串）不產生事件。
-    words = [w for w in (cue.get("words") or []) if (w.get("word") or "").strip()]
+    words = _dynamic_words(cue)
     if not words:
         return []
     texts = [w["word"] for w in words]
@@ -206,21 +228,45 @@ def _dynamic_dialogues(cue: Mapping, mode: str, highlight_tag: str) -> list:
             text = f"{_POP_TAG}{texts[index]}"
         else:
             # karaoke：當前字包色彩標籤、其餘維持樣式色。
-            # 空白間隔依「原始文字」判斷（標籤本身不能影響 CJK 判斷）。
-            parts = []
-            previous_raw = ""
-            for i, raw in enumerate(texts):
-                if parts and raw and previous_raw \
-                        and raw[0] not in _NO_LEADING_SPACE \
-                        and not _is_cjk_char(raw[0]) \
-                        and not _is_cjk_char(previous_raw[-1]):
-                    parts.append(" ")
-                parts.append(f"{highlight_tag}{raw}{{\\r}}"
-                             if i == index else raw)
-                previous_raw = raw
-            text = "".join(parts)
+            text = "".join(f"{highlight_tag}{piece}{{\\r}}" if lit else piece
+                           for piece, lit in _karaoke_parts(texts, index))
         dialogues.append((start, end, text))
     return dialogues
+
+
+# word 模式彈出動畫的參數（與 _POP_TAG 一致，預覽照這個畫）。
+POP_FROM_SCALE = 0.8
+POP_SECONDS = 0.12
+
+
+def dynamic_frame(cue: Mapping, mode: str, seconds: float) -> dict | None:
+    """
+    逐字動態字幕在 seconds 這一刻畫面上是什麼（給預覽用，與燒錄同一套規則）。
+
+    回傳 None：這句不走逐字動態（模式是 off、或沒有可用的逐字資料）——照一般
+    整句顯示。否則回傳 {"segments": [(片段, 是否亮起)], "scale": 縮放}；
+    segments 為空＝這一刻燒錄出來沒有字（不在這句裡、或落在太短而被略過的事件）。
+    karaoke：整句、當前字亮起；word：只有當前字，剛出現的 POP_SECONDS 秒內從
+    POP_FROM_SCALE 長到 1。
+    """
+    if mode not in ("karaoke", "word"):
+        return None
+    words = _dynamic_words(cue)
+    if not words:
+        return None
+    texts = [w["word"] for w in words]
+    seconds = float(seconds)
+    for index, (start, end) in enumerate(_dynamic_event_times(words, cue["start"], cue["end"])):
+        if not start <= seconds < end:
+            continue
+        if end - start < _MIN_EVENT:
+            break
+        if mode == "word":
+            grown = min(max((seconds - start) / POP_SECONDS, 0.0), 1.0)
+            scale = POP_FROM_SCALE + (1.0 - POP_FROM_SCALE) * grown
+            return {"segments": [(texts[index], False)], "scale": scale}
+        return {"segments": _karaoke_parts(texts, index), "scale": 1.0}
+    return {"segments": [], "scale": 1.0}
 
 
 def _ass_alignment(position_y: float) -> int:
