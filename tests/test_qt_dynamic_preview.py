@@ -114,6 +114,7 @@ else:
           str(panel.subtitle_item.scale()))
     at(2600)
     check("120 ms 以後是原本大小", abs(panel.subtitle_item.scale() - 1.0) < 1e-6, str(panel.subtitle_item.scale()))
+    at(2200)  # 回到縮成 0.8 的那一刻再換回 off：縮放要一起復原
     panel.set_style({"dynamic_mode": "off"})
     check("換回 off → 立刻變整句", panel.current_subtitle_text() == "今天天氣 Hello world"
           and panel.current_subtitle_segments() is None and panel.subtitle_item.scale() == 1.0,
@@ -169,12 +170,21 @@ else:
     check("off 畫面：沒有藍色（沒開重點字）", bbox(img_off, is_blue) is None)
 
     for pos_y, edge, name in ((0.88, 3, "置底：底邊不動"), (0.15, 1, "置頂：頂邊不動")):
-        small, _ = render(dict(base, dynamic_mode="word", position_y=pos_y), 1.8)   # 0.8
-        full, _ = render(dict(base, dynamic_mode="word", position_y=pos_y), 2.0)    # 1.0
+        # 字要夠大，「以中心縮放」與「以對齊點縮放」的差別（高度的 10%）才看得出來
+        big = dict(base, dynamic_mode="word", position_y=pos_y, font_size=120)
+        small, it_s = render(big, 1.8, 1280, 720)   # 0.8
+        full, it_f = render(big, 2.0, 1280, 720)    # 1.0
+        # 對齊看的是字的行框（含字身下方的留白），跟 libass 一樣——所以縮放後行框的
+        # 那一邊要一模一樣；墨水的邊會因為留白跟著縮而差幾像素（以中心縮放時差 5～8px）。
+        box_s = it_s.mapRectToScene(it_s.text_rect())
+        box_f = it_f.mapRectToScene(it_f.text_rect())
+        line_s = box_s.bottom() if edge == 3 else box_s.top()
+        line_f = box_f.bottom() if edge == 3 else box_f.top()
         a, b = bbox(small, is_ink), bbox(full, is_ink)
         check(f"word 彈出以對齊點為中心縮放（{name}、水平置中）",
-              a and b and abs(a[edge] - b[edge]) <= 2 and abs((a[0] + a[2]) - (b[0] + b[2])) <= 3
-              and (a[2] - a[0]) < 0.9 * (b[2] - b[0]), f"0.8 倍 {a}、原大 {b}")
+              a and b and abs(line_s - line_f) < 0.5 and abs(a[edge] - b[edge]) <= 4
+              and abs((a[0] + a[2]) - (b[0] + b[2])) <= 3 and (a[2] - a[0]) < 0.9 * (b[2] - b[0]),
+              f"行框 {line_s:.1f} vs {line_f:.1f}；墨水 0.8 倍 {a}、原大 {b}")
 
     # ----- 3. 跟真的燒錄比對 -----
     FONT = "WenQuanYi Zen Hei"
@@ -187,12 +197,13 @@ else:
         cases = [
             ("karaoke 2.0 秒，亮起的「Hello」", "karaoke", 2.0, is_blue),
             ("karaoke 1.2 秒，亮起的「今天」", "karaoke", 1.2, is_blue),
+            ("word 1.80 秒（剛出現，0.8 倍、大字）", "word", 1.80, is_ink),
             ("word 1.88 秒（長到 0.933）", "word", 1.88, is_ink),
             ("word 2.6 秒（原大）", "word", 2.6, is_ink),
             ("word 置頂 2.28 秒", "word", 2.28, is_ink),
         ]
         for name, mode, seconds, pred in cases:
-            style = dict(base, font_family=FONT, dynamic_mode=mode, font_size=48)
+            style = dict(base, font_family=FONT, dynamic_mode=mode, font_size=96 if "大字" in name else 48)
             if "置頂" in name:
                 style["position_y"] = 0.15
             ass = os.path.join(tmp, "burn.ass")

@@ -314,8 +314,7 @@ class PlayerPanel(QWidget):
     def set_style(self, style):
         """換字幕樣式（config 的 subtitle_style）；畫面上那句立刻重畫。"""
         self._style = dict(style or {})
-        self._shown = None  # 動態模式可能換了：下一次一定重畫
-        self._show_at(self.player.position())
+        self._show_at(self.player.position())  # 動態模式可能換了：照新模式重算這一刻
         self._place_subtitle()
 
     def toggle_play(self):
