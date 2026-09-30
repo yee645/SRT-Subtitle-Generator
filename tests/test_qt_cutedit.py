@@ -89,15 +89,22 @@ else:
     check("沒有剪點時剪點列寫一行怎麼用（有字）", lane_ink(0, 400) > 30, str(lane_ink(0, 400)))
     marks = [{"source": "jumpcut", "start": 4.5, "end": 8.5, "reasons": ["句間停頓 5.0 秒"], "key": "a", "enabled": True},
              {"source": "jumpcut", "start": 12.5, "end": 15.0, "reasons": ["句間停頓 3.0 秒"], "key": "b", "enabled": True}]
+    repainted = []
+    view.scene_.changed.connect(lambda rects: repainted.extend(rects))
     view.set_cut_marks(marks)
     wait(30)
+    from PySide6.QtCore import QRectF  # noqa: E402
+    note_area = QRectF(10, tl.ROW_Y["cuts"], 160, tl.CUT_LANE_H)
+    check("換剪點時整條剪點列要重畫（說明那一段不在任何方塊上，不重畫會留著舊字）",
+          any(r.contains(note_area) for r in repainted), str(repainted[:4]))
     lanes = view.cut_lane_rects()
     check("剪點列的方塊跟上面的區塊左右對齊、在剪點列裡",
           [(r.left(), r.width()) for r in lanes] == [(r.left(), r.width()) for r in view.cut_rects()]
           and all(tl.ROW_Y["cuts"] <= r.top() and r.bottom() <= tl.TOTAL_H for r in lanes),
           str(lanes))
-    check("有剪點時不寫說明（片子範圍內、方塊以外的地方沒有字）", lane_ink(620, 790) == 0,
-          str(lane_ink(620, 790)))
+    # 0.25～4.25 秒（10～170px）：說明原本寫在這裡、又不在任何方塊上
+    check("有剪點時不寫說明（原本有字、方塊以外的那一段變空白）", lane_ink(10, 170) == 0,
+          str(lane_ink(10, 170)))
 
     toggles, changes, seeks = [], [], []
     view.cutMarkToggled.connect(lambda i, e: toggles.append((i, e)))
@@ -147,7 +154,10 @@ else:
     QTest.mouseMove(vp, QPoint(px(7.5), LANE_Y))
     QTest.mouseMove(vp, QPoint(px(7.0), LANE_Y))
     mid = view.cut_times(0)
-    check("拖右邊：拖曳中方塊跟著動（8.5 → 7.0）、還沒送出", abs(mid[1] - 7.0) < 0.03 and not changes, str(mid))
+    mid_rect = view.cut_lane_rects()[0]
+    check("拖右邊：拖曳中方塊跟著動（8.5 → 7.0，畫面上的方塊也變窄）、還沒送出",
+          abs(mid[1] - 7.0) < 0.03 and not changes and abs(mid_rect.right() - 7.0 * 40) <= 2,
+          f"{mid} {mid_rect}")
     QTest.mouseRelease(vp, Qt.LeftButton, Qt.NoModifier, QPoint(px(7.0), LANE_Y))
     wait(30)
     check("放開才送出 cutMarkChanged(0, 4.5, ≈7.0)",
