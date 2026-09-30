@@ -130,16 +130,30 @@ else:
           panel.media_duration() == orig and abs(panel.timeline.duration - orig) < 1e-6,
           f"{panel.media_duration()} {panel.timeline.duration} {orig}")
     check("縮圖與波形用原檔（時間軸的背景工作收到的是原檔）", panel.media_path == big)
+    # 這支測試片的代理檔剛好跟原檔一樣長；真實素材常差幾十毫秒（聲音編碼的前置延遲），
+    # 把「原檔片長」改成跟播放器量到的不一樣，驗時間軸與剪點照的是原檔、不是播放器
+    real_orig = panel._orig_duration
+    panel._orig_duration = round(panel.player.duration() / 1000.0 - 0.2, 3)
+    panel.set_cues([{"start": 0.5, "end": 2.0, "text": "一"}, {"start": 5.0, "end": 6.0, "text": "二"}])
+    panel.show_cut_marks("review")  # 審片建議會把片尾沒講話的那段算進去
+    panel._on_duration(panel.player.duration())
+    tail = panel.cut_plan["marks"][-1]["end"] if panel.cut_plan["marks"] else None
+    check("片長跟播放器量到的不一樣時：時間軸與剪點（片尾那段）照原檔",
+          abs(panel.timeline.duration - panel._orig_duration) < 1e-6
+          and panel.media_duration() == panel._orig_duration and tail == panel._orig_duration,
+          f"{panel.timeline.duration} {panel._orig_duration} {tail}")
+    panel._orig_duration = real_orig
+    panel.show_cut_marks("")
+    panel._on_duration(panel.player.duration())
 
     # ----- 2. 再開一次：直接用快取 -----
-    gen = panel.proxy_maker.generation
     panel.open_video(small)
-    wait_until(lambda: panel.proxy_maker.generation > gen and panel.proxy_note == "", 20000)
-    gen = panel.proxy_maker.generation
+    wait_until(lambda: panel.proxy_note == "", 20000)
+    thread = panel.proxy_maker._thread
     panel.open_video(big)
     check("同一支再開：直接播代理檔、不再做一次", source(panel) == made and panel.proxy_path == made
-          and panel.proxy_maker.generation == gen and "編輯用代理檔" in panel.info_label.text(),
-          f"{source(panel)} {panel.proxy_maker.generation} {gen}")
+          and panel.proxy_maker._thread is thread and "編輯用代理檔" in panel.info_label.text(),
+          f"{source(panel)} {panel.proxy_maker._thread} {thread}")
     wait_until(lambda: panel.player.duration() > 0, 10000)
     wait(100)
 
@@ -166,10 +180,10 @@ else:
     check("記在這次的設定裡（qt_proxy=False），不寫回 config.json（Qt 預覽版不寫設定檔）",
           cfg.get("qt_proxy") is False and win.config_data.get("qt_proxy") is False
           and os.stat(config.CONFIG_PATH) == config_stat)
-    gen = panel.proxy_maker.generation
+    thread = panel.proxy_maker._thread
     panel.proxy_box.setChecked(True)
     check("再打開：快取有、立刻換過去（不再做）", panel.proxy_path == made and source(panel) == made
-          and panel.proxy_maker.generation == gen and cfg.get("qt_proxy") is True)
+          and panel.proxy_maker._thread is thread and cfg.get("qt_proxy") is True)
     wait_until(lambda: panel.player.mediaStatus() == QMediaPlayer.MediaStatus.LoadedMedia
                and abs(panel.player.position() - 3300) < 150, 10000)
     check("換過去位置一樣", abs(panel.player.position() - 3300) < 150, str(panel.player.position()))
@@ -198,14 +212,18 @@ else:
           and "代理檔" not in panel.info_label.text(), f"{os.listdir(cache)} {panel.info_label.text()}")
 
     # ----- 6. 做到一半換片子 -----
+    # 換到一支快取裡已經有代理檔的（big）：不會再開新的工作，舊的要靠 open_video 自己取消
     panel.open_video(big2)
     wait_until(lambda: "正在做代理檔" in panel.info_label.text(), 20000)
-    panel.open_video(small)
-    wait_until(lambda: panel.proxy_note == "", 20000)
-    wait(3000)
-    check("做到一半換片子：舊的不會換上來、沒留下 .tmp、也沒進快取",
-          source(panel) == small and panel.proxy_path == "" and not tmp_files()
-          and proxy.cached_proxy(big2, cache) is None, f"{source(panel)} {tmp_files()}")
+    old_thread, old_gen = panel.proxy_maker._thread, panel.proxy_maker.generation
+    panel.open_video(big)
+    check("做到一半換片子：舊的背景工作 5 秒內停掉（不是做完才停）、沒進快取",
+          wait_until(lambda: not old_thread.is_alive(), 5000) and proxy.cached_proxy(big2, cache) is None)
+    panel.proxy_maker.ready.emit(old_gen, proxy.cache_path(big2, cache), 30.0)  # 萬一舊的結果還是晚到了
+    wait(500)
+    check("舊的結果晚到 → 丟掉：還是播新開的那支的代理檔、沒留下 .tmp",
+          source(panel) == made and panel.proxy_path == made and not tmp_files(),
+          f"{source(panel)} {tmp_files()}")
 
     # ----- 7. 做不成、播不了 -----
     real_load = proxy.load_proxy
@@ -241,11 +259,10 @@ else:
     # ----- 8. config 關著 -----
     win2 = qt_app.MainWindow({"subtitle_style": {}, "qt_proxy": False})
     panel2 = win2.player_panel
-    gen = panel2.proxy_maker.generation
     panel2.open_video(big)
     check("config 的 qt_proxy 是 False：沒勾、播原檔、不做代理檔",
           not panel2.proxy_box.isChecked() and source(panel2) == big and panel2.proxy_path == ""
-          and panel2.proxy_maker.generation == gen)
+          and panel2.proxy_maker._thread is None)
     win2.close()
 
     shutil.rmtree(tmp, ignore_errors=True)

@@ -878,7 +878,9 @@ class ProxyMaker(QObject):
         return gen
 
     def cancel(self):
+        """取消還在做的，並換編號：取消前一刻剛好送出的結果也會被當成舊的丟掉。"""
         self._cancel.set()
+        self.generation += 1
 
     def stop(self, timeout=5.0):
         """取消並等背景工作收尾（ffmpeg 每半秒回報一次進度，取消最慢半秒內生效）。"""
