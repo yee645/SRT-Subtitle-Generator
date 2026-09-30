@@ -27,6 +27,13 @@
   手；沒拖動就放開＝點選（放開時才跳到那句開頭）。
 - 選取後 ←／→ 整句移動 `NUDGE_SEC`，按住 Shift 移動 `NUDGE_BIG_SEC`。
 - 都走同一個 `cueTimesChanged`，所以復原／重做與存檔不用另外處理。
+
+第 5 項第一階段（剪點可視化）：
+
+- `set_cut_marks(剪點)`：`subtitle/cutmarks.py` 算出來「會剪掉的那幾段」畫成半透明
+  紅色區塊，蓋過縮圖、波形與字幕列（被剪到的字幕看得出來），兩側畫剪點線；尺規列
+  底下一條紅線，拉遠時也找得到。滑鼠停在上面顯示原因與剪掉幾秒。
+- 只是畫：滑鼠照舊由時間軸自己處理（點擊、拖曳字幕不受影響），也不改字幕。可拖、可停用是下一階段。
 """
 
 from __future__ import annotations
@@ -124,6 +131,9 @@ def _palette_colors(view):
         "cue_text": QColor("#101010"),
         "playhead": QColor("#e0403a"),
         "note": QColor(text.red(), text.green(), text.blue(), 170),
+        # 剪點：半透明紅（深色底要亮一點才看得到），邊線不透明
+        "cut": QColor(255, 90, 90, 80) if dark else QColor(220, 40, 40, 64),
+        "cut_edge": QColor("#ff6b6b") if dark else QColor("#c62828"),
     }
 
 
@@ -274,6 +284,8 @@ class TimelineView(QGraphicsView):
         self.cue_bg.setPen(QPen(Qt.NoPen))
         self.scene_.addItem(self.cue_bg)
         self.cue_items = []
+        self.cut_marks = []        # set_cut_marks 傳進來的剪點（複本）
+        self.cut_items = []
         self.playhead = QGraphicsLineItem()
         self.playhead.setZValue(10)
         self.scene_.addItem(self.playhead)
@@ -310,6 +322,16 @@ class TimelineView(QGraphicsView):
             self.selected = -1
         self._edge_drag = self._drag_times = None
         self._build_cues()
+
+    def set_cut_marks(self, marks):
+        """換一組剪點（cutmarks.plan 的 marks；空清單＝不顯示）。"""
+        self.cut_marks = [dict(m) for m in (marks or [])
+                          if float(m["end"]) > float(m["start"])]
+        self._build_cut_marks()
+
+    def cut_rects(self):
+        """每一段剪點在場景裡的矩形（給測試用；順序同 self.cut_marks）。"""
+        return [item.rect() for item in self.cut_items]
 
     def select_cue(self, index, seek=True):
         """選取第 index 句（-1＝取消）；seek 時跳到那句開頭。"""
@@ -458,6 +480,7 @@ class TimelineView(QGraphicsView):
         if event.type() == QEvent.Type.PaletteChange:
             self.colors = _palette_colors(self)
             self._build_cues()
+            self._build_cut_marks()
             self.scene_.update()
 
     def wheelEvent(self, event):  # noqa: N802
@@ -604,12 +627,41 @@ class TimelineView(QGraphicsView):
         self.cue_bg.setBrush(QBrush(self.colors["row"]))
         self.playhead.setPen(QPen(self.colors["playhead"], 2))
         self._build_cues()
+        self._build_cut_marks()
         self.set_position(self.position_ms, follow=False)
 
     def _build_cues(self):
         for item, _label in self.cue_items:
             self.scene_.removeItem(item)  # 文字是它的子項目，會一起拿掉
         self.cue_items = [self._make_cue_item(index, cue) for index, cue in self.cues]
+
+    def _build_cut_marks(self):
+        for item in self.cut_items:
+            self.scene_.removeItem(item)  # 邊線是子項目，會一起拿掉
+        self.cut_items = [self._make_cut_item(m) for m in self.cut_marks]
+
+    def _make_cut_item(self, mark):
+        pps = self.px_per_sec
+        start, end = float(mark["start"]), float(mark["end"])
+        top = ROW_Y["thumbs"]
+        # 再短的剪點也至少 2 像素寬，拉到最遠也看得到
+        rect = QRectF(start * pps, top, max((end - start) * pps, 2.0), TOTAL_H - top)
+        item = QGraphicsRectItem(rect)
+        item.setBrush(QBrush(self.colors["cut"]))
+        item.setPen(QPen(Qt.NoPen))
+        item.setZValue(3)  # 在字幕塊上面（被剪到的字幕看得出來）、播放頭底下
+        edge = QPen(self.colors["cut_edge"], 1.5, Qt.DashLine)  # 虛線：跟實線的播放頭（也是紅的）分得出來
+        for x in (rect.left(), rect.right()):
+            QGraphicsLineItem(x, top, x, TOTAL_H, item).setPen(edge)
+        # 尺規列底下的紅線：拉遠時一眼看出哪裡有剪
+        bar = QGraphicsRectItem(rect.left(), ROW_Y["ruler"] + RULER_H - 4, rect.width(), 4, item)
+        bar.setBrush(QBrush(self.colors["cut_edge"]))
+        bar.setPen(QPen(Qt.NoPen))
+        reasons = "\n".join(f"・{r}" for r in mark.get("reasons") or ())
+        item.setToolTip(f"剪掉 {end - start:.2f} 秒（{tick_label(start, 0.1)} → {tick_label(end, 0.1)}）"
+                        + (f"\n{reasons}" if reasons else ""))
+        self.scene_.addItem(item)
+        return item
 
     def _refresh_cue(self, index):
         """只重畫一句（拖曳中每次滑鼠移動都會呼叫；上千句時不能每次全部重建）。"""

@@ -140,7 +140,9 @@ class MainWindow(QMainWindow):
         note.setContentsMargins(12, 8, 12, 0)
         layout.addWidget(note)
         # 字幕樣式與 Tk 版同一份（config 的 subtitle_style），疊加層照燒錄的規則畫。
-        self.player_panel = PlayerPanel(style=self.config_data.get("subtitle_style"))
+        # 剪點參數（停頓門檻、相似度…）也是同一份 config，畫出來的就是一般版會剪的。
+        self.player_panel = PlayerPanel(style=self.config_data.get("subtitle_style"),
+                                        config=self.config_data)
         layout.addWidget(self.player_panel, 1)
         return page
 

@@ -314,6 +314,10 @@ if old_app_src is not None:
         # 3.0 第 4 項第二階段：拖曳字幕塊的邊改時間的規則（不重疊鄰句、最短
         # 長度、片頭片尾、吸附），零 GUI 依賴，時間軸只換算像素（全新檔案）。
         "subtitle/cueedit.py",
+        # 3.0 第 5 項第一階段：三種自動剪輯「會剪掉哪幾段」算成時間區間給時間
+        # 軸畫（全新檔案，零 GUI 依賴）；retakes.py 只把 apply_retake_removal
+        # 裡算保留片段的那段抽成 retake_keep_segments 共用，行為不變（測試比對）。
+        "subtitle/cutmarks.py", "subtitle/retakes.py",
         # 3.0 第 2 項第二階段：burn_layout（預覽照燒錄的位置與大小畫）。
         # 與 cues_to_ass 同檔、共用對齊與邊距的算法；cues_to_ass 只把原本
         # 內嵌的邊距算式換成同一個函式，輸出逐字相同（測試比對）。
