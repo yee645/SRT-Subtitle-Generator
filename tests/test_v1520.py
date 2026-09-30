@@ -318,6 +318,9 @@ if old_app_src is not None:
         # 軸畫（全新檔案，零 GUI 依賴）；retakes.py 只把 apply_retake_removal
         # 裡算保留片段的那段抽成 retake_keep_segments 共用，行為不變（測試比對）。
         "subtitle/cutmarks.py", "subtitle/retakes.py",
+        # 3.0 第 6 項：代理檔（判斷要不要做、ffmpeg 轉成短邊 540＋關鍵影格密、
+        # 快取與清理），零 GUI 依賴，Qt 播放器只決定什麼時候換著播（全新檔案）。
+        "subtitle/proxy.py",
         # 3.0 第 2 項第二階段：burn_layout（預覽照燒錄的位置與大小畫）。
         # 與 cues_to_ass 同檔、共用對齊與邊距的算法；cues_to_ass 只把原本
         # 內嵌的邊距算式換成同一個函式，輸出逐字相同（測試比對）。

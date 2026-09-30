@@ -150,6 +150,8 @@ class MainWindow(QMainWindow):
         if self.player_panel is not None and not self.player_panel.maybe_discard():
             event.ignore()
             return
+        if self.player_panel is not None:
+            self.player_panel.shutdown()
         super().closeEvent(event)
 
 
