@@ -86,7 +86,7 @@ else:
     check("兩段剪點（零長度的不畫）", len(rects) == 2 and len(view.cut_marks) == 2, str(rects))
     check("矩形＝秒數×每秒像素，從縮圖列頂端蓋到字幕列底端",
           [(r.left(), r.width(), r.top(), r.bottom()) for r in rects]
-          == [(32.0, 136.0, top, tl.TOTAL_H), (340.0, 40.0, top, tl.TOTAL_H)],
+          == [(32.0, 136.0, top, tl.ROW_Y["cues"] + tl.CUE_H), (340.0, 40.0, top, tl.ROW_Y["cues"] + tl.CUE_H)],
           str([(r.left(), r.width(), r.top(), r.bottom()) for r in rects]))
     check("在字幕塊上面、播放頭底下（被剪到的字幕看得出來）",
           all(item.zValue() > max(c[0].zValue() for c in view.cue_items)
@@ -197,6 +197,7 @@ else:
     wait(50)
     duration = panel.player.duration() / 1000.0
     want = cutmarks.plan("jumpcut", panel.cues, duration)
+    want["marks"] = cutmarks.apply_overrides(want["marks"], {})  # 沒有微調：只多 edited=False
     check("開了影片（知道片長）→ 重算，不再提醒；時間軸畫的就是 cutmarks.plan 的結果",
           panel.timeline.cut_marks == want["marks"] and panel.cut_label.text() == cutmarks.summary(want)
           and "還沒開影片" not in panel.cut_label.text(), f"{panel.cut_label.text()} {panel.timeline.cut_marks}")
@@ -206,6 +207,7 @@ else:
     combo.setCurrentIndex(combo.findData("review"))  # 使用者自己在選單上換
     wait(30)
     rv = cutmarks.plan("review", panel.cues, duration)
+    rv["marks"] = cutmarks.apply_overrides(rv["marks"], {})
     check("在選單上換成審片建議 → 立刻重畫（含片尾 15.5→20 的冷場）",
           panel.timeline.cut_marks == rv["marks"] and rv["marks"][-1]["end"] == round(duration, 3)
           and panel.cut_label.text().startswith("審片建議："), panel.cut_label.text())
