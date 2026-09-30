@@ -33,7 +33,7 @@
 - `set_cut_marks(剪點)`：`subtitle/cutmarks.py` 算出來「會剪掉的那幾段」畫成半透明
   紅色區塊，蓋過縮圖、波形與字幕列（被剪到的字幕看得出來），兩側畫剪點線；尺規列
   底下一條紅線，拉遠時也找得到。滑鼠停在上面顯示原因與剪掉幾秒。
-- 只是畫：不收滑鼠（點擊、拖曳字幕照舊），也不改字幕。可拖、可停用是下一階段。
+- 只是畫：滑鼠照舊由時間軸自己處理（點擊、拖曳字幕不受影響），也不改字幕。可拖、可停用是下一階段。
 """
 
 from __future__ import annotations
@@ -650,8 +650,7 @@ class TimelineView(QGraphicsView):
         item.setBrush(QBrush(self.colors["cut"]))
         item.setPen(QPen(Qt.NoPen))
         item.setZValue(3)  # 在字幕塊上面（被剪到的字幕看得出來）、播放頭底下
-        item.setAcceptedMouseButtons(Qt.NoButton)
-        edge = QPen(self.colors["cut_edge"], 1.5)
+        edge = QPen(self.colors["cut_edge"], 1.5, Qt.DashLine)  # 虛線：跟實線的播放頭（也是紅的）分得出來
         for x in (rect.left(), rect.right()):
             QGraphicsLineItem(x, top, x, TOTAL_H, item).setPen(edge)
         # 尺規列底下的紅線：拉遠時一眼看出哪裡有剪

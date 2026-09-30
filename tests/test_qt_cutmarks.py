@@ -94,6 +94,9 @@ else:
     edges = [c for c in view.cut_items[0].childItems() if isinstance(c, QGraphicsLineItem)]
     check("兩側各一條剪點線", sorted(round(e.line().x1(), 1) for e in edges) == [32.0, 168.0],
           str([e.line() for e in edges]))
+    check("剪點線是虛線、播放頭是實線（兩個都是紅色，靠線型分）",
+          all(e.pen().style() == Qt.DashLine for e in edges)
+          and view.playhead.pen().style() == Qt.SolidLine, str([e.pen().style() for e in edges]))
     tip = view.cut_items[1].toolTip()
     check("滑鼠停上去：剪掉幾秒、從哪到哪、每個原因一行",
           tip == "剪掉 1.00 秒（0:08.5 → 0:09.5）\n・段落之間沒講話的空檔\n・冷場：（冷場 1.0 秒）", repr(tip))
