@@ -36,6 +36,12 @@ Tk 版的「預覽」是 Canvas 畫的假畫面（`gui/preview_panel.py`），�
 （`cutmarks.render`，跟一般版的跳剪同一個裁切引擎），進度寫在剪點那一行；原始影片
 與目前的字幕都不動。
 
+代理檔（第 6 項）：短邊 1080 以上的影片，編輯時換成短邊 540、關鍵影格密的代理檔播
+（`subtitle/proxy.py`），跳轉快很多；快取裡沒有就先用原檔、背景做一份，做好了在同一
+個位置無縫換過去。縮圖、波形、剪點與「照剪點輸出」一律用原檔，時間以原檔的片長為準。
+「編輯用代理檔」可以關掉（讀 config 的 `qt_proxy`，預設開；Qt 預覽版還不寫回
+config.json，關掉只算這一次）。
+
 還沒做：與字幕清單雙向同步。見 `docs/ROADMAP_3.0.md`。
 """
 import os
@@ -49,13 +55,15 @@ from PySide6.QtGui import (
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QGraphicsItem, QGraphicsScene, QGraphicsView,
+    QCheckBox, QComboBox, QFileDialog, QGraphicsItem, QGraphicsScene, QGraphicsView,
     QHBoxLayout, QLabel, QMessageBox, QPushButton, QSlider, QVBoxLayout,
     QWidget,
 )
 
+from gui_qt import timeline as timeline_mod
 from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
 from subtitle import cueedit, cutmarks
+from subtitle import proxy as proxy_mod
 from subtitle.cuetime import CueIndex
 from subtitle.exporter import burn_layout, dynamic_frame, split_emphasis_segments
 from subtitle.importer import load_subtitle_file
@@ -205,6 +213,11 @@ class PlayerPanel(QWidget):
         self.history = cueedit.EditHistory()
         self._saved_cues = []   # 上次存檔（或載入）時的樣子：拿來算「改過幾處」
         self._save_note = ""    # 剛存完檔的說明（存到哪、備份在哪），下一次修改就拿掉
+        self.media_path = ""    # 開的影片（原檔）；剪片、縮圖、波形都用它
+        self.proxy_path = ""    # 目前播的代理檔；空字串＝播原檔
+        self.proxy_note = ""    # 代理檔的狀況（寫在影片名稱後面）
+        self._orig_duration = 0.0  # 原檔片長（秒）；播代理檔時剪點與輸出照這個算
+        self._pending_seek = None  # 換片源（原檔⇄代理檔）後要回到的 (位置 ms, 是否在播)
 
         self.scene = QGraphicsScene(self)
         self.view = _VideoView(self.scene)
@@ -247,6 +260,11 @@ class PlayerPanel(QWidget):
         self.zoom_out_btn = QPushButton("拉遠")
         self.zoom_in_btn = QPushButton("拉近")
         self.fit_btn = QPushButton("整支")
+        self.proxy_box = QCheckBox("編輯用代理檔")
+        self.proxy_box.setToolTip("1080p 以上的影片編輯時改播小一號、好跳轉的版本（第一次開要先做一份，"
+                                  "放在 proxy_cache）；輸出一律用原檔")
+        self.proxy_box.setChecked(bool(self._config.get("qt_proxy", True)))
+        self.proxy_maker = ProxyMaker(self)
         for w in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn):
             w.setToolTip("時間軸縮放（也可以按住 Ctrl 轉滾輪）")
 
@@ -275,6 +293,8 @@ class PlayerPanel(QWidget):
 
         footer = QHBoxLayout()
         footer.addWidget(self.info_label, 1)
+        footer.addWidget(self.proxy_box)
+        footer.addSpacing(12)
         for w in (self.undo_btn, self.redo_btn, self.save_btn):
             footer.addWidget(w)
         footer.addSpacing(12)
@@ -328,6 +348,10 @@ class PlayerPanel(QWidget):
         self.exporter.failed.connect(self._on_export_failed)
         self.timeline.cutMarkToggled.connect(self._on_cut_toggled)
         self.timeline.cutMarkChanged.connect(self._on_cut_changed)
+        self.proxy_box.toggled.connect(self._on_proxy_toggled)
+        self.proxy_maker.progress.connect(self._on_proxy_progress)
+        self.proxy_maker.ready.connect(self._on_proxy_ready)
+        self.proxy_maker.failed.connect(self._on_proxy_failed)
         self.loader.peaksReady.connect(self._on_peaks)
         self.loader.filmstripReady.connect(self._on_filmstrip)
         self.loader.failed.connect(self._on_timeline_failed)
@@ -335,10 +359,17 @@ class PlayerPanel(QWidget):
     # ---- 對外 ----------------------------------------------------------
 
     def open_video(self, path):
-        self.player.setSource(QUrl.fromLocalFile(os.path.abspath(path)))
+        path = os.path.abspath(path)
+        self.media_path = path
+        self.proxy_maker.cancel()
+        self.proxy_path, self.proxy_note = "", ""
+        self._orig_duration = 0.0
+        self._pending_seek = None
+        source = self._find_proxy() if self.proxy_box.isChecked() else ""
+        self.player.setSource(QUrl.fromLocalFile(source or path))
         self.play_btn.setEnabled(True)
         self.slider.setEnabled(True)
-        self.info_label.setText(f"影片：{os.path.basename(path)}" + self._subs_note())
+        self._refresh_info()
         # 時間軸：清掉上一支的資料，背景重新抽（舊的工作取消、晚到的結果丟掉）
         self._fitted = False
         self.timeline.reset("正在分析波形…", "正在抽縮圖…")
@@ -388,7 +419,7 @@ class PlayerPanel(QWidget):
             self.cut_reset_btn.setEnabled(False)
             self._update_export_button()
             return
-        duration = max(self.player.duration(), 0) / 1000.0
+        duration = self.media_duration()
         plan = cutmarks.plan(source, self.cues, duration, self._config)
         plan["marks"] = cutmarks.apply_overrides(plan["marks"], self.cut_overrides)
         self.cut_plan = cutmarks.recount(plan)
@@ -403,7 +434,7 @@ class PlayerPanel(QWidget):
         self._update_export_button()
 
     def _update_export_button(self):
-        ready = (self.cut_plan is not None and self.player.duration() > 0
+        ready = (self.cut_plan is not None and self.media_duration() > 0
                  and any(m.get("enabled", True) for m in self.cut_plan["marks"]))
         self.export_btn.setEnabled(ready and not self.exporter.busy)
 
@@ -414,10 +445,9 @@ class PlayerPanel(QWidget):
         """
         if self.exporter.busy or self.cut_plan is None:
             return False
-        media = self.player.source().toLocalFile()
+        media = self.media_path  # 播的可能是代理檔，剪一律用原檔
         try:
-            plan = cutmarks.export_plan(self.cut_plan["marks"], self.player.duration() / 1000.0,
-                                        self.cues)
+            plan = cutmarks.export_plan(self.cut_plan["marks"], self.media_duration(), self.cues)
         except ValueError as exc:
             self._show_export_error(str(exc))
             return False
@@ -547,9 +577,11 @@ class PlayerPanel(QWidget):
         return note
 
     def _refresh_info(self):
-        name = os.path.basename(self.player.source().toLocalFile())
-        self.info_label.setText((f"影片：{name}" if name else "還沒開啟影片。")
-                                + self._subs_note())
+        name = os.path.basename(self.media_path)
+        video = f"影片：{name}" if name else "還沒開啟影片。"
+        if name and self.proxy_note:
+            video += f"（{self.proxy_note}）"
+        self.info_label.setText(video + self._subs_note())
         self._update_edit_buttons()
 
     def _update_edit_buttons(self):
@@ -627,7 +659,7 @@ class PlayerPanel(QWidget):
 
     def _on_duration(self, ms):
         self.slider.setRange(0, ms)
-        self.timeline.set_duration(ms / 1000.0)
+        self.timeline.set_duration(self.media_duration())
         if ms > 0 and not self._fitted:
             # 一開片子先讓整支塞滿時間軸，要細看再拉近
             self._fitted = True
@@ -667,12 +699,108 @@ class PlayerPanel(QWidget):
         # 剛載入時是「停止」狀態，停止狀態下跳轉不會出畫格，畫面一片黑、
         # 只有字幕（截圖實際看到）。載入好就進「暫停」：第一格出現，之後
         # 拖曳跳轉也看得到畫面。
-        if (status == QMediaPlayer.MediaStatus.LoadedMedia
-                and self.player.playbackState() == QMediaPlayer.PlaybackState.StoppedState):
+        if status != QMediaPlayer.MediaStatus.LoadedMedia:
+            return
+        if self._pending_seek is not None:
+            # 剛從原檔換成代理檔（或反過來）：回到換之前的位置，原本在播就接著播
+            ms, playing = self._pending_seek
+            self._pending_seek = None
+            self.player.pause()
+            self.player.setPosition(ms)
+            if playing:
+                self.player.play()
+            return
+        if self.player.playbackState() == QMediaPlayer.PlaybackState.StoppedState:
             self.player.pause()
 
     def _on_error(self, _err, message):
+        if self.proxy_path:
+            # 代理檔播不了（壞掉、被刪）：退回原檔，不要讓使用者看著一片黑
+            self.proxy_maker.cancel()
+            self.proxy_note = f"代理檔播不了（{message}），改用原檔"
+            self._swap_source("")
+            self._refresh_info()
+            return
         self.info_label.setText(f"無法播放：{message}")
+
+    # ---- 代理檔 --------------------------------------------------------
+
+    def media_duration(self):
+        """原檔的片長（秒）。播代理檔時照原檔量到的，兩者可能差幾十毫秒。"""
+        if self.proxy_path and self._orig_duration > 0:
+            return self._orig_duration
+        return max(self.player.duration(), 0) / 1000.0
+
+    def _proxy_cache_dir(self):
+        root = timeline_mod.CACHE_ROOT
+        return os.path.join(root, proxy_mod.CACHE_DIR) if root else proxy_mod.CACHE_DIR
+
+    def _find_proxy(self):
+        """
+        快取裡已經有代理檔就回傳它（並記下要播它）；沒有就背景做一份，回傳空字串（先播原檔）。
+        """
+        found = proxy_mod.cached_proxy(self.media_path, self._proxy_cache_dir())
+        info = proxy_mod.probe_video(self.media_path) if found else None
+        if found and info and info["duration"] > 0:
+            self.proxy_path = found
+            self._orig_duration = info["duration"]
+            self.proxy_note = "編輯用代理檔，輸出用原檔"
+            return found
+        self.proxy_note = "正在準備代理檔…"
+        self.proxy_maker.load(self.media_path, self._proxy_cache_dir())
+        return ""
+
+    def _swap_source(self, proxy_path):
+        """換成代理檔（proxy_path）或換回原檔（空字串），停在同一個位置、保持播放狀態。"""
+        if proxy_path == self.proxy_path:
+            return
+        playing = self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        self._pending_seek = (self.player.position(), playing)
+        self.proxy_path = proxy_path
+        self.player.setSource(QUrl.fromLocalFile(proxy_path or self.media_path))
+
+    def _on_proxy_toggled(self, on):
+        # 只記在這次開啟的設定裡：Qt 預覽版不寫回 config.json（跟一般版同時開時會互相蓋掉，
+        # 見 test_qt_skeleton），要等兩邊的設定寫法說好了才記得住。
+        self._config["qt_proxy"] = bool(on)
+        if not self.media_path:
+            return
+        if on:
+            self.proxy_note = ""
+            found = self._find_proxy()
+            if found:
+                self.proxy_path = ""  # _find_proxy 先記了；交給 _swap_source 真的換
+                self._swap_source(found)
+        else:
+            self.proxy_maker.cancel()
+            self.proxy_note = ""
+            self._swap_source("")
+        self._refresh_info()
+
+    def _on_proxy_progress(self, gen, ratio):
+        if gen == self.proxy_maker.generation:
+            self.proxy_note = f"正在做代理檔 {int(ratio * 100)}%，先用原檔"
+            self._refresh_info()
+
+    def _on_proxy_ready(self, gen, path, duration):
+        if gen != self.proxy_maker.generation or not self.proxy_box.isChecked():
+            return
+        if not path:  # 不到 1080p，原檔就夠快
+            self.proxy_note = ""
+        else:
+            self._orig_duration = duration
+            self.proxy_note = "編輯用代理檔，輸出用原檔"
+            self._swap_source(path)
+        self._refresh_info()
+
+    def _on_proxy_failed(self, gen, message):
+        if gen == self.proxy_maker.generation:
+            self.proxy_note = f"代理檔沒做成（{message}），用原檔編輯"
+            self._refresh_info()
+
+    def shutdown(self):
+        """關視窗前：停掉還在做的代理檔（不留下做一半的 ffmpeg）。"""
+        self.proxy_maker.stop()
 
     def _show_at(self, ms):
         seconds = ms / 1000.0
@@ -721,6 +849,59 @@ class PlayerPanel(QWidget):
 
     def _place_subtitle(self):
         place_subtitle(self.subtitle_item, self._video_rect(), self._style)
+
+
+class ProxyMaker(QObject):
+    """
+    在背景執行緒做代理檔。每次 load() 是新的一次，舊的取消、晚到的結果（編號不是
+    最新的）丟掉——跟時間軸的 TimelineLoader 同一套作法。
+    """
+
+    progress = Signal(int, float)
+    ready = Signal(int, str, float)  # 編號、代理檔路徑（空字串＝不需要）、原檔片長
+    failed = Signal(int, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.generation = 0
+        self._cancel = threading.Event()
+        self._thread = None
+
+    def load(self, media_path, cache_dir):
+        self.cancel()
+        self._cancel = threading.Event()
+        self.generation += 1
+        gen, cancel = self.generation, self._cancel
+        self._thread = threading.Thread(target=self._run, args=(gen, cancel, media_path, cache_dir),
+                                        daemon=True)
+        self._thread.start()
+        return gen
+
+    def cancel(self):
+        """取消還在做的，並換編號：取消前一刻剛好送出的結果也會被當成舊的丟掉。"""
+        self._cancel.set()
+        self.generation += 1
+
+    def stop(self, timeout=5.0):
+        """取消並等背景工作收尾（ffmpeg 每半秒回報一次進度，取消最慢半秒內生效）。"""
+        self.cancel()
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def _run(self, gen, cancel, media_path, cache_dir):
+        try:
+            info = proxy_mod.probe_video(media_path)
+            path = proxy_mod.load_proxy(
+                media_path, cache_dir, info=info, cancel=cancel.is_set,
+                progress_cb=lambda ratio: None if cancel.is_set() else self.progress.emit(gen, ratio))
+        except proxy_mod.ProxyCancelled:
+            return
+        except (proxy_mod.ProxyError, OSError) as exc:
+            if not cancel.is_set():
+                self.failed.emit(gen, str(exc))
+            return
+        if not cancel.is_set():
+            self.ready.emit(gen, path or "", float(info["duration"]) if info else 0.0)
 
 
 class CutExporter(QObject):
