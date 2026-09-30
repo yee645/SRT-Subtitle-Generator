@@ -27,8 +27,19 @@
 * `drag_mark_edge`：拖剪點的左右邊。不能拖過相鄰的剪點、不出片頭片尾、至少
   `MIN_CUT` 秒；以毫秒為單位（同 `cueedit`）。
 * `recount`／`summary`：只算啟用中的剪點；停用幾處、調過幾處另外寫出來。
-* `kept_segments`：啟用中的剪點以外＝要保留的片段（下一階段照時間軸輸出用）。
+* `kept_segments`：啟用中的剪點以外＝要保留的片段。
+
+第三階段：**照時間軸上的剪點輸出**。
+
+* `export_plan(剪點, 片長, 字幕)`：要保留的片段＋對齊到剪後時間軸的字幕。
+* `remap_time`／`remap_cues`：落在剪點**裡面**的時間對到接縫（剪點開始那一刻在剪後的
+  位置）。整句都在剪點裡的字幕拿掉，只被剪到一部分的縮短；逐字時間跟著對齊。
+  jumpcut.remap_cues 的剪點只在停頓裡，字幕不會落在剪點中間，所以它沒處理這種情況；
+  使用者拖過剪點邊以後就會發生，這裡另外處理，不動 jumpcut 的行為。
+* `render`：用跳剪與去重複共用的裁切引擎 `jumpcut.cut_media_segments` 真的剪。
 """
+
+import os
 
 from . import jumpcut, retakes, review
 
@@ -272,6 +283,83 @@ def kept_segments(marks, duration):
     if duration and float(duration) - cursor > _EPS:
         keep.append((round(cursor, 3), round(float(duration), 3)))
     return keep
+
+
+MIN_CUE = 0.05  # 剪後比這還短的字幕拿掉（幾乎整句都被剪掉）
+
+
+def remap_time(t, keep):
+    """
+    原始時間 t → 剪後的時間。keep 是要保留的 (開始, 結束)（依時間排序、不重疊）。
+    落在保留片段裡：照位置算；落在剪掉的地方：對到下一段保留片段的開頭（接縫）；
+    最後一段之後：剪後的片尾。
+    """
+    t = float(t)
+    new_start = 0.0
+    for start, end in keep:
+        if t < start:
+            return round(new_start, 3)  # 在這段之前的剪點裡：接縫
+        if t <= end:
+            return round(new_start + (t - start), 3)
+        new_start += end - start
+    return round(new_start, 3)
+
+
+def remap_cues(cues, keep, min_len=MIN_CUE):
+    """
+    字幕對齊到剪後的時間軸。回傳 (新字幕, 拿掉幾句)：剪後短於 min_len 秒的拿掉。
+    逐字時間（words）跟著對齊；其餘欄位不變。
+    """
+    out, dropped = [], 0
+    for cue in cues:
+        start, end = remap_time(cue["start"], keep), remap_time(cue["end"], keep)
+        if end - start < min_len - 1e-9:
+            dropped += 1
+            continue
+        new = dict(cue, start=start, end=end)
+        if cue.get("words"):
+            new["words"] = [dict(w, start=remap_time(w["start"], keep), end=remap_time(w["end"], keep))
+                            if "start" in w and "end" in w else dict(w) for w in cue["words"]]
+        out.append(new)
+    return out, dropped
+
+
+def export_plan(marks, duration, cues):
+    """
+    照啟用中的剪點算輸出：{"keep": 保留片段, "cues": 對齊後的字幕, "dropped": 拿掉幾句,
+    "cut_count": 剪幾處, "kept_seconds", "removed_seconds"}。
+    沒有啟用的剪點、剪完沒東西、片段太多（裁切引擎的上限）時 ValueError。
+    """
+    duration = float(duration or 0.0)
+    if duration <= 0:
+        raise ValueError("還不知道片長：先開影片")
+    on = [m for m in marks if m.get("enabled", True)]
+    if not on:
+        raise ValueError("沒有啟用中的剪點：沒有東西可剪")
+    keep = kept_segments(marks, duration)
+    if not keep:
+        raise ValueError("剪完什麼都不剩：請停用幾段剪點")
+    if len(keep) > jumpcut.MAX_SEGMENTS:
+        raise ValueError(f"要接起來的片段太多（{len(keep)} 段，上限 {jumpcut.MAX_SEGMENTS}）："
+                         "請停用一些剪點或調高門檻")
+    new_cues, dropped = remap_cues(cues, keep)
+    kept = round(sum(e - s for s, e in keep), 3)
+    return {"keep": keep, "cues": new_cues, "dropped": dropped, "cut_count": len(on),
+            "kept_seconds": kept, "removed_seconds": round(duration - kept, 3)}
+
+
+def suggest_output_path(media_path):
+    """建議輸出路徑：來源檔名加「_剪輯」。"""
+    base, ext = os.path.splitext(media_path)
+    return f"{base}_剪輯{ext or '.mp4'}"
+
+
+def render(media_path, plan, output_path, progress_cb=None):
+    """照 export_plan 的保留片段真的剪（ffmpeg）。回傳剪後秒數。"""
+    if os.path.abspath(media_path) == os.path.abspath(output_path):
+        raise ValueError("輸出檔不能跟原始影片同一個檔案")
+    return jumpcut.cut_media_segments(media_path, plan["keep"], output_path, progress_cb,
+                                      label=f"照時間軸剪掉 {plan['cut_count']} 處")
 
 
 def summary(result):
