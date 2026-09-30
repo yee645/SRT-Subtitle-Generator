@@ -18,7 +18,16 @@
 都有才用），沒有時把每一句當成一個「字」——冷場與重複拍攝只看段落的起訖與文字，
 結果不受影響；口頭禪只有在字幕帶逐字資料時才分得出是哪個字。
 
-這一階段只負責「看得到」；下一階段才是剪點可拖、可單獨停用。
+第一階段只負責「看得到」。第二階段加上**使用者的微調**，規則一樣放在這裡：
+
+* 每段剪點有 `key`（來源＋算出來時的起訖）與 `enabled`。使用者停用某一段、或拖了它
+  的邊，記成 `overrides[key]`；字幕改了、剪點重算時，`apply_overrides` 把還對得上
+  key 的微調套回去——停頓本身沒變的剪點，微調不會因為改了別句字幕就不見。剪點本身
+  變了（key 對不上）的微調就放掉：原本那段已經不存在了。
+* `drag_mark_edge`：拖剪點的左右邊。不能拖過相鄰的剪點、不出片頭片尾、至少
+  `MIN_CUT` 秒；以毫秒為單位（同 `cueedit`）。
+* `recount`／`summary`：只算啟用中的剪點；停用幾處、調過幾處另外寫出來。
+* `kept_segments`：啟用中的剪點以外＝要保留的片段（下一階段照時間軸輸出用）。
 """
 
 from . import jumpcut, retakes, review
@@ -34,6 +43,7 @@ SOURCE_LABELS = {
 }
 
 _EPS = 0.001  # 小於 1 毫秒的剪點不算（浮點誤差）
+MIN_CUT = 0.05  # 拖剪點的邊時，一段剪點至少多長（秒）
 
 
 def cut_spans(keep, duration):
@@ -62,8 +72,10 @@ def _marks(source, spans, reasons):
     for start, end in spans:
         why = [text for r_start, r_end, text in reasons
                if r_start < end - _EPS and r_end > start + _EPS] or [_FALLBACK_REASON]
-        marks.append({"source": source, "start": round(start, 3), "end": round(end, 3),
-                      "reasons": list(dict.fromkeys(why))})
+        start, end = round(start, 3), round(end, 3)
+        marks.append({"source": source, "start": start, "end": end,
+                      "reasons": list(dict.fromkeys(why)),
+                      "key": f"{source}:{start:.3f}-{end:.3f}", "enabled": True})
     return marks
 
 
@@ -173,14 +185,114 @@ def plan(source, cues, duration, config=None):
     return _BUILDERS[source](cues, float(duration or 0.0), config)
 
 
+def _ms(seconds):
+    return int(round(float(seconds) * 1000))
+
+
+def apply_overrides(marks, overrides):
+    """
+    把使用者的微調套回剪點：overrides 是 {key: {"enabled": bool, "start": 秒, "end": 秒}}
+    （欄位都可省略）。回傳新清單（不改傳進來的）；對不上 key 的微調不理。
+    套上去的剪點多一個 "edited": True（起訖跟算出來的不一樣時）。
+    """
+    out = []
+    for mark in marks:
+        mark = dict(mark)
+        change = (overrides or {}).get(mark.get("key"))
+        if change:
+            if "enabled" in change:
+                mark["enabled"] = bool(change["enabled"])
+            if "start" in change and "end" in change:
+                mark["start"], mark["end"] = round(float(change["start"]), 3), round(float(change["end"]), 3)
+        key_start, key_end = _key_times(mark)
+        mark["edited"] = key_start is not None and (
+            _ms(mark["start"]), _ms(mark["end"])) != (_ms(key_start), _ms(key_end))
+        out.append(mark)
+    return out
+
+
+def _key_times(mark):
+    try:
+        span = str(mark["key"]).rsplit(":", 1)[1]
+        start, end = span.split("-")
+        return float(start), float(end)
+    except (KeyError, IndexError, ValueError):
+        return None, None
+
+
+def drag_mark_edge(marks, index, edge, seconds, duration=None, min_len=MIN_CUT):
+    """
+    把第 index 段剪點的 edge（"start"／"end"）拖到 seconds，回傳合法的 (開始, 結束)。
+    不能拖過相鄰的剪點（依開始時間排序找鄰居）、不出 0～片長、至少 min_len 秒。
+    原本就超出界線的不會被硬拉回來，但也不能再往外拖。
+    """
+    if edge not in ("start", "end"):
+        raise ValueError(f"edge 只能是 'start' 或 'end'：{edge!r}")
+    me = marks[index]
+    start, end = _ms(me["start"]), _ms(me["end"])
+    min_ms = _ms(min_len)
+    prev_end = next_start = None
+    for i, other in enumerate(marks):
+        if i == index:
+            continue
+        o_start, o_end = _ms(other["start"]), _ms(other["end"])
+        if o_start < start or (o_start == start and i < index):
+            prev_end = o_end if prev_end is None else max(prev_end, o_end)
+        else:
+            next_start = o_start if next_start is None else min(next_start, o_start)
+    t = _ms(seconds)
+    if edge == "start":
+        low = 0 if prev_end is None else min(prev_end, start)
+        low = min(max(low, 0), start)
+        high = max(end - min_ms, low)
+        start = min(max(t, low), high)
+    else:
+        highs = [h for h in (next_start, _ms(duration) if duration else None) if h is not None]
+        high = max(min(highs), end) if highs else None
+        low = start + min_ms
+        end = max(t, low) if high is None else min(max(t, low), max(high, low))
+    return start / 1000.0, end / 1000.0
+
+
+def recount(result):
+    """照啟用中的剪點重算 removed_seconds（改 result 本身並回傳）。"""
+    result["removed_seconds"] = round(sum(m["end"] - m["start"] for m in result["marks"]
+                                          if m.get("enabled", True)), 3)
+    return result
+
+
+def kept_segments(marks, duration):
+    """啟用中的剪點以外＝要保留的 (開始, 結束) 片段（依時間排序）。"""
+    cuts = sorted((float(m["start"]), float(m["end"])) for m in marks if m.get("enabled", True))
+    keep, cursor = [], 0.0
+    for start, end in cuts:
+        if start - cursor > _EPS:
+            keep.append((round(cursor, 3), round(start, 3)))
+        cursor = max(cursor, end)
+    if duration and float(duration) - cursor > _EPS:
+        keep.append((round(cursor, 3), round(float(duration), 3)))
+    return keep
+
+
 def summary(result):
-    """一行摘要（狀態列用）。"""
+    """一行摘要（狀態列用）：只算啟用中的剪點；停用、調過的另外寫出來。"""
     label = SOURCE_LABELS[result["source"]]
-    if not result["marks"]:
+    marks = result["marks"]
+    if not marks:
         return f"{label}：{result['note'] or '沒有剪點'}"
-    text = f"{label}：{len(result['marks'])} 處，共剪掉 {result['removed_seconds']:.1f} 秒"
+    on = [m for m in marks if m.get("enabled", True)]
+    removed = sum(m["end"] - m["start"] for m in on)
+    text = f"{label}：{len(on)} 處，共剪掉 {removed:.1f} 秒"
+    extra = []
+    if len(on) < len(marks):
+        extra.append(f"停用 {len(marks) - len(on)} 處")
+    edited = sum(1 for m in marks if m.get("edited"))
+    if edited:
+        extra.append(f"調過 {edited} 處")
     if result["note"]:
-        text += f"（{result['note']}）"
+        extra.append(result["note"])
+    if extra:
+        text += "（" + "；".join(extra) + "）"
     return text
 
 
