@@ -12,6 +12,9 @@
    在剪點裡；審片建議保留的段落不被剪到。
 4. 原因、摘要、沒有剪點時的說明、逐字時間軸的來源。
 5. `retakes.retake_keep_segments` 抽出來之後，結果跟抽出來之前那段程式一模一樣。
+6. 第二階段：`apply_overrides`（停用、拖過的起訖套回重算後的剪點）、`drag_mark_edge`
+   （不過鄰段、不出片頭片尾、最短 0.05 秒）、`recount`／`summary` 只算啟用的、
+   `kept_segments`（全部啟用時＝跳剪真正保留的片段）。
 """
 import os
 import random
@@ -210,7 +213,8 @@ check("審片：開頭到第一段冷場結束（0→5.85）一段剪掉，原�
       and rv["marks"][0]["reasons"][1].startswith("冷場："), str(rv["marks"][0]))
 check("審片：段落之間 1 秒的空檔（粗剪兩側各留 0.15 秒）也剪，沒有具名原因就寫「空檔」",
       rv["marks"][1] == {"source": "review", "start": 8.15, "end": 8.85,
-                         "reasons": ["段落之間沒講話的空檔"]}, str(rv["marks"][1]))
+                         "reasons": ["段落之間沒講話的空檔"],
+                         "key": "review:8.150-8.850", "enabled": True}, str(rv["marks"][1]))
 check("每個來源的每一段剪點都至少有一個原因（滑鼠停上去不會是空的）",
       all(m["reasons"] for src in cutmarks.SOURCES for m in cutmarks.plan(src, CUES, 20.0)["marks"]))
 check("審片：片尾 17→20 的冷場也剪（需要片長）", spans(rv)[-1] == (17.15, 20.0), str(spans(rv)))
@@ -286,6 +290,64 @@ for _ in range(500):
     pad = rng.choice([0.0, 0.2, 1.0])
     same += retakes.retake_keep_segments(d, sel, pad) == old_keep(d, sel, pad)
 check("retake_keep_segments：500 組隨機資料跟抽出來前的程式結果完全相同", same == 500, str(same))
+
+# ----- 7. 第二階段：使用者的微調（停用、拖邊）-----
+jc = cutmarks.plan("jumpcut", CUES, 20.0)
+keys = [m["key"] for m in jc["marks"]]
+check("每段剪點有 key（來源＋算出來的起訖）、預設啟用",
+      keys == ["jumpcut:2.650-5.850", "jumpcut:10.150-13.350"]
+      and all(m["enabled"] is True for m in jc["marks"]), str(keys))
+over = {keys[0]: {"enabled": False}, keys[1]: {"start": 10.5, "end": 13.0}}
+applied = cutmarks.apply_overrides(jc["marks"], over)
+check("apply_overrides：第一段停用、第二段換成拖過的起訖並標 edited",
+      [(m["enabled"], m["start"], m["end"], m["edited"]) for m in applied]
+      == [(False, 2.65, 5.85, False), (True, 10.5, 13.0, True)], str(applied))
+check("apply_overrides 不改傳進來的清單", jc["marks"][0]["enabled"] is True and jc["marks"][1]["start"] == 10.15)
+check("apply_overrides：key 仍是算出來時的（再套一次同樣的微調結果一樣）",
+      cutmarks.apply_overrides(applied, over) == applied)
+check("對不上 key 的微調不理", cutmarks.apply_overrides(jc["marks"], {"jumpcut:1.000-2.000": {"enabled": False}})
+      == [dict(m, edited=False) for m in jc["marks"]])
+res = cutmarks.recount(dict(jc, marks=applied))
+check("recount：只算啟用中的剪點（13.0−10.5＝2.5 秒）", res["removed_seconds"] == 2.5, str(res["removed_seconds"]))
+check("摘要：只算啟用中的、另寫停用與調過幾處",
+      cutmarks.summary(res) == "停頓跳剪：1 處，共剪掉 2.5 秒（停用 1 處；調過 1 處）", cutmarks.summary(res))
+check("kept_segments：啟用中的剪點以外（停用那段不剪）",
+      cutmarks.kept_segments(applied, 20.0) == [(0.0, 10.5), (13.0, 20.0)],
+      str(cutmarks.kept_segments(applied, 20.0)))
+check("kept_segments：全部啟用＝跳剪真正保留的片段",
+      cutmarks.kept_segments(jc["marks"], 20.0)
+      == jumpcut.compute_keep_segments(20.0, jumpcut.find_cut_gaps(CUES, 1.2), 0.15)[0],
+      str(cutmarks.kept_segments(jc["marks"], 20.0)))
+# 字幕改了、剪點重算：沒變的那段微調留著，變了的那段放掉
+moved = [dict(c) for c in CUES]
+moved[3] = dict(moved[3], start=14.0, end=15.9)  # 第二段停頓變長
+again = cutmarks.apply_overrides(cutmarks.plan("jumpcut", moved, 20.0)["marks"], over)
+check("重算後：停頓沒變的第一段仍停用；停頓變了的第二段 key 對不上 → 微調放掉（照新算的）",
+      [(m["enabled"], m["start"], m["end"]) for m in again] == [(False, 2.65, 5.85), (True, 10.15, 13.85)],
+      str(again))
+
+M = [{"start": 2.0, "end": 4.0}, {"start": 6.0, "end": 8.0}, {"start": 10.0, "end": 11.0}]
+check("拖左邊：往左不能過上一段的結束（4.0）", cutmarks.drag_mark_edge(M, 1, "start", 3.0) == (4.0, 8.0))
+check("拖左邊：往右最多到結束前 0.05 秒", cutmarks.drag_mark_edge(M, 1, "start", 9.0) == (7.95, 8.0))
+check("拖右邊：不能過下一段的開始（10.0）", cutmarks.drag_mark_edge(M, 1, "end", 12.0) == (6.0, 10.0))
+check("拖右邊：往左最少留 0.05 秒", cutmarks.drag_mark_edge(M, 1, "end", 5.0) == (6.0, 6.05))
+check("第一段往左到 0 為止", cutmarks.drag_mark_edge(M, 0, "start", -3.0) == (0.0, 4.0))
+check("最後一段往右到片長為止", cutmarks.drag_mark_edge(M, 2, "end", 99.0, duration=12.5) == (10.0, 12.5))
+check("最後一段、不知道片長 → 不設上限", cutmarks.drag_mark_edge(M, 2, "end", 99.0) == (10.0, 99.0))
+check("中間照拖（毫秒為單位）", cutmarks.drag_mark_edge(M, 1, "start", 5.12345) == (5.123, 8.0))
+check("清單沒排序也照開始時間找鄰居",
+      cutmarks.drag_mark_edge([M[2], M[0], M[1]], 2, "end", 12.0) == (6.0, 10.0))
+over_l = [{"start": 2.0, "end": 6.5}, {"start": 6.0, "end": 8.0}]
+check("原本就重疊的不會被拉開，但也不能再往外拖",
+      cutmarks.drag_mark_edge(over_l, 1, "start", 5.0) == (6.0, 8.0)
+      and cutmarks.drag_mark_edge(over_l, 1, "start", 6.2) == (6.2, 8.0))
+check("停用的剪點也是鄰居（不能拖進停用的那段，免得重新啟用時重疊）",
+      cutmarks.drag_mark_edge([dict(M[0], enabled=False), M[1]], 1, "start", 1.0) == (4.0, 8.0))
+try:
+    cutmarks.drag_mark_edge(M, 0, "body", 1.0)
+    check("edge 只能是 start／end", False)
+except ValueError:
+    check("edge 只能是 start／end", True)
 
 print()
 if failures:

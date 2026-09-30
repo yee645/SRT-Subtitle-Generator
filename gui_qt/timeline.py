@@ -33,7 +33,17 @@
 - `set_cut_marks(剪點)`：`subtitle/cutmarks.py` 算出來「會剪掉的那幾段」畫成半透明
   紅色區塊，蓋過縮圖、波形與字幕列（被剪到的字幕看得出來），兩側畫剪點線；尺規列
   底下一條紅線，拉遠時也找得到。滑鼠停在上面顯示原因與剪掉幾秒。
-- 只是畫：滑鼠照舊由時間軸自己處理（點擊、拖曳字幕不受影響），也不改字幕。可拖、可停用是下一階段。
+- 只是畫：滑鼠照舊由時間軸自己處理（點擊、拖曳字幕不受影響），也不改字幕。
+
+第 5 項第二階段（剪點可停用、可拖）：
+
+- 字幕列底下多一條**剪點列**，每段剪點一個方塊：啟用是實心紅、停用是虛線空框（上面
+  的半透明區塊也跟著變成只剩虛線，看得出「這段不剪」）。
+- 點方塊 → `cutMarkToggled(第幾段, 是否啟用)`；按住左右邊拖 → 放開時送出
+  `cutMarkChanged(第幾段, 開始, 結束)`，拖曳中按 Esc 放棄。能拖到哪裡由
+  `cutmarks.drag_mark_edge` 決定；靠近播放頭或字幕的邊會吸附（剪在句子剛好結束
+  的地方最常用）。
+- 剪點的微調與字幕的時間分開：剪點列上的操作不會動到字幕。
 """
 
 from __future__ import annotations
@@ -49,6 +59,7 @@ from PySide6.QtWidgets import (QGraphicsItem, QGraphicsLineItem, QGraphicsRectIt
                                QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView)
 
 from subtitle import cueedit
+from subtitle import cutmarks as cutmarks_mod
 from subtitle import filmstrip as filmstrip_mod
 from subtitle import waveform as waveform_mod
 
@@ -57,6 +68,7 @@ RULER_H = 22
 THUMB_H = 54
 WAVE_H = 64
 CUE_H = 34
+CUT_LANE_H = 20
 GAP = 2
 ROW_Y = {
     "ruler": 0,
@@ -64,7 +76,9 @@ ROW_Y = {
     "wave": RULER_H + GAP + THUMB_H + GAP,
     "cues": RULER_H + GAP + THUMB_H + GAP + WAVE_H + GAP,
 }
-TOTAL_H = ROW_Y["cues"] + CUE_H
+ROW_Y["cuts"] = ROW_Y["cues"] + CUE_H + GAP
+TOTAL_H = ROW_Y["cuts"] + CUT_LANE_H
+CUT_LANE_NOTE = "剪點列：選了上面的「剪點」之後，點一下方塊停用／啟用、拖左右邊調整範圍"
 
 CACHE_ROOT = ""  # 空字串＝程式工作目錄
 
@@ -235,12 +249,22 @@ class ThumbRow(_Row):
             painter.drawPixmap(target, pixmap, QRectF(pixmap.rect()))
 
 
+class CutLaneRow(_Row):
+    """剪點列的底色；還沒有剪點時寫一行怎麼用。方塊本身是 _make_cut_item 畫的。"""
+
+    def paint_range(self, painter, rect, colors):
+        if not self.timeline.cut_marks:
+            self.paint_note(painter, CUT_LANE_NOTE, colors)
+
+
 class TimelineView(QGraphicsView):
     """時間軸：縮圖、波形、字幕塊、播放頭；點一下跳轉，Ctrl＋滾輪縮放。"""
 
     seekRequested = Signal(int)
     cueSelected = Signal(int)                    # 第幾句（set_cues 傳進來的清單位置）；-1＝取消選取
     cueTimesChanged = Signal(int, float, float)  # 第幾句、新的開始、新的結束（秒）
+    cutMarkToggled = Signal(int, bool)           # 第幾段剪點（set_cut_marks 的順序）、是否啟用
+    cutMarkChanged = Signal(int, float, float)   # 第幾段剪點、拖完的開始、結束（秒）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -278,14 +302,18 @@ class TimelineView(QGraphicsView):
         self.ruler = RulerRow(self, ROW_Y["ruler"], RULER_H)
         self.thumbs = ThumbRow(self, ROW_Y["thumbs"], THUMB_H)
         self.wave = WaveRow(self, ROW_Y["wave"], WAVE_H)
-        for row in (self.ruler, self.thumbs, self.wave):
+        self.cut_lane = CutLaneRow(self, ROW_Y["cuts"], CUT_LANE_H)
+        for row in (self.ruler, self.thumbs, self.wave, self.cut_lane):
             self.scene_.addItem(row)
         self.cue_bg = QGraphicsRectItem()
         self.cue_bg.setPen(QPen(Qt.NoPen))
         self.scene_.addItem(self.cue_bg)
         self.cue_items = []
         self.cut_marks = []        # set_cut_marks 傳進來的剪點（複本）
-        self.cut_items = []
+        self.cut_items = []        # 每段剪點蓋在上面幾列的半透明區塊
+        self.cut_lane_items = []   # 每段剪點在剪點列上的方塊（點、拖的對象）
+        # 拖曳剪點：(第幾段, "start"/"end"/"body", 原本的開始, 原本的結束, 按下的秒數, 按下的 x)
+        self._cut_drag = None
         self.playhead = QGraphicsLineItem()
         self.playhead.setZValue(10)
         self.scene_.addItem(self.playhead)
@@ -327,11 +355,44 @@ class TimelineView(QGraphicsView):
         """換一組剪點（cutmarks.plan 的 marks；空清單＝不顯示）。"""
         self.cut_marks = [dict(m) for m in (marks or [])
                           if float(m["end"]) > float(m["start"])]
+        self._cut_drag = None
         self._build_cut_marks()
+        self.cut_lane.update()
 
     def cut_rects(self):
         """每一段剪點在場景裡的矩形（給測試用；順序同 self.cut_marks）。"""
         return [item.rect() for item in self.cut_items]
+
+    def cut_lane_rects(self):
+        """每一段剪點在剪點列上的方塊（給測試用）。"""
+        return [item.rect() for item in self.cut_lane_items]
+
+    def cut_hit(self, view_pos):
+        """
+        視窗座標落在剪點列的哪一段、哪裡：(第幾段, "start"/"end"/"body")，不在方塊上是
+        None。只看剪點列；抓邊優先，接縫上抓滑鼠所在的那一段。
+        """
+        scene = self.mapToScene(int(view_pos.x()), int(view_pos.y()))
+        if not ROW_Y["cuts"] <= scene.y() <= ROW_Y["cuts"] + CUT_LANE_H:
+            return None
+        pps = self.px_per_sec
+        t = scene.x() / pps
+        hits = []
+        for index, mark in enumerate(self.cut_marks):
+            start, end = float(mark["start"]), float(mark["end"])
+            # 方塊至少 2px 寬（見 _make_cut_item），太窄的剪點照畫出來的寬度算
+            end = max(end, start + 2.0 / pps)
+            part = cueedit.edge_at(start, end, t, EDGE_PX / pps)
+            if part is not None:
+                # 兩段剪點接在一起時，接縫左邊按下＝左邊那段的右邊（反之亦然）：
+                # 滑鼠落在哪一段裡面就抓哪一段
+                inside = start <= t <= end
+                hits.append((part == cueedit.BODY, not inside, abs(t - (start + end) / 2), index, part))
+        if not hits:
+            return None
+        hits.sort()
+        *_rank, index, part = hits[0]
+        return index, part
 
     def select_cue(self, index, seek=True):
         """選取第 index 句（-1＝取消）；seek 時跳到那句開頭。"""
@@ -459,6 +520,11 @@ class TimelineView(QGraphicsView):
         """每一句字幕在場景裡的矩形（給測試與拖曳編輯用；順序同 self.cues）。"""
         return [item.rect() for item, _label in self.cue_items]
 
+    def cut_times(self, index):
+        """第 index 段剪點目前的 (開始, 結束)。"""
+        mark = self.cut_marks[index]
+        return float(mark["start"]), float(mark["end"])
+
     def cue_times(self, index):
         """第 index 句目前的 (開始, 結束)；拖曳中回傳拖到的位置。"""
         if self._edge_drag and self._edge_drag[0] == index and self._drag_times:
@@ -499,6 +565,16 @@ class TimelineView(QGraphicsView):
     def mousePressEvent(self, event):  # noqa: N802
         if event.button() == Qt.LeftButton and self.duration > 0:
             pos = event.position()
+            cut = self.cut_hit(pos)
+            if cut is not None:
+                # 剪點列：抓邊＝拖曳調整範圍；抓身體＝放開時切換停用／啟用
+                index, part = cut
+                start, end = self.cut_times(index)
+                pressed = self.mapToScene(int(pos.x()), 0).x() / self.px_per_sec
+                self._cut_drag = (index, part, start, end, pressed, pos.x())
+                self.setFocus(Qt.MouseFocusReason)  # 讓 Esc 收得到
+                event.accept()
+                return
             hit = self.cue_hit(pos)
             if hit is not None:
                 # 抓邊：馬上開始拖。抓身體：先選取，移動超過 MOVE_START_PX 才算整句
@@ -525,6 +601,25 @@ class TimelineView(QGraphicsView):
 
     def mouseMoveEvent(self, event):  # noqa: N802
         pos = event.position()
+        if self._cut_drag:
+            index, part, start0, end0, pressed, _x = self._cut_drag
+            if part != cueedit.BODY:
+                pps = self.px_per_sec
+                delta = self.mapToScene(int(pos.x()), 0).x() / pps - pressed
+                base = start0 if part == cueedit.START else end0
+                # 吸附：播放頭、字幕的邊（剪在句子剛好結束的地方）
+                targets = [self.position_ms / 1000.0]
+                for _i, cue in self.cues:
+                    targets += [float(cue["start"]), float(cue["end"])]
+                t = cueedit.snap(base + delta, targets, SNAP_PX / pps)
+                marks = list(self.cut_marks)
+                marks[index] = dict(marks[index], start=start0, end=end0)
+                start, end = cutmarks_mod.drag_mark_edge(marks, index, part, t,
+                                                         duration=self.duration or None)
+                self.cut_marks[index] = dict(self.cut_marks[index], start=start, end=end)
+                self._refresh_cut(index)
+            event.accept()
+            return
         if self._edge_drag:
             index, part, start0, end0, pressed, press_x, active = self._edge_drag
             if not active:
@@ -550,8 +645,12 @@ class TimelineView(QGraphicsView):
             self._request_seek(pos.x())
             event.accept()
             return
+        cut = self.cut_hit(pos)
         hit = self.cue_hit(pos)
-        if hit is None:
+        if cut is not None:
+            self.viewport().setCursor(Qt.PointingHandCursor if cut[1] == cueedit.BODY
+                                      else Qt.SizeHorCursor)
+        elif hit is None:
             self.viewport().unsetCursor()
         elif hit[1] == cueedit.BODY:
             self.viewport().setCursor(Qt.OpenHandCursor)
@@ -561,6 +660,23 @@ class TimelineView(QGraphicsView):
 
     def mouseReleaseEvent(self, event):  # noqa: N802
         self._dragging = False
+        if self._cut_drag:
+            index, part, start0, end0, _pressed, press_x = self._cut_drag
+            self._cut_drag = None
+            if part == cueedit.BODY:
+                if abs(event.position().x() - press_x) >= MOVE_START_PX:
+                    event.accept()  # 按住身體拖走再放開：不算點一下，不切換
+                    return
+                enabled = not self.cut_marks[index].get("enabled", True)
+                self.cut_marks[index]["enabled"] = enabled
+                self._refresh_cut(index)
+                self.cutMarkToggled.emit(index, enabled)
+            else:
+                start, end = self.cut_times(index)
+                if (start, end) != (start0, end0):
+                    self.cutMarkChanged.emit(index, start, end)
+            event.accept()
+            return
         if self._edge_drag:
             index, part, start0, end0, _pressed, _x, active = self._edge_drag
             start, end = self._drag_times
@@ -577,6 +693,14 @@ class TimelineView(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event):  # noqa: N802
+        if event.key() == Qt.Key_Escape and self._cut_drag:
+            # 拖剪點拖到一半反悔：回到原本的範圍，什麼都不送出
+            index, _part, start0, end0, _p, _x = self._cut_drag
+            self._cut_drag = None
+            self.cut_marks[index] = dict(self.cut_marks[index], start=start0, end=end0)
+            self._refresh_cut(index)
+            event.accept()
+            return
         if event.key() == Qt.Key_Escape and self._edge_drag:
             # 拖到一半反悔：回到原本的時間，什麼都不送出
             self._edge_drag = self._drag_times = None
@@ -621,7 +745,7 @@ class TimelineView(QGraphicsView):
     def _relayout(self):
         width = self.scene_width()
         self.scene_.setSceneRect(0, 0, width, TOTAL_H)
-        for row in (self.ruler, self.thumbs, self.wave):
+        for row in (self.ruler, self.thumbs, self.wave, self.cut_lane):
             row.update_geometry()
         self.cue_bg.setRect(0, ROW_Y["cues"], width, CUE_H)
         self.cue_bg.setBrush(QBrush(self.colors["row"]))
@@ -637,31 +761,66 @@ class TimelineView(QGraphicsView):
 
     def _build_cut_marks(self):
         for item in self.cut_items:
-            self.scene_.removeItem(item)  # 邊線是子項目，會一起拿掉
-        self.cut_items = [self._make_cut_item(m) for m in self.cut_marks]
+            self.scene_.removeItem(item)  # 邊線與剪點列的方塊是子項目，會一起拿掉
+        built = [self._make_cut_item(m) for m in self.cut_marks]
+        self.cut_items = [overlay for overlay, _lane in built]
+        self.cut_lane_items = [lane for _overlay, lane in built]
+
+    def _refresh_cut(self, index):
+        """只重畫一段剪點（拖曳中每次滑鼠移動都會呼叫）。"""
+        self.scene_.removeItem(self.cut_items[index])
+        self.cut_items[index], self.cut_lane_items[index] = self._make_cut_item(self.cut_marks[index])
 
     def _make_cut_item(self, mark):
         pps = self.px_per_sec
         start, end = float(mark["start"]), float(mark["end"])
-        top = ROW_Y["thumbs"]
+        enabled = mark.get("enabled", True)
+        top, bottom = ROW_Y["thumbs"], ROW_Y["cues"] + CUE_H
         # 再短的剪點也至少 2 像素寬，拉到最遠也看得到
-        rect = QRectF(start * pps, top, max((end - start) * pps, 2.0), TOTAL_H - top)
+        width = max((end - start) * pps, 2.0)
+        rect = QRectF(start * pps, top, width, bottom - top)
         item = QGraphicsRectItem(rect)
-        item.setBrush(QBrush(self.colors["cut"]))
+        # 停用的剪點：不填色、邊線淡一點——看得出「這段本來會剪，現在不剪」
+        item.setBrush(QBrush(self.colors["cut"]) if enabled else QBrush(Qt.NoBrush))
         item.setPen(QPen(Qt.NoPen))
         item.setZValue(3)  # 在字幕塊上面（被剪到的字幕看得出來）、播放頭底下
-        edge = QPen(self.colors["cut_edge"], 1.5, Qt.DashLine)  # 虛線：跟實線的播放頭（也是紅的）分得出來
+        edge_color = QColor(self.colors["cut_edge"])
+        if not enabled:
+            edge_color.setAlpha(120)
+        edge = QPen(edge_color, 1.5, Qt.DashLine)  # 虛線：跟實線的播放頭（也是紅的）分得出來
         for x in (rect.left(), rect.right()):
-            QGraphicsLineItem(x, top, x, TOTAL_H, item).setPen(edge)
-        # 尺規列底下的紅線：拉遠時一眼看出哪裡有剪
-        bar = QGraphicsRectItem(rect.left(), ROW_Y["ruler"] + RULER_H - 4, rect.width(), 4, item)
-        bar.setBrush(QBrush(self.colors["cut_edge"]))
-        bar.setPen(QPen(Qt.NoPen))
+            QGraphicsLineItem(x, top, x, bottom, item).setPen(edge)
+        if enabled:
+            # 尺規列底下的紅線：拉遠時一眼看出哪裡有剪（停用的不畫）
+            bar = QGraphicsRectItem(rect.left(), ROW_Y["ruler"] + RULER_H - 4, width, 4, item)
+            bar.setBrush(QBrush(self.colors["cut_edge"]))
+            bar.setPen(QPen(Qt.NoPen))
         reasons = "\n".join(f"・{r}" for r in mark.get("reasons") or ())
-        item.setToolTip(f"剪掉 {end - start:.2f} 秒（{tick_label(start, 0.1)} → {tick_label(end, 0.1)}）"
-                        + (f"\n{reasons}" if reasons else ""))
+        head = (f"剪掉 {end - start:.2f} 秒" if enabled else f"已停用（這 {end - start:.2f} 秒不剪）")
+        tip = (f"{head}（{tick_label(start, 0.1)} → {tick_label(end, 0.1)}）"
+               + ("（範圍調過）" if mark.get("edited") else "")
+               + (f"\n{reasons}" if reasons else ""))
+        item.setToolTip(tip)
+        # 剪點列上的方塊：點一下停用／啟用、拖左右邊調整
+        lane = QGraphicsRectItem(rect.left(), ROW_Y["cuts"] + 3, width, CUT_LANE_H - 6, item)
+        if enabled:
+            lane.setBrush(QBrush(self.colors["cut_edge"]))
+            lane.setPen(QPen(self.colors["cut_edge"].darker(130), 1))
+        else:
+            lane.setBrush(QBrush(Qt.NoBrush))
+            lane.setPen(QPen(self.colors["cut_edge"], 1, Qt.DashLine))
+        lane.setToolTip(tip + ("\n點一下停用（這段不剪）" if enabled else "\n點一下重新啟用")
+                        + "；拖左右邊調整範圍")
+        if width > 40:
+            font = QFont(self.font())
+            font.setPixelSize(11)
+            label = QGraphicsSimpleTextItem(f"{end - start:.1f}s" if enabled else "不剪", lane)
+            label.setFont(font)
+            label.setBrush(QBrush(QColor("#ffffff") if enabled else self.colors["cut_edge"]))
+            label.setPos(rect.left() + 4, ROW_Y["cuts"] + 3)
+            lane.setFlag(QGraphicsItem.ItemClipsChildrenToShape, True)
         self.scene_.addItem(item)
-        return item
+        return item, lane
 
     def _refresh_cue(self, index):
         """只重畫一句（拖曳中每次滑鼠移動都會呼叫；上千句時不能每次全部重建）。"""

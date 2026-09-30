@@ -26,7 +26,12 @@ Tk 版的「預覽」是 Canvas 畫的假畫面（`gui/preview_panel.py`），�
 份程式算、同一份 config 參數），旁邊一行寫幾處、剪掉幾秒。字幕的時間一改，剪點
 跟著重算。只是看，不會剪片也不改字幕。
 
-還沒做：剪點可拖、可單獨停用（第 5 項下一階段）、與字幕清單雙向同步。見
+剪點可以微調（第 5 項第二階段）：時間軸最下面的剪點列點一下停用／啟用、拖左右邊調
+整範圍。微調記在 `self.cut_overrides`（依剪點的 key），字幕改了、剪點重算時，停頓
+本身沒變的剪點會保留微調；「還原剪點」清掉目前這種來源的微調。剪點的微調不進字幕的
+復原／重做（兩件事分開：Ctrl+Z 只退字幕的時間）。
+
+還沒做：照時間軸上的剪點輸出（第 5 項下一階段）、與字幕清單雙向同步。見
 `docs/ROADMAP_3.0.md`。
 """
 import os
@@ -187,6 +192,7 @@ class PlayerPanel(QWidget):
         self._style = dict(style or {})
         self._config = config if config is not None else {}  # 剪點參數（jumpcut／retakes／review）
         self.cut_plan = None    # 目前畫在時間軸上的剪點（cutmarks.plan 的結果）；None＝不顯示
+        self.cut_overrides = {}  # 使用者對剪點的微調：{key: {"enabled", "start", "end"}}
         self._index = CueIndex([])
         self._subtitle_path = ""
         self._shown = ("", None, 1.0)  # 疊加層目前畫的是什麼：(文字, 片段, 縮放)
@@ -246,6 +252,9 @@ class PlayerPanel(QWidget):
         self.cut_combo.setToolTip("把自動剪輯會剪掉的段落畫在時間軸上（只是看，不會剪片）；"
                                   "參數跟一般版的設定同一份")
         self.cut_label = QLabel("")
+        self.cut_reset_btn = QPushButton("還原剪點")
+        self.cut_reset_btn.setToolTip("清掉這種剪點的停用與範圍調整，回到自動算出來的樣子")
+        self.cut_reset_btn.setEnabled(False)
 
         controls = QHBoxLayout()
         for w in (self.open_btn, self.subs_btn, self.play_btn):
@@ -269,6 +278,7 @@ class PlayerPanel(QWidget):
         cut_row.addWidget(QLabel("剪點："))
         cut_row.addWidget(self.cut_combo)
         cut_row.addWidget(self.cut_label, 1)
+        cut_row.addWidget(self.cut_reset_btn)
         layout.addLayout(cut_row)
         layout.addWidget(self.timeline)
         layout.addLayout(footer)
@@ -299,6 +309,9 @@ class PlayerPanel(QWidget):
         self.zoom_in_btn.clicked.connect(self.timeline.zoom_in)
         self.fit_btn.clicked.connect(self.timeline.zoom_to_fit)
         self.cut_combo.currentIndexChanged.connect(lambda _i: self.refresh_cut_marks())
+        self.cut_reset_btn.clicked.connect(self.reset_cut_marks)
+        self.timeline.cutMarkToggled.connect(self._on_cut_toggled)
+        self.timeline.cutMarkChanged.connect(self._on_cut_changed)
         self.loader.peaksReady.connect(self._on_peaks)
         self.loader.filmstripReady.connect(self._on_filmstrip)
         self.loader.failed.connect(self._on_timeline_failed)
@@ -356,14 +369,45 @@ class PlayerPanel(QWidget):
             self.cut_plan = None
             self.timeline.set_cut_marks([])
             self.cut_label.setText("")
+            self.cut_reset_btn.setEnabled(False)
             return
         duration = max(self.player.duration(), 0) / 1000.0
-        self.cut_plan = cutmarks.plan(source, self.cues, duration, self._config)
+        plan = cutmarks.plan(source, self.cues, duration, self._config)
+        plan["marks"] = cutmarks.apply_overrides(plan["marks"], self.cut_overrides)
+        self.cut_plan = cutmarks.recount(plan)
         self.timeline.set_cut_marks(self.cut_plan["marks"])
+        self.cut_reset_btn.setEnabled(any(
+            m.get("edited") or not m.get("enabled", True) for m in self.cut_plan["marks"]))
         text = cutmarks.summary(self.cut_plan)
         if self.cut_plan["marks"] and not duration:
             text += "　還沒開影片：片尾的空白先不算"
         self.cut_label.setText(text)
+
+    def reset_cut_marks(self):
+        """清掉目前這種來源的剪點微調（停用、調過的範圍），回到自動算出來的樣子。"""
+        source = self.cut_combo.currentData()
+        if source:
+            prefix = f"{source}:"
+            self.cut_overrides = {k: v for k, v in self.cut_overrides.items()
+                                  if not k.startswith(prefix)}
+        self.refresh_cut_marks()
+
+    def _cut_override(self, index):
+        if self.cut_plan is None or not 0 <= index < len(self.cut_plan["marks"]):
+            return None
+        return self.cut_overrides.setdefault(self.cut_plan["marks"][index]["key"], {})
+
+    def _on_cut_toggled(self, index, enabled):
+        change = self._cut_override(index)
+        if change is not None:
+            change["enabled"] = bool(enabled)
+            self.refresh_cut_marks()
+
+    def _on_cut_changed(self, index, start, end):
+        change = self._cut_override(index)
+        if change is not None:
+            change["start"], change["end"] = float(start), float(end)
+            self.refresh_cut_marks()
 
     def toggle_play(self):
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
