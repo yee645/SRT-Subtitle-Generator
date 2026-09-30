@@ -31,12 +31,17 @@ Tk 版的「預覽」是 Canvas 畫的假畫面（`gui/preview_panel.py`），�
 本身沒變的剪點會保留微調；「還原剪點」清掉目前這種來源的微調。剪點的微調不進字幕的
 復原／重做（兩件事分開：Ctrl+Z 只退字幕的時間）。
 
-還沒做：照時間軸上的剪點輸出（第 5 項下一階段）、與字幕清單雙向同步。見
-`docs/ROADMAP_3.0.md`。
+「照剪點輸出…」（第 5 項第三階段）：照啟用中的剪點（含停用與拖過的範圍）剪出一支新
+影片，旁邊放一份對齊到剪後時間軸的字幕（同檔名 .srt）。剪片在背景執行緒跑
+（`cutmarks.render`，跟一般版的跳剪同一個裁切引擎），進度寫在剪點那一行；原始影片
+與目前的字幕都不動。
+
+還沒做：與字幕清單雙向同步。見 `docs/ROADMAP_3.0.md`。
 """
 import os
+import threading
 
-from PySide6.QtCore import QPointF, QRectF, QSizeF, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, QSizeF, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QBrush, QColor, QFont, QFontMetricsF, QKeySequence, QPainter, QPainterPath, QPen,
     QShortcut,
@@ -255,6 +260,12 @@ class PlayerPanel(QWidget):
         self.cut_reset_btn = QPushButton("還原剪點")
         self.cut_reset_btn.setToolTip("清掉這種剪點的停用與範圍調整，回到自動算出來的樣子")
         self.cut_reset_btn.setEnabled(False)
+        self.export_btn = QPushButton("照剪點輸出…")
+        self.export_btn.setToolTip("照時間軸上啟用中的剪點剪出一支新影片，旁邊放一份對齊好的字幕；"
+                                   "原始影片不動")
+        self.export_btn.setEnabled(False)
+        self.exporter = CutExporter(self)
+        self.last_export = None  # 上一次輸出成功的結果（給測試與提示用）
 
         controls = QHBoxLayout()
         for w in (self.open_btn, self.subs_btn, self.play_btn):
@@ -279,6 +290,7 @@ class PlayerPanel(QWidget):
         cut_row.addWidget(self.cut_combo)
         cut_row.addWidget(self.cut_label, 1)
         cut_row.addWidget(self.cut_reset_btn)
+        cut_row.addWidget(self.export_btn)
         layout.addLayout(cut_row)
         layout.addWidget(self.timeline)
         layout.addLayout(footer)
@@ -310,6 +322,10 @@ class PlayerPanel(QWidget):
         self.fit_btn.clicked.connect(self.timeline.zoom_to_fit)
         self.cut_combo.currentIndexChanged.connect(lambda _i: self.refresh_cut_marks())
         self.cut_reset_btn.clicked.connect(self.reset_cut_marks)
+        self.export_btn.clicked.connect(lambda: self.export_cuts())
+        self.exporter.progress.connect(self._on_export_progress)
+        self.exporter.finished.connect(self._on_export_done)
+        self.exporter.failed.connect(self._on_export_failed)
         self.timeline.cutMarkToggled.connect(self._on_cut_toggled)
         self.timeline.cutMarkChanged.connect(self._on_cut_changed)
         self.loader.peaksReady.connect(self._on_peaks)
@@ -370,6 +386,7 @@ class PlayerPanel(QWidget):
             self.timeline.set_cut_marks([])
             self.cut_label.setText("")
             self.cut_reset_btn.setEnabled(False)
+            self._update_export_button()
             return
         duration = max(self.player.duration(), 0) / 1000.0
         plan = cutmarks.plan(source, self.cues, duration, self._config)
@@ -381,7 +398,63 @@ class PlayerPanel(QWidget):
         text = cutmarks.summary(self.cut_plan)
         if self.cut_plan["marks"] and not duration:
             text += "　還沒開影片：片尾的空白先不算"
-        self.cut_label.setText(text)
+        if not self.exporter.busy:  # 輸出中這一行寫進度，別蓋掉
+            self.cut_label.setText(text)
+        self._update_export_button()
+
+    def _update_export_button(self):
+        ready = (self.cut_plan is not None and self.player.duration() > 0
+                 and any(m.get("enabled", True) for m in self.cut_plan["marks"]))
+        self.export_btn.setEnabled(ready and not self.exporter.busy)
+
+    def export_cuts(self, output_path=None):
+        """
+        照啟用中的剪點輸出。output_path 省略時先問要存到哪。回傳是否開始輸出
+        （結果由 _on_export_done／_on_export_failed 處理）。
+        """
+        if self.exporter.busy or self.cut_plan is None:
+            return False
+        media = self.player.source().toLocalFile()
+        try:
+            plan = cutmarks.export_plan(self.cut_plan["marks"], self.player.duration() / 1000.0,
+                                        self.cues)
+        except ValueError as exc:
+            self._show_export_error(str(exc))
+            return False
+        if output_path is None:
+            output_path = self._ask_export_path(cutmarks.suggest_output_path(media))
+            if not output_path:
+                return False
+        self.cut_label.setText(f"正在輸出 {os.path.basename(output_path)}…")
+        self.exporter.start(media, plan, output_path)
+        self._update_export_button()
+        return True
+
+    def _ask_export_path(self, suggested):
+        path, _ = QFileDialog.getSaveFileName(self, "照剪點輸出", suggested, "MP4 影片 (*.mp4);;所有檔案 (*)")
+        return path
+
+    def _show_export_error(self, message):
+        QMessageBox.warning(self, "照剪點輸出", message)
+
+    def _on_export_progress(self, ratio, _message):
+        self.cut_label.setText(f"正在輸出…{int(round(ratio * 100))}%")
+
+    def _on_export_done(self, result):
+        self.last_export = result
+        note = f"已輸出 {os.path.basename(result['output'])}（剪掉 {result['cut_count']} 處、" \
+               f"{result['removed_seconds']:.1f} 秒）"
+        if result["subtitles"]:
+            note += f"＋{os.path.basename(result['subtitles'])}"
+            if result["dropped"]:
+                note += f"（{result['dropped']} 句整句被剪掉）"
+        self.cut_label.setText(note)
+        self._update_export_button()
+
+    def _on_export_failed(self, message):
+        self._update_export_button()
+        self.refresh_cut_marks()
+        self._show_export_error(f"沒有輸出成功：{message}")
 
     def reset_cut_marks(self):
         """清掉目前這種來源的剪點微調（停用、調過的範圍），回到自動算出來的樣子。"""
@@ -648,6 +721,41 @@ class PlayerPanel(QWidget):
 
     def _place_subtitle(self):
         place_subtitle(self.subtitle_item, self._video_rect(), self._style)
+
+
+class CutExporter(QObject):
+    """
+    在背景執行緒照剪點剪片（ffmpeg 要跑一陣子，不能卡住畫面）；進度與結果用訊號
+    送回主執行緒。影片剪好後，對齊好的字幕存成同檔名的 .srt。
+    """
+
+    progress = Signal(float, str)
+    finished = Signal(object)  # {"output", "subtitles"（沒有字幕時 None）, "dropped", "cut_count", …}
+    failed = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.busy = False
+
+    def start(self, media_path, plan, output_path):
+        self.busy = True
+        threading.Thread(target=self._run, args=(media_path, plan, output_path), daemon=True).start()
+
+    def _run(self, media_path, plan, output_path):
+        try:
+            cutmarks.render(media_path, plan, output_path,
+                            lambda ratio, message: self.progress.emit(float(ratio), str(message)))
+            subtitles = None
+            if plan["cues"]:
+                subtitles = os.path.splitext(output_path)[0] + ".srt"
+                cueedit.save_cues(plan["cues"], subtitles)
+            result = dict(plan, output=output_path, subtitles=subtitles)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.busy = False
+            self.failed.emit(str(exc))
+            return
+        self.busy = False
+        self.finished.emit(result)
 
 
 def edit_shortcuts(undo, redo, save):
