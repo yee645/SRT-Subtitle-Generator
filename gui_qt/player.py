@@ -21,8 +21,13 @@ Tk 版的「預覽」是 Canvas 畫的假畫面（`gui/preview_panel.py`），�
 刻照新時間顯示。改時間可以復原／重做（Ctrl+Z／Ctrl+Y），存回載入的 .srt／.vtt
 （Ctrl+S，第一次覆蓋前留一份 `.bak`）；有沒存的修改時，換字幕或關視窗會先問。
 
-還沒做：逐字動態字幕的預覽、與字幕清單雙向同步、鍵盤快捷鍵。見
-`docs/ROADMAP_3.0.md` 第 2、4 項。
+時間軸上方的「剪點」選單（第 5 項）：選停頓跳剪／重複片段／審片建議，就把那種
+自動剪輯會剪掉的段落畫在時間軸上（`subtitle/cutmarks.py`，照一般版剪片用的同一
+份程式算、同一份 config 參數），旁邊一行寫幾處、剪掉幾秒。字幕的時間一改，剪點
+跟著重算。只是看，不會剪片也不改字幕。
+
+還沒做：剪點可拖、可單獨停用（第 5 項下一階段）、與字幕清單雙向同步。見
+`docs/ROADMAP_3.0.md`。
 """
 import os
 
@@ -34,13 +39,13 @@ from PySide6.QtGui import (
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
-    QFileDialog, QGraphicsItem, QGraphicsScene, QGraphicsView,
+    QComboBox, QFileDialog, QGraphicsItem, QGraphicsScene, QGraphicsView,
     QHBoxLayout, QLabel, QMessageBox, QPushButton, QSlider, QVBoxLayout,
     QWidget,
 )
 
 from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
-from subtitle import cueedit
+from subtitle import cueedit, cutmarks
 from subtitle.cuetime import CueIndex
 from subtitle.exporter import burn_layout, dynamic_frame, split_emphasis_segments
 from subtitle.importer import load_subtitle_file
@@ -177,9 +182,11 @@ class _VideoView(QGraphicsView):
 class PlayerPanel(QWidget):
     """播放器面板：開影片、載字幕、播放／暫停、拖曳跳轉，字幕疊在畫面上。"""
 
-    def __init__(self, parent=None, style=None):
+    def __init__(self, parent=None, style=None, config=None):
         super().__init__(parent)
         self._style = dict(style or {})
+        self._config = config if config is not None else {}  # 剪點參數（jumpcut／retakes／review）
+        self.cut_plan = None    # 目前畫在時間軸上的剪點（cutmarks.plan 的結果）；None＝不顯示
         self._index = CueIndex([])
         self._subtitle_path = ""
         self._shown = ("", None, 1.0)  # 疊加層目前畫的是什麼：(文字, 片段, 縮放)
@@ -232,6 +239,14 @@ class PlayerPanel(QWidget):
         for w in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn):
             w.setToolTip("時間軸縮放（也可以按住 Ctrl 轉滾輪）")
 
+        self.cut_combo = QComboBox()
+        self.cut_combo.addItem("不顯示", "")
+        for source in cutmarks.SOURCES:
+            self.cut_combo.addItem(cutmarks.SOURCE_LABELS[source], source)
+        self.cut_combo.setToolTip("把自動剪輯會剪掉的段落畫在時間軸上（只是看，不會剪片）；"
+                                  "參數跟一般版的設定同一份")
+        self.cut_label = QLabel("")
+
         controls = QHBoxLayout()
         for w in (self.open_btn, self.subs_btn, self.play_btn):
             controls.addWidget(w)
@@ -250,6 +265,11 @@ class PlayerPanel(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.addWidget(self.view, 1)
         layout.addLayout(controls)
+        cut_row = QHBoxLayout()
+        cut_row.addWidget(QLabel("剪點："))
+        cut_row.addWidget(self.cut_combo)
+        cut_row.addWidget(self.cut_label, 1)
+        layout.addLayout(cut_row)
         layout.addWidget(self.timeline)
         layout.addLayout(footer)
 
@@ -278,6 +298,7 @@ class PlayerPanel(QWidget):
         self.zoom_out_btn.clicked.connect(self.timeline.zoom_out)
         self.zoom_in_btn.clicked.connect(self.timeline.zoom_in)
         self.fit_btn.clicked.connect(self.timeline.zoom_to_fit)
+        self.cut_combo.currentIndexChanged.connect(lambda _i: self.refresh_cut_marks())
         self.loader.peaksReady.connect(self._on_peaks)
         self.loader.filmstripReady.connect(self._on_filmstrip)
         self.loader.failed.connect(self._on_timeline_failed)
@@ -305,6 +326,7 @@ class PlayerPanel(QWidget):
         self.timeline.set_cues(self.cues)
         self._show_at(self.player.position())
         self._refresh_info()
+        self.refresh_cut_marks()
 
     def load_subtitles(self, path):
         data = load_subtitle_file(path)
@@ -316,6 +338,32 @@ class PlayerPanel(QWidget):
         self._style = dict(style or {})
         self._show_at(self.player.position())  # 動態模式可能換了：照新模式重算這一刻
         self._place_subtitle()
+
+    def show_cut_marks(self, source):
+        """選要畫哪一種剪點（cutmarks.SOURCES 之一；空字串＝不顯示）。"""
+        at = self.cut_combo.findData(source or "")
+        if at < 0:
+            raise ValueError(f"不認得的剪點來源：{source!r}")
+        if at == self.cut_combo.currentIndex():
+            self.refresh_cut_marks()
+        else:
+            self.cut_combo.setCurrentIndex(at)  # 會觸發 refresh_cut_marks
+
+    def refresh_cut_marks(self):
+        """照目前的字幕、片長與選單重算剪點，畫到時間軸上。"""
+        source = self.cut_combo.currentData()
+        if not source:
+            self.cut_plan = None
+            self.timeline.set_cut_marks([])
+            self.cut_label.setText("")
+            return
+        duration = max(self.player.duration(), 0) / 1000.0
+        self.cut_plan = cutmarks.plan(source, self.cues, duration, self._config)
+        self.timeline.set_cut_marks(self.cut_plan["marks"])
+        text = cutmarks.summary(self.cut_plan)
+        if self.cut_plan["marks"] and not duration:
+            text += "　還沒開影片：片尾的空白先不算"
+        self.cut_label.setText(text)
 
     def toggle_play(self):
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -415,6 +463,7 @@ class PlayerPanel(QWidget):
         self._index = CueIndex(self.cues)
         self._show_at(self.player.position())
         self._refresh_info()
+        self.refresh_cut_marks()  # 字幕時間變了，停頓與重講的位置跟著變
 
     def _ask_save_path(self, suggested):
         base = os.path.splitext(suggested)[0] + ".srt" if suggested else ""
@@ -467,6 +516,7 @@ class PlayerPanel(QWidget):
             self._fitted = True
             self.timeline.zoom_to_fit()
         self._on_position(self.player.position())
+        self.refresh_cut_marks()  # 知道片長之後，片尾的空白才算得出來
 
     def _on_peaks(self, gen, peaks):
         if gen == self.loader.generation:
