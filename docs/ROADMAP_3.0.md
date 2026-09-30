@@ -868,7 +868,7 @@ JPEG 縮圖存 `filmstrip_cache/<鍵>/`＋`index.json`；鍵是路徑＋大小�
 測試：
 
 - `tests/test_cutmarks.py` 加到 53 項（微調套回、重算後留不留、拖邊界線、只算啟用的）。
-- `tests/test_qt_cutedit.py`（新，30 項，QTest 真的按）：點方塊切換、拖曳中方塊跟著動、
+- `tests/test_qt_cutedit.py`（新，29 項，QTest 真的按）：點方塊切換、拖曳中方塊跟著動、
   放開才送出、不過下一段、吸附字幕的邊、Esc、接縫、游標、空白處跳轉、播放器的微調
   與還原、Ctrl+Z 不動剪點、換來源再換回微調還在、1280×800 下影片仍有 300px 以上高。
 - 第一階段的 `test_qt_cutmarks.py` 三條斷言照新的版面更新（半透明區塊蓋到字幕列底端為止、
