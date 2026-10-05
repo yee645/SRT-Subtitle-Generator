@@ -9,7 +9,8 @@
 4. 真的輸出（ffmpeg）：長度、尺寸；每一秒的畫面是對的那一段的對的那一格（跟來源比）；
    子畫面只在它的時間出現、只蓋它的位置；圖片；直式素材補黑邊；
    沒聲音的片段有音樂就有聲音、音量 0 就沒聲音；閃避真的把音樂壓低。
-5. 錯誤：素材不存在、輸出蓋到素材、ffmpeg 失敗都不留下檔案。
+5. 錯誤：素材不存在、輸出蓋到素材、ffmpeg 失敗、中途停下都不留下檔案，目的地原本的
+   檔案不動。
 """
 import copy
 import os
@@ -43,7 +44,7 @@ def error_of(fn, *args, **kwargs):
 raw = {"main": [{"path": "a.mp4", "in": 1, "out": 3}, {"path": "b.mp4", "out": 2},
                 {"path": "still.png"}],
        "overlays": [{"path": "c.mp4", "at": 0.5, "out": 1, "rect": [0.5, 0, 0.5, 0.5]},
-                    {"path": "logo.png", "at": 6, "duration": 1}],
+                    {"path": "logo.png", "at": 6, "duration": 2}],
        "music": [{"path": "m.mp3", "at": 1}]}
 before = copy.deepcopy(raw)
 tl = assemble.normalize(raw)
@@ -52,7 +53,7 @@ check("主軌：in 預設 0、圖片預設 3 秒",
       tl["main"] == [{"path": "a.mp4", "in": 1.0, "out": 3.0}, {"path": "b.mp4", "in": 0.0, "out": 2.0},
                      {"path": "still.png", "in": 0.0, "out": assemble.DEFAULT_IMAGE_SECONDS}], str(tl["main"]))
 check("疊加：rect 預設整張、audio 預設關", tl["overlays"][1]["rect"] == [0.0, 0.0, 1.0, 1.0]
-      and tl["overlays"][0]["audio"] is False and tl["overlays"][1]["out"] == 1.0, str(tl["overlays"]))
+      and tl["overlays"][0]["audio"] is False and tl["overlays"][1]["out"] == 2.0, str(tl["overlays"]))
 check("音樂：音量預設 0.35、不循環、不閃避、out 不限",
       tl["music"] == [{"path": "m.mp3", "at": 1.0, "in": 0.0, "out": None, "volume": 0.35,
                        "loop": False, "duck": False}], str(tl["music"]))
@@ -102,8 +103,9 @@ check("沒聲音的主軌補靜音（長度＝片段長）、有聲音的取 in�
 check("主軌接起來：每段縮放置中補黑邊、同一影格率，concat 3 段",
       fc.count("scale=640:360:force_original_aspect_ratio=decrease,pad=640:360") >= 3
       and "[mv0][ma0][mv1][ma1][mv2][ma2]concat=n=3:v=1:a=1[base0][voice]" in fc, fc)
-check("圖片用 -loop 1 -t 長度；疊加超出片尾的剪到片尾",
+check("圖片用 -loop 1 -t 長度；疊加超出片尾的剪到片尾（2 秒的圖放在 6 秒、片長 7 秒 → 只放 1 秒）",
       cmd[cmd.index("still.png") - 7:cmd.index("still.png")] == ["-loop", "1", "-framerate", "30", "-t", "3", "-i"]
+      and cmd[cmd.index("logo.png") - 3:cmd.index("logo.png")] == ["-t", "1", "-i"]
       and "between(t,6,7)" in fc, " ".join(cmd))
 check("B-roll 子畫面：右上四分之一、只在 0.5～1.5 秒，預設不帶聲音",
       "overlay=320:0:eof_action=pass:enable='between(t,0.5,1.5)'" in fc
@@ -209,6 +211,14 @@ else:
           near(pixel(out, 3.0, 320, 180), (0, 192, 0)) and near(pixel(out, 3.0, 20, 180), (0, 0, 0))
           and near(pixel(out, 3.8, 320, 180), (255, 0, 0)),
           f"{pixel(out, 3.0, 320, 180)} {pixel(out, 3.8, 320, 180)}")
+    moving = p("moving.mp4")
+    assemble.render({"width": 640, "height": 360, "main": [{"path": p("b.mp4"), "out": 2}],
+                     "overlays": [{"path": p("a.mp4"), "at": 0.5, "in": 2, "out": 3}]}, moving)
+    same = [diff(gray(moving, t), gray(p("a.mp4"), t - 0.5 + 2)) for t in (0.6, 1.0, 1.4)]
+    other = [diff(gray(moving, t), gray(p("a.mp4"), t - 0.5 + 2 + 1 / 30.0)) for t in (0.6, 1.0, 1.4)]
+    check("疊加的影片從它自己的 in 開始播：輸出第 t 秒＝來源第 t-0.5+2 秒那一格；1.5 秒後回到主軌",
+          max(same) < 1.5 and min(other) > 2 * max(same) and near(pixel(moving, 1.7, 320, 180), (255, 0, 0)),
+          f"{[round(x, 2) for x in same]} {[round(x, 2) for x in other]} {pixel(moving, 1.7, 320, 180)}")
     music_part = loudness(out, 2.2, 1.6)
     check("第二段本身沒聲音，從 2 秒開始的循環音樂讓它有聲音", music_part is not None and music_part > -40,
           str(music_part))
@@ -259,8 +269,53 @@ else:
             msg = str(exc)
     finally:
         assemble.probe_media = real_probe
-    check("ffmpeg 失敗 → RuntimeError（組合失敗）、不留下半支檔案",
-          msg is not None and msg.startswith("組合失敗") and not os.path.exists(p("y.mp4")), str(msg))
+    check("ffmpeg 失敗 → RuntimeError（組合失敗）、不留下半支檔案（含暫存檔）",
+          msg is not None and msg.startswith("組合失敗") and not os.path.exists(p("y.mp4"))
+          and not [n for n in os.listdir(tmp) if ".tmp-" in n], str(msg))
+    class HalfWritten:
+        """假的 ffmpeg：先寫出半支輸出檔，再失敗（真的 ffmpeg 寫到一半出錯就是這樣）。"""
+
+        def __init__(self, command, **_kw):
+            with open(command[-1], "wb") as fh:
+                fh.write(b"half")
+            self.stdout = type("O", (), {"__iter__": lambda _s: iter(["out_time_us=500000\n"]),
+                                         "close": lambda _s: None})()
+            self.stderr = type("E", (), {"read": lambda _s: "寫到一半壞了", "close": lambda _s: None})()
+
+        def wait(self):
+            return 1
+
+        def kill(self):
+            pass
+
+    real_subprocess = assemble.subprocess  # 只換 assemble 自己啟動 ffmpeg 的那一個，量素材的 ffprobe 照真的跑
+    assemble.subprocess = type("FakeSubprocess", (), {"Popen": HalfWritten, "PIPE": -1})
+    try:
+        try:
+            assemble.render(timeline, p("half.mp4"))
+            msg = None
+        except RuntimeError as exc:
+            msg = str(exc)
+    finally:
+        assemble.subprocess = real_subprocess
+    check("ffmpeg 寫到一半失敗 → 說原因、半支的暫存檔清掉、目的地沒有檔案",
+          msg == "組合失敗：寫到一半壞了" and not os.path.exists(p("half.mp4"))
+          and not [n for n in os.listdir(tmp) if ".tmp-" in n], f"{msg} {os.listdir(tmp)}")
+    keep = p("keep.mp4")
+    with open(keep, "wb") as fh:
+        fh.write(b"old")
+
+    def stop(ratio, _msg):
+        if ratio > 0:
+            raise KeyboardInterrupt("使用者按了取消")
+    try:
+        assemble.render(timeline, keep, stop)
+        stopped = False
+    except KeyboardInterrupt:
+        stopped = True
+    leftovers = [n for n in os.listdir(tmp) if ".tmp-" in n]
+    check("中途停下（進度回呼拋例外）→ ffmpeg 停掉、暫存檔清掉、目的地原本的檔案不動",
+          stopped and not leftovers and open(keep, "rb").read() == b"old", f"{stopped} {leftovers}")
     shutil.rmtree(tmp, ignore_errors=True)
 
 print()

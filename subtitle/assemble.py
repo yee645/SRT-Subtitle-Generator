@@ -387,8 +387,9 @@ def render(timeline: dict, output_path: str,
     照時間軸輸出一支影片。回傳 {"output", "duration", "width", "height", "fps"}。
     config：完整設定（只用到 ducking）。
 
-    素材不存在、輸出蓋到任何一個素材、ffmpeg 失敗 → 拋錯（AssembleError／RuntimeError），
-    失敗時不留下半支檔案。
+    素材不存在、輸出蓋到任何一個素材、ffmpeg 失敗 → 拋錯（AssembleError／RuntimeError）。
+    先寫到同資料夾的暫存檔，成功才換名：失敗或中途停下（progress_cb 拋例外，例如使用者
+    按取消）不留下半支檔案，目的地原本就有的檔案也不會被動到。
     """
     timeline = normalize(timeline)
     paths = all_paths(timeline)
@@ -402,7 +403,9 @@ def render(timeline: dict, output_path: str,
     first = media[timeline["main"][0]["path"]]
     canvas = (first.get("width"), first.get("height"), first.get("fps"))
     duck = duck_settings(timeline, media, config) if any(m["duck"] for m in timeline["music"]) else None
-    command = build_command(timeline, output_path, media, canvas, duck)
+    root, ext = os.path.splitext(output_path)
+    temp = f"{root}.tmp-{os.getpid()}{ext or '.mp4'}"
+    command = build_command(timeline, temp, media, canvas, duck)
     total = main_duration(timeline)
     if progress_cb:
         progress_cb(0.0, "正在組合時間軸…")
@@ -411,25 +414,44 @@ def render(timeline: dict, output_path: str,
                                    text=True, encoding="utf-8", errors="ignore")
     except OSError as exc:
         raise RuntimeError(f"無法啟動 ffmpeg：{exc}") from exc
-    for line in process.stdout:
-        key, _, value = line.strip().partition("=")
-        if key in ("out_time_us", "out_time_ms") and progress_cb and total > 0:
-            try:
-                progress_cb(min(int(value) / 1e6 / total, 0.99), "正在組合時間軸…")
-            except ValueError:
-                pass
-    stderr = process.stderr.read() or ""
-    ret = process.wait()
+    try:
+        for line in process.stdout:
+            key, _, value = line.strip().partition("=")
+            if key in ("out_time_us", "out_time_ms") and progress_cb and total > 0:
+                try:
+                    ratio = min(int(value) / 1e6 / total, 0.99)
+                except ValueError:
+                    continue
+                progress_cb(ratio, "正在組合時間軸…")
+        stderr = process.stderr.read() or ""
+        ret = process.wait()
+    except BaseException:
+        process.kill()
+        process.wait()
+        _remove(temp)
+        raise
+    finally:
+        process.stdout.close()
+        process.stderr.close()
     if ret != 0:
-        try:
-            os.unlink(output_path)
-        except OSError:
-            pass
+        _remove(temp)
         detail = stderr.strip().splitlines()
         raise RuntimeError("組合失敗" + (f"：{detail[-1]}" if detail else ""))
+    try:
+        os.replace(temp, output_path)
+    except OSError:
+        _remove(temp)
+        raise
     if progress_cb:
         progress_cb(1.0, "組合完成")
     width = timeline["width"] or canvas[0] or 1920
     height = timeline["height"] or canvas[1] or 1080
     return {"output": output_path, "duration": total, "width": width - width % 2,
             "height": height - height % 2, "fps": timeline["fps"] or canvas[2] or 30.0}
+
+
+def _remove(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
