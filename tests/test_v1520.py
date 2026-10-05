@@ -321,6 +321,9 @@ if old_app_src is not None:
         # 3.0 第 6 項：代理檔（判斷要不要做、ffmpeg 轉成短邊 540＋關鍵影格密、
         # 快取與清理），零 GUI 依賴，Qt 播放器只決定什麼時候換著播（全新檔案）。
         "subtitle/proxy.py",
+        # 3.0 第 7 項：多段素材與多軌的時間軸資料模型＋輸出成 ffmpeg
+        # filter_complex（主軌接段、疊加 B-roll／圖片、音樂與閃避），零 GUI 依賴（全新檔案）。
+        "subtitle/assemble.py",
         # 3.0 第 2 項第二階段：burn_layout（預覽照燒錄的位置與大小畫）。
         # 與 cues_to_ass 同檔、共用對齊與邊距的算法；cues_to_ass 只把原本
         # 內嵌的邊距算式換成同一個函式，輸出逐字相同（測試比對）。
