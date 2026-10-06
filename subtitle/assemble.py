@@ -336,6 +336,76 @@ def build_command(timeline: dict, output_path: str, media: dict,
                "-progress", "pipe:1", output_path])
 
 
+# ===== 給時間軸介面用 =====================================================
+# 介面（gui_qt）只負責畫與拖；「新加進來的素材長什麼樣、佔時間軸的哪一段、拖到哪裡
+# 要夾住」都在這裡，之後換介面不用重寫。
+
+TRACK_KINDS = ("overlays", "music")
+
+
+def probe_seconds(path: str) -> Optional[float]:
+    """
+    素材片長（秒）。量不到（沒有 ffprobe、檔案壞掉、圖片）回傳 None——不猜：
+    `media.probe_duration` 失敗時回 60 秒，拿來當素材長度會憑空多出一段。
+    """
+    import shutil
+    if is_image(path) or not shutil.which("ffprobe"):
+        return None
+    try:
+        done = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                               "-of", "default=noprint_wrappers=1:nokey=1", path],
+                              capture_output=True, timeout=30)
+        value = float((done.stdout or b"").decode("utf-8", errors="ignore").strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return round(value, 3) if done.returncode == 0 and value > 0 else None
+
+
+def clamp_at(at: float, total: float) -> float:
+    """開始時間夾在 0～片尾前 MIN_CLIP 秒（再往後就放不下任何東西）。"""
+    return round(max(0.0, min(float(at), float(total) - MIN_CLIP)), 3)
+
+
+def new_overlay(path: str, at: float, total: float, seconds: Optional[float] = None) -> dict:
+    """
+    在 at 秒加一段疊加：圖片放 DEFAULT_IMAGE_SECONDS 秒；影片整段（seconds＝它的片長，
+    量不到就拋 AssembleError）。位置預設蓋滿整張畫面，聲音預設關。
+    """
+    at = clamp_at(at, total)
+    if is_image(path):
+        return {"path": path, "at": at, "duration": DEFAULT_IMAGE_SECONDS}
+    if not seconds or seconds < MIN_CLIP:
+        raise AssembleError(f"量不到這段影片有多長：{os.path.basename(path)}")
+    return {"path": path, "at": at, "in": 0.0, "out": round(float(seconds), 3)}
+
+
+def new_music(path: str, at: float, total: float, seconds: Optional[float] = None) -> dict:
+    """在 at 秒加一段音樂：整首、預設音量、不循環、講話時自動壓低（配樂最常見的用法）。"""
+    if is_image(path):
+        raise AssembleError(f"圖片不能放音樂軌：{os.path.basename(path)}")
+    if not seconds or seconds < MIN_CLIP:
+        raise AssembleError(f"量不到這段聲音有多長：{os.path.basename(path)}")
+    return {"path": path, "at": clamp_at(at, total), "in": 0.0, "out": round(float(seconds), 3),
+            "volume": DEFAULT_MUSIC_VOLUME, "loop": False, "duck": True}
+
+
+def item_span(kind: str, item: dict, total: float) -> tuple:
+    """
+    這段素材佔輸出時間軸的 (開始, 結束)，超出片尾的剪掉（跟輸出時一樣）。
+    循環的音樂、沒給 out 的音樂一路到片尾。
+    """
+    if kind not in TRACK_KINDS:
+        raise ValueError(f"不認得的軌：{kind!r}")
+    at = float(item.get("at", 0.0))
+    if kind == "overlays" and is_image(item.get("path", "")):
+        length = float(item.get("duration", DEFAULT_IMAGE_SECONDS))
+    elif kind == "music" and (item.get("loop") or item.get("out") is None):
+        length = float(total) - at
+    else:
+        length = float(item["out"]) - float(item.get("in", 0.0))
+    return round(at, 3), round(min(at + length, float(total)), 3)
+
+
 # ===== 真的輸出 ===========================================================
 
 def probe_media(path: str) -> dict:
