@@ -11,6 +11,9 @@
    沒聲音的片段有音樂就有聲音、音量 0 就沒聲音；閃避真的把音樂壓低。
 5. 錯誤：素材不存在、輸出蓋到素材、ffmpeg 失敗、中途停下都不留下檔案，目的地原本的
    檔案不動。
+6. 給時間軸介面用（第二階段）：新加的素材長什麼樣（圖片 3 秒、影片整段、音樂整首＋
+   預設音量＋閃避）、開始時間夾在片內、每段佔輸出的哪一段（超出片尾剪掉、循環到片尾）、
+   量素材長度（量不到回 None，不猜）。
 """
 import copy
 import os
@@ -133,6 +136,49 @@ check("沒畫面的放主軌 → 說清楚（只有聲音的請放音樂軌）",
           {"main": [{"path": "m.mp3", "out": 2}]}), "o.mp4", media) or ""))
 check("沒聲音的放音樂軌 → 說清楚", "沒有聲音" in (error_of(assemble.build_command, assemble.normalize(
     {"main": [{"path": "a.mp4", "out": 2}], "music": [{"path": "b.mp4"}]}), "o.mp4", media) or ""))
+
+# ----- 6. 給時間軸介面用 -----
+check("clamp_at：夾在 0～片尾前 MIN_CLIP、取到毫秒",
+      [assemble.clamp_at(v, 10) for v in (-3, 0, 4.12345, 9.99, 50)]
+      == [0.0, 0.0, 4.123, round(10 - assemble.MIN_CLIP, 3), round(10 - assemble.MIN_CLIP, 3)])
+check("new_overlay：圖片放 3 秒、不用量長度",
+      assemble.new_overlay("logo.PNG", 2.5, 10) == {"path": "logo.PNG", "at": 2.5, "duration": 3.0})
+check("new_overlay：影片整段（in 0、out＝片長）、開始夾在片內",
+      assemble.new_overlay("b.mp4", 12, 10, seconds=4.25)
+      == {"path": "b.mp4", "at": round(10 - assemble.MIN_CLIP, 3), "in": 0.0, "out": 4.25})
+check("new_overlay：影片量不到長度 → 說清楚、不猜",
+      "量不到" in (error_of(assemble.new_overlay, "b.mp4", 1, 10, None) or ""))
+check("new_overlay：影片太短 → 說清楚",
+      "量不到" in (error_of(assemble.new_overlay, "b.mp4", 1, 10, assemble.MIN_CLIP / 2) or ""))
+check("new_music：整首、預設音量、不循環、講話時壓低",
+      assemble.new_music("s.mp3", -1, 10, seconds=95.5)
+      == {"path": "s.mp3", "at": 0.0, "in": 0.0, "out": 95.5,
+          "volume": assemble.DEFAULT_MUSIC_VOLUME, "loop": False, "duck": True})
+check("new_music：圖片 → 說清楚", "圖片" in (error_of(assemble.new_music, "a.jpg", 0, 10, 3) or ""))
+check("new_music：量不到長度 → 說清楚", "量不到" in (error_of(assemble.new_music, "s.mp3", 0, 10, None) or ""))
+check("新加的素材都過得了 normalize（介面加進來的就能直接輸出）",
+      len(assemble.normalize({"main": [{"path": "a.mp4", "out": 10}],
+                              "overlays": [assemble.new_overlay("logo.png", 9.99, 10),
+                                           assemble.new_overlay("b.mp4", 3, 10, 2)],
+                              "music": [assemble.new_music("s.mp3", 9.99, 10, 60)]})["music"]) == 1)
+check("item_span：圖片用 duration（沒給用預設 3 秒）",
+      assemble.item_span("overlays", {"path": "x.png", "at": 1, "duration": 2}, 10) == (1.0, 3.0)
+      and assemble.item_span("overlays", {"path": "x.png", "at": 1}, 10) == (1.0, 4.0))
+check("item_span：影片用 out−in；超出片尾的剪掉",
+      assemble.item_span("overlays", {"path": "b.mp4", "at": 2, "in": 1, "out": 4}, 10) == (2.0, 5.0)
+      and assemble.item_span("overlays", {"path": "b.mp4", "at": 8, "in": 0, "out": 5}, 10) == (8.0, 10.0))
+check("item_span：音樂循環或沒給 out → 一路到片尾",
+      assemble.item_span("music", {"path": "s.mp3", "at": 3, "in": 0, "out": 2, "loop": True}, 10) == (3.0, 10.0)
+      and assemble.item_span("music", {"path": "s.mp3", "at": 4, "out": None}, 10) == (4.0, 10.0)
+      and assemble.item_span("music", {"path": "s.mp3", "at": 4, "in": 1, "out": 3}, 10) == (4.0, 6.0))
+try:
+    assemble.item_span("main", {}, 10)
+    check("item_span：不認得的軌拋錯", False)
+except ValueError:
+    check("item_span：不認得的軌拋錯", True)
+check("probe_seconds：圖片與不存在的檔回 None（不猜）",
+      assemble.probe_seconds("logo.png") is None
+      and assemble.probe_seconds(os.path.join(tempfile.gettempdir(), "沒有這個檔.mp4")) is None)
 
 if not shutil.which("ffmpeg"):
     print("SKIP 這個環境沒有 ffmpeg：略過真的輸出")
@@ -316,6 +362,14 @@ else:
     leftovers = [n for n in os.listdir(tmp) if ".tmp-" in n]
     check("中途停下（進度回呼拋例外）→ ffmpeg 停掉、暫存檔清掉、目的地原本的檔案不動",
           stopped and not leftovers and open(keep, "rb").read() == b"old", f"{stopped} {leftovers}")
+    m_len, b_len = assemble.probe_seconds(p("m.m4a")), assemble.probe_seconds(p("b.mp4"))
+    check("probe_seconds：量得到聲音檔與影片的長度（到毫秒）",
+          m_len is not None and abs(m_len - 1.5) < 0.05 and b_len is not None and abs(b_len - 3) < 0.05,
+          f"{m_len} {b_len}")
+    broken = p("broken.mp4")
+    with open(broken, "wb") as fh:
+        fh.write(b"not a video")
+    check("probe_seconds：壞掉的檔回 None", assemble.probe_seconds(broken) is None)
     shutil.rmtree(tmp, ignore_errors=True)
 
 print()

@@ -42,6 +42,12 @@ Tk 版的「預覽」是 Canvas 畫的假畫面（`gui/preview_panel.py`），�
 「編輯用代理檔」可以關掉（讀 config 的 `qt_proxy`，預設開；Qt 預覽版還不寫回
 config.json，關掉只算這一次）。
 
+素材軌（第 7 項第二階段）：「加入畫面…」「加入音樂…」在播放頭的位置放一段疊加的影片
+／圖片或背景音樂，畫在時間軸的兩條素材軌上，可以拖位置、選取後按 Delete 刪；「輸出多
+軌…」照這份時間軸（`subtitle/assemble.py`）把原檔連同素材合成一支新影片，字幕原封不
+動放一份同檔名 .srt。這一階段播放器還不會把素材疊上去預覽、素材的增刪拖不進復原，
+也還不能跟剪點一起輸出；換一支影片素材軌就清掉。
+
 還沒做：與字幕清單雙向同步。見 `docs/ROADMAP_3.0.md`。
 """
 import os
@@ -62,6 +68,7 @@ from PySide6.QtWidgets import (
 
 from gui_qt import timeline as timeline_mod
 from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
+from subtitle import assemble as assemble_mod
 from subtitle import cueedit, cutmarks
 from subtitle import proxy as proxy_mod
 from subtitle.cuetime import CueIndex
@@ -285,6 +292,20 @@ class PlayerPanel(QWidget):
         self.exporter = CutExporter(self)
         self.last_export = None  # 上一次輸出成功的結果（給測試與提示用）
 
+        # 素材軌（3.0 第 7 項第二階段）：疊加的畫面與背景音樂，照 assemble 的時間軸格式
+        self.tracks = {"overlays": [], "music": []}
+        self.add_overlay_btn = QPushButton("加入畫面…")
+        self.add_overlay_btn.setToolTip("在播放頭的位置疊一段影片或圖片（預設蓋滿整個畫面、不帶聲音）")
+        self.add_music_btn = QPushButton("加入音樂…")
+        self.add_music_btn.setToolTip("在播放頭的位置放一段背景音樂（預設音量 35%、有人講話時自動壓低）")
+        self.remove_track_btn = QPushButton("刪除選取")
+        self.remove_track_btn.setToolTip("刪掉時間軸上選取的那段素材（也可以按 Delete）")
+        self.track_label = QLabel("")
+        self.assemble_btn = QPushButton("輸出多軌…")
+        self.assemble_btn.setToolTip("把影片連同素材軌合成一支新影片，旁邊放一份字幕；原始影片不動")
+        self.track_exporter = TrackExporter(self)
+        self.last_assemble = None  # 上一次多軌輸出成功的結果
+
         controls = QHBoxLayout()
         for w in (self.open_btn, self.subs_btn, self.play_btn):
             controls.addWidget(w)
@@ -312,6 +333,13 @@ class PlayerPanel(QWidget):
         cut_row.addWidget(self.cut_reset_btn)
         cut_row.addWidget(self.export_btn)
         layout.addLayout(cut_row)
+        track_row = QHBoxLayout()
+        track_row.addWidget(QLabel("素材軌："))
+        for w in (self.add_overlay_btn, self.add_music_btn, self.remove_track_btn):
+            track_row.addWidget(w)
+        track_row.addWidget(self.track_label, 1)
+        track_row.addWidget(self.assemble_btn)
+        layout.addLayout(track_row)
         layout.addWidget(self.timeline)
         layout.addLayout(footer)
 
@@ -346,6 +374,16 @@ class PlayerPanel(QWidget):
         self.exporter.progress.connect(self._on_export_progress)
         self.exporter.finished.connect(self._on_export_done)
         self.exporter.failed.connect(self._on_export_failed)
+        self.add_overlay_btn.clicked.connect(lambda: self.add_track("overlays"))
+        self.add_music_btn.clicked.connect(lambda: self.add_track("music"))
+        self.remove_track_btn.clicked.connect(self.remove_selected_track)
+        self.assemble_btn.clicked.connect(lambda: self.export_tracks())
+        self.track_exporter.progress.connect(self._on_assemble_progress)
+        self.track_exporter.finished.connect(self._on_assemble_done)
+        self.track_exporter.failed.connect(self._on_assemble_failed)
+        self.timeline.trackItemSelected.connect(lambda _k, _i: self._update_track_buttons())
+        self.timeline.trackItemMoved.connect(self._on_track_moved)
+        self.timeline.trackItemDeleteRequested.connect(self.remove_track)
         self.timeline.cutMarkToggled.connect(self._on_cut_toggled)
         self.timeline.cutMarkChanged.connect(self._on_cut_changed)
         self.proxy_box.toggled.connect(self._on_proxy_toggled)
@@ -355,6 +393,7 @@ class PlayerPanel(QWidget):
         self.loader.peaksReady.connect(self._on_peaks)
         self.loader.filmstripReady.connect(self._on_filmstrip)
         self.loader.failed.connect(self._on_timeline_failed)
+        self._update_track_buttons()
 
     # ---- 對外 ----------------------------------------------------------
 
@@ -374,6 +413,9 @@ class PlayerPanel(QWidget):
         self._fitted = False
         self.timeline.reset("正在分析波形…", "正在抽縮圖…")
         self.loader.load(os.path.abspath(path))
+        # 素材軌的位置是照上一支的片長放的，換片子就清掉
+        self.tracks = {"overlays": [], "music": []}
+        self.refresh_tracks()
 
     def set_cues(self, cues, source=""):
         """換一份字幕；畫面上的那句與時間軸上的字幕塊立刻跟著更新。"""
@@ -485,6 +527,147 @@ class PlayerPanel(QWidget):
         self._update_export_button()
         self.refresh_cut_marks()
         self._show_export_error(f"沒有輸出成功：{message}")
+
+    # ---- 素材軌（3.0 第 7 項第二階段） ------------------------------------
+
+    def refresh_tracks(self, note=None):
+        """把素材軌畫到時間軸上，順便更新那一行的說明與按鈕。"""
+        self.timeline.set_tracks(self.tracks["overlays"], self.tracks["music"])
+        if not self.track_exporter.busy:  # 輸出中這一行寫進度，別蓋掉
+            self.track_label.setText(note if note is not None else self._track_summary())
+        self._update_track_buttons()
+
+    def _track_summary(self):
+        overlays, music = len(self.tracks["overlays"]), len(self.tracks["music"])
+        if not overlays and not music:
+            return ""
+        parts = []
+        if overlays:
+            parts.append(f"畫面 {overlays} 段")
+        if music:
+            parts.append(f"音樂 {music} 段")
+        return "、".join(parts) + "　播放器還不會疊上去，按「輸出多軌…」合成"
+
+    def _update_track_buttons(self):
+        ready = bool(self.media_path) and self.media_duration() > 0
+        idle = not self.track_exporter.busy
+        self.add_overlay_btn.setEnabled(ready and idle)
+        self.add_music_btn.setEnabled(ready and idle)
+        self.remove_track_btn.setEnabled(idle and self.timeline.track_selected is not None)
+        self.assemble_btn.setEnabled(ready and idle and any(self.tracks.values()))
+
+    def add_track(self, kind, path=None):
+        """
+        在播放頭的位置加一段素材（kind："overlays"／"music"）。path 省略時先問要哪個檔。
+        回傳是否加成功；讀不出來（沒有畫面的檔放畫面軌、沒有聲音的檔放音樂軌、量不到
+        長度）就說清楚、不加。
+        """
+        if kind not in assemble_mod.TRACK_KINDS:
+            raise ValueError(f"不認得的軌：{kind!r}")
+        total = self.media_duration()
+        if not self.media_path or total <= 0 or self.track_exporter.busy:
+            return False
+        if path is None:
+            path = self._ask_track_file(kind)
+            if not path:
+                return False
+        path = os.path.abspath(path)
+        at = self.player.position() / 1000.0
+        if not os.path.isfile(path):
+            self._show_track_error(f"找不到 {os.path.basename(path)}")
+            return False
+        try:
+            info = assemble_mod.probe_media(path)
+            if kind == "overlays" and not info["video"]:
+                raise assemble_mod.AssembleError(f"{os.path.basename(path)} 沒有畫面，不能放畫面軌")
+            if kind == "music" and not info["audio"]:
+                raise assemble_mod.AssembleError(f"{os.path.basename(path)} 沒有聲音，不能放音樂軌")
+            seconds = assemble_mod.probe_seconds(path)
+            make = assemble_mod.new_overlay if kind == "overlays" else assemble_mod.new_music
+            item = make(path, at, total, seconds)
+        except (assemble_mod.AssembleError, OSError) as exc:
+            self._show_track_error(str(exc))
+            return False
+        self.tracks[kind].append(item)
+        self.refresh_tracks()
+        self.timeline.select_track_item(kind, len(self.tracks[kind]) - 1, seek=False)
+        return True
+
+    def remove_track(self, kind, index):
+        if self.track_exporter.busy or not 0 <= index < len(self.tracks.get(kind, ())):
+            return False
+        del self.tracks[kind][index]
+        self.timeline.select_track_item(kind, -1, seek=False)
+        self.refresh_tracks()
+        return True
+
+    def remove_selected_track(self):
+        selected = self.timeline.track_selected
+        return self.remove_track(*selected) if selected else False
+
+    def _on_track_moved(self, kind, index, at):
+        if 0 <= index < len(self.tracks.get(kind, ())) and not self.track_exporter.busy:
+            self.tracks[kind][index]["at"] = assemble_mod.clamp_at(at, self.media_duration())
+            self.refresh_tracks()
+        else:
+            self.refresh_tracks()  # 輸出中不改：拖過去的放回原位
+
+    def timeline_for_export(self):
+        """目前的多軌時間軸（assemble 的格式）：主軌是整支原檔（播的可能是代理檔）。"""
+        return {"main": [{"path": self.media_path, "in": 0.0, "out": self.media_duration()}],
+                "overlays": [dict(x) for x in self.tracks["overlays"]],
+                "music": [dict(x) for x in self.tracks["music"]]}
+
+    def export_tracks(self, output_path=None):
+        """照素材軌合成輸出。output_path 省略時先問要存到哪。回傳是否開始輸出。"""
+        if self.track_exporter.busy or not self.media_path or not any(self.tracks.values()):
+            return False
+        timeline = self.timeline_for_export()
+        try:
+            assemble_mod.normalize(timeline)
+        except assemble_mod.AssembleError as exc:
+            self._show_track_error(str(exc))
+            return False
+        if output_path is None:
+            root, _ext = os.path.splitext(self.media_path)
+            output_path = self._ask_assemble_path(root + "_多軌.mp4")
+            if not output_path:
+                return False
+        self.track_label.setText(f"正在輸出 {os.path.basename(output_path)}…")
+        self.track_exporter.start(timeline, output_path, self.cues, dict(self._config))
+        self._update_track_buttons()
+        return True
+
+    def _ask_track_file(self, kind):
+        if kind == "overlays":
+            title, filters = "加入畫面", "影片或圖片 (*.mp4 *.mov *.mkv *.avi *.webm *.m4v " \
+                + " ".join("*" + e for e in assemble_mod.IMAGE_EXTS) + ");;所有檔案 (*)"
+        else:
+            title, filters = "加入音樂", "聲音或影片 (*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.opus " \
+                "*.mp4 *.mov *.mkv);;所有檔案 (*)"
+        path, _ = QFileDialog.getOpenFileName(self, title, os.path.dirname(self.media_path or ""), filters)
+        return path
+
+    def _ask_assemble_path(self, suggested):
+        path, _ = QFileDialog.getSaveFileName(self, "輸出多軌", suggested, "MP4 影片 (*.mp4);;所有檔案 (*)")
+        return path
+
+    def _show_track_error(self, message):
+        QMessageBox.warning(self, "素材軌", message)
+
+    def _on_assemble_progress(self, ratio, _message):
+        self.track_label.setText(f"正在輸出多軌…{int(round(ratio * 100))}%")
+
+    def _on_assemble_done(self, result):
+        self.last_assemble = result
+        note = f"已輸出 {os.path.basename(result['output'])}"
+        if result["subtitles"]:
+            note += f"＋{os.path.basename(result['subtitles'])}"
+        self.refresh_tracks(note)
+
+    def _on_assemble_failed(self, message):
+        self.refresh_tracks()
+        self._show_track_error(f"沒有輸出成功：{message}")
 
     def reset_cut_marks(self):
         """清掉目前這種來源的剪點微調（停用、調過的範圍），回到自動算出來的樣子。"""
@@ -666,6 +849,7 @@ class PlayerPanel(QWidget):
             self.timeline.zoom_to_fit()
         self._on_position(self.player.position())
         self.refresh_cut_marks()  # 知道片長之後，片尾的空白才算得出來
+        self._update_track_buttons()
 
     def _on_peaks(self, gen, peaks):
         if gen == self.loader.generation:
@@ -931,6 +1115,43 @@ class CutExporter(QObject):
                 subtitles = os.path.splitext(output_path)[0] + ".srt"
                 cueedit.save_cues(plan["cues"], subtitles)
             result = dict(plan, output=output_path, subtitles=subtitles)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.busy = False
+            self.failed.emit(str(exc))
+            return
+        self.busy = False
+        self.finished.emit(result)
+
+
+class TrackExporter(QObject):
+    """
+    在背景執行緒照多軌時間軸合成（assemble.render）；進度與結果用訊號送回主執行緒。
+    主軌是整支原檔、時間不變，所以字幕原封不動存一份同檔名的 .srt。
+    """
+
+    progress = Signal(float, str)
+    finished = Signal(object)  # {"output", "subtitles"（沒有字幕時 None）, "duration", …}
+    failed = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.busy = False
+
+    def start(self, timeline, output_path, cues, config):
+        self.busy = True
+        threading.Thread(target=self._run, args=(timeline, output_path, [dict(c) for c in cues or []],
+                                                 config), daemon=True).start()
+
+    def _run(self, timeline, output_path, cues, config):
+        try:
+            result = assemble_mod.render(
+                timeline, output_path,
+                lambda ratio, message: self.progress.emit(float(ratio), str(message)), config)
+            subtitles = None
+            if cues:
+                subtitles = os.path.splitext(output_path)[0] + ".srt"
+                cueedit.save_cues(cues, subtitles)
+            result = dict(result, subtitles=subtitles)
         except (OSError, ValueError, RuntimeError) as exc:
             self.busy = False
             self.failed.emit(str(exc))
