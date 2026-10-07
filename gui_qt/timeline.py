@@ -53,6 +53,11 @@
   送出 `trackItemMoved(哪一軌, 第幾段, 新的開始秒數)`。能放到哪裡由
   `assemble.clamp_at` 決定；靠近播放頭、字幕或別段素材的邊會吸附。拖曳中按 Esc 放棄。
 - 選取後按 Delete（或 Backspace）→ `trackItemDeleteRequested`；真的刪不刪由播放器決定。
+
+第 7 項第三階段（修頭尾）：滑鼠移到素材方塊左右邊 `EDGE_PX` 內游標變成左右箭頭，按住拖
+＝修頭或修尾（規則在 `assemble.trim_item`：拖頭時素材的進點跟著動、尾巴不動；拖尾最多
+到素材本身的長度）。一樣會吸附、Esc 放棄；放開時送出 `trackItemChanged(哪一軌, 第幾段,
+新的 dict)`。循環的音樂一路到片尾，只有頭能修。
 """
 
 from __future__ import annotations
@@ -93,8 +98,8 @@ ROW_Y["music"] = ROW_Y["overlays"] + TRACK_H + GAP
 TOTAL_H = ROW_Y["music"] + TRACK_H
 CUT_LANE_NOTE = "剪點列：選了上面的「剪點」之後，點一下方塊停用／啟用、拖左右邊調整範圍"
 TRACK_NOTES = {
-    "overlays": "疊加軌：按「加入畫面…」從播放頭的位置放 B-roll 或圖片，拖方塊改位置",
-    "music": "音樂軌：按「加入音樂…」從播放頭的位置放配樂，拖方塊改位置",
+    "overlays": "疊加軌：按「加入畫面…」從播放頭的位置放 B-roll 或圖片，拖方塊改位置、拖左右邊修頭尾",
+    "music": "音樂軌：按「加入音樂…」從播放頭的位置放配樂，拖方塊改位置、拖左右邊修頭尾",
 }
 TRACK_NAMES = {"overlays": "疊加", "music": "音樂"}
 
@@ -303,6 +308,7 @@ class TimelineView(QGraphicsView):
     trackItemSelected = Signal(str, int)          # 哪一軌（"overlays"／"music"）、第幾段；-1＝取消選取
     trackItemMoved = Signal(str, int, float)      # 哪一軌、第幾段、拖完的開始（秒）
     trackItemDeleteRequested = Signal(str, int)   # 選取後按 Delete
+    trackItemChanged = Signal(str, int, object)   # 哪一軌、第幾段、修過頭尾的新 dict
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -360,6 +366,8 @@ class TimelineView(QGraphicsView):
         self.track_selected = None  # (哪一軌, 第幾段)
         # 拖曳素材：(哪一軌, 第幾段, 原本的開始, 按下的秒數, 按下的 x, 是否已經開始動)
         self._track_drag = None
+        # 修頭尾：(哪一軌, 第幾段, "start"/"end", 原本的 dict, 原本那個邊的秒數, 按下的秒數)
+        self._track_trim = None
         self.playhead = QGraphicsLineItem()
         self.playhead.setZValue(10)
         self.scene_.addItem(self.playhead)
@@ -411,7 +419,7 @@ class TimelineView(QGraphicsView):
                        "music": [dict(x) for x in (music or [])]}
         if self.track_selected and self.track_selected[1] >= len(self.tracks[self.track_selected[0]]):
             self.track_selected = None
-        self._track_drag = None
+        self._track_drag = self._track_trim = None
         self._build_tracks()
         for row in self.track_rows.values():
             row.update()
@@ -441,6 +449,34 @@ class TimelineView(QGraphicsView):
                     return kind, index
             return None
         return None
+
+    def track_part(self, view_pos):
+        """
+        視窗座標落在哪一段素材的哪裡：(哪一軌, 第幾段, "start"/"end"/"body")，不在方塊上
+        是 None。抓邊照畫出來的寬度算；不能修的邊（循環音樂的尾巴）算身體。
+        """
+        hit = self.track_hit(view_pos)
+        if hit is None:
+            return None
+        kind, index = hit
+        pps = self.px_per_sec
+        t = self.mapToScene(int(view_pos.x()), int(view_pos.y())).x() / pps
+        start, end = self.track_span(kind, index)
+        part = cueedit.edge_at(start, max(end, start + 2.0 / pps), t, EDGE_PX / pps) or cueedit.BODY
+        if part != cueedit.BODY and part not in assemble_mod.trimmable_edges(kind, self.tracks[kind][index]):
+            part = cueedit.BODY
+        return kind, index, part
+
+    def _track_snap_targets(self, kind, index):
+        """拖素材時的吸附點：播放頭、字幕的邊、別段素材的頭尾（兩軌都算）。"""
+        targets = [self.position_ms / 1000.0]
+        for _i, cue in self.cues:
+            targets += [float(cue["start"]), float(cue["end"])]
+        for other in assemble_mod.TRACK_KINDS:
+            for k in range(len(self.tracks[other])):
+                if (other, k) != (kind, index):
+                    targets += list(self.track_span(other, k))
+        return targets
 
     def select_track_item(self, kind, index, seek=True):
         """選取某一段素材（index -1＝取消）；seek 時跳到它開始的地方。"""
@@ -662,11 +698,24 @@ class TimelineView(QGraphicsView):
     def mousePressEvent(self, event):  # noqa: N802
         if event.button() == Qt.LeftButton and self.duration > 0:
             pos = event.position()
-            track = self.track_hit(pos)
+            track = self.track_part(pos)
+            if track is not None and track[2] != cueedit.BODY:
+                # 素材的邊：修頭／修尾，馬上開始拖
+                kind, index, part = track
+                if (kind, index) != self.track_selected:
+                    self.select_track_item(kind, index, seek=False)
+                start, end = self.track_span(kind, index)
+                pressed = self.mapToScene(int(pos.x()), 0).x() / self.px_per_sec
+                # 照移動量算（不是滑鼠的絕對位置）：抓在邊旁邊幾 px，邊也不會跳過去
+                self._track_trim = (kind, index, part, dict(self.tracks[kind][index]),
+                                    start if part == cueedit.START else end, pressed)
+                self.setFocus(Qt.MouseFocusReason)
+                event.accept()
+                return
             if track is not None:
                 # 素材方塊：先選取；移動超過 MOVE_START_PX 才算拖，沒動就放開＝點選（跳過去）
-                kind, index = track
-                if track != self.track_selected:
+                kind, index = track[:2]
+                if (kind, index) != self.track_selected:
                     self.select_track_item(kind, index, seek=False)
                 pressed = self.mapToScene(int(pos.x()), 0).x() / self.px_per_sec
                 at = float(self.tracks[kind][index].get("at", 0.0))
@@ -712,6 +761,15 @@ class TimelineView(QGraphicsView):
 
     def mouseMoveEvent(self, event):  # noqa: N802
         pos = event.position()
+        if self._track_trim:
+            kind, index, part, item0, edge0, pressed = self._track_trim
+            pps = self.px_per_sec
+            delta = self.mapToScene(int(pos.x()), 0).x() / pps - pressed
+            t = cueedit.snap(edge0 + delta, self._track_snap_targets(kind, index), SNAP_PX / pps)
+            self.tracks[kind][index] = assemble_mod.trim_item(kind, item0, part, t, self.duration)
+            self._refresh_track(kind, index)
+            event.accept()
+            return
         if self._track_drag:
             kind, index, at0, pressed, press_x, active = self._track_drag
             if not active:
@@ -725,13 +783,7 @@ class TimelineView(QGraphicsView):
             # 吸附：播放頭、字幕的邊、別段素材的頭尾（兩軌都算）
             start0, end0 = assemble_mod.item_span(kind, dict(self.tracks[kind][index], at=at0),
                                                   self.duration)
-            targets = [self.position_ms / 1000.0]
-            for _i, cue in self.cues:
-                targets += [float(cue["start"]), float(cue["end"])]
-            for other in assemble_mod.TRACK_KINDS:
-                for k in range(len(self.tracks[other])):
-                    if (other, k) != (kind, index):
-                        targets += list(self.track_span(other, k))
+            targets = self._track_snap_targets(kind, index)
             at = cueedit.snap(at0 + delta, targets, SNAP_PX / pps)
             # 尾巴也能吸：頭沒吸到時，看尾巴（at＋原本長度）有沒有靠近吸附點
             if at == at0 + delta:
@@ -788,8 +840,10 @@ class TimelineView(QGraphicsView):
             return
         cut = self.cut_hit(pos)
         hit = self.cue_hit(pos)
-        if self.track_hit(pos) is not None:
-            self.viewport().setCursor(Qt.OpenHandCursor)
+        track = self.track_part(pos)
+        if track is not None:
+            self.viewport().setCursor(Qt.OpenHandCursor if track[2] == cueedit.BODY
+                                      else Qt.SizeHorCursor)
         elif cut is not None:
             self.viewport().setCursor(Qt.PointingHandCursor if cut[1] == cueedit.BODY
                                       else Qt.SizeHorCursor)
@@ -803,6 +857,14 @@ class TimelineView(QGraphicsView):
 
     def mouseReleaseEvent(self, event):  # noqa: N802
         self._dragging = False
+        if self._track_trim:
+            kind, index, _part, item0, _edge0, _pressed = self._track_trim
+            self._track_trim = None
+            item = dict(self.tracks[kind][index])
+            if item != item0:
+                self.trackItemChanged.emit(kind, index, item)
+            event.accept()
+            return
         if self._track_drag:
             kind, index, at0, _pressed, _x, active = self._track_drag
             self._track_drag = None
@@ -848,6 +910,14 @@ class TimelineView(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event):  # noqa: N802
+        if event.key() == Qt.Key_Escape and self._track_trim:
+            # 修頭尾修到一半反悔：放回原樣，什麼都不送出
+            kind, index, _part, item0, _edge0, _pressed = self._track_trim
+            self._track_trim = None
+            self.tracks[kind][index] = dict(item0)
+            self._refresh_track(kind, index)
+            event.accept()
+            return
         if event.key() == Qt.Key_Escape and self._track_drag:
             # 拖素材拖到一半反悔：回到原本的位置，什麼都不送出
             kind, index, at0, _p, _x, _active = self._track_drag
@@ -857,7 +927,7 @@ class TimelineView(QGraphicsView):
             event.accept()
             return
         if (event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and self.track_selected
-                and not self._track_drag):
+                and not self._track_drag and not self._track_trim):
             self.trackItemDeleteRequested.emit(*self.track_selected)
             event.accept()
             return
@@ -1030,11 +1100,16 @@ class TimelineView(QGraphicsView):
                 marks.append("循環")
             if data.get("duck"):
                 marks.append("講話時壓低")
-        elif data.get("audio"):
-            marks.append("帶聲音")
+        else:
+            where = assemble_mod.overlay_position(data)
+            if where != "full":
+                marks.append(dict((k, label) for k, label, _r in assemble_mod.OVERLAY_POSITIONS)
+                             .get(where, "自訂位置"))
+            if data.get("audio"):
+                marks.append("帶聲音")
         tip = (f"{TRACK_NAMES[kind]}：{name}\n{tick_label(start, 0.1)} → {tick_label(end, 0.1)}"
                f"（{end - start:.1f} 秒）" + (f"\n{'、'.join(marks)}" if marks else "")
-               + "\n拖方塊改位置；選取後按 Delete 刪除")
+               + "\n拖方塊改位置、拖左右邊修頭尾；選取後按 Delete 刪除")
         item.setToolTip(tip)
         if rect.width() > 24:
             font = QFont(self.font())

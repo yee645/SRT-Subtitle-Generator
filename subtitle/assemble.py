@@ -370,13 +370,17 @@ def new_overlay(path: str, at: float, total: float, seconds: Optional[float] = N
     """
     在 at 秒加一段疊加：圖片放 DEFAULT_IMAGE_SECONDS 秒；影片整段（seconds＝它的片長，
     量不到就拋 AssembleError）。位置預設蓋滿整張畫面，聲音預設關。
+
+    影片與音樂另外記 `length`（素材本身多長），修頭尾時才知道最多能拉到哪；normalize
+    不看它，輸出不受影響。
     """
     at = clamp_at(at, total)
     if is_image(path):
         return {"path": path, "at": at, "duration": DEFAULT_IMAGE_SECONDS}
     if not seconds or seconds < MIN_CLIP:
         raise AssembleError(f"量不到這段影片有多長：{os.path.basename(path)}")
-    return {"path": path, "at": at, "in": 0.0, "out": round(float(seconds), 3)}
+    seconds = round(float(seconds), 3)
+    return {"path": path, "at": at, "in": 0.0, "out": seconds, "length": seconds}
 
 
 def new_music(path: str, at: float, total: float, seconds: Optional[float] = None) -> dict:
@@ -385,7 +389,8 @@ def new_music(path: str, at: float, total: float, seconds: Optional[float] = Non
         raise AssembleError(f"圖片不能放音樂軌：{os.path.basename(path)}")
     if not seconds or seconds < MIN_CLIP:
         raise AssembleError(f"量不到這段聲音有多長：{os.path.basename(path)}")
-    return {"path": path, "at": clamp_at(at, total), "in": 0.0, "out": round(float(seconds), 3),
+    seconds = round(float(seconds), 3)
+    return {"path": path, "at": clamp_at(at, total), "in": 0.0, "out": seconds, "length": seconds,
             "volume": DEFAULT_MUSIC_VOLUME, "loop": False, "duck": True}
 
 
@@ -404,6 +409,84 @@ def item_span(kind: str, item: dict, total: float) -> tuple:
     else:
         length = float(item["out"]) - float(item.get("in", 0.0))
     return round(at, 3), round(min(at + length, float(total)), 3)
+
+
+def trimmable_edges(kind: str, item: dict) -> tuple:
+    """這段素材哪些邊能拖：循環或沒給 out 的音樂一路到片尾，只有頭能修。"""
+    if kind == "music" and (item.get("loop") or item.get("out") is None):
+        return ("start",)
+    return ("start", "end")
+
+
+def trim_item(kind: str, item: dict, edge: str, t: float, total: float) -> dict:
+    """
+    把一段素材的頭（edge="start"）或尾（"end"）拖到輸出的第 t 秒，回傳新的 dict（不改
+    原本的）。跟剪片軟體一樣：
+
+    * 拖頭：開始時間與素材的進點一起動，尾巴不動（影片／音樂往右拖＝剪掉前面一段）。
+      進點不能小於 0；圖片沒有進點，只改 duration。
+    * 拖尾：只改出點（圖片改 duration），最多到素材本身的長度（`length`，沒記就不限）
+      與片尾。
+    * 不論哪一邊，至少留 MIN_CLIP 秒；開始時間夾在片內。
+    """
+    if edge not in trimmable_edges(kind, item):
+        return dict(item)
+    total = float(total)
+    out = dict(item)
+    at = float(item.get("at", 0.0))
+    image = kind == "overlays" and is_image(item.get("path", ""))
+    if image:
+        length = float(item.get("duration", DEFAULT_IMAGE_SECONDS))
+    else:
+        start_in = float(item.get("in", 0.0))
+        length = float(item["out"]) - start_in
+    end = at + length
+    t = float(t)
+    if edge == "start":
+        low = 0.0 if image else max(0.0, at - start_in)
+        new_at = min(max(t, low), end - MIN_CLIP, total - MIN_CLIP)
+        new_at = round(max(new_at, low), 3)
+        out["at"] = new_at
+        if image:
+            out["duration"] = round(end - new_at, 3)
+        else:
+            out["in"] = round(start_in + (new_at - at), 3)
+        return out
+    if image:
+        out["duration"] = round(min(max(t - at, MIN_CLIP), max(total - at, MIN_CLIP)), 3)
+        return out
+    limit = start_in + (total - at)
+    if item.get("length"):
+        limit = min(limit, float(item["length"]))
+    out["out"] = round(min(max(start_in + (t - at), start_in + MIN_CLIP), max(limit, start_in + MIN_CLIP)), 3)
+    return out
+
+
+# 子畫面的預設位置（rect 是畫布上 0～1 的比例 [x, y, w, h]）。小畫面佔寬高的三分之一，
+# 離邊 4%：常見的「右上角放一個講者」。
+OVERLAY_POSITIONS = (
+    ("full", "蓋滿整個畫面", [0.0, 0.0, 1.0, 1.0]),
+    ("top_right", "右上小畫面", [0.62, 0.04, 0.34, 0.34]),
+    ("top_left", "左上小畫面", [0.04, 0.04, 0.34, 0.34]),
+    ("bottom_right", "右下小畫面", [0.62, 0.62, 0.34, 0.34]),
+    ("bottom_left", "左下小畫面", [0.04, 0.62, 0.34, 0.34]),
+)
+
+
+def overlay_position(item: dict) -> str:
+    """這段疊加用的是哪個預設位置；不是任何一個時回傳 "custom"。沒給 rect＝蓋滿。"""
+    rect = [float(v) for v in (item.get("rect") or [0.0, 0.0, 1.0, 1.0])]
+    for key, _label, preset in OVERLAY_POSITIONS:
+        if all(abs(a - b) < 1e-6 for a, b in zip(rect, preset)):
+            return key
+    return "custom"
+
+
+def position_rect(key: str) -> list:
+    for name, _label, rect in OVERLAY_POSITIONS:
+        if name == key:
+            return list(rect)
+    raise ValueError(f"不認得的位置：{key!r}")
 
 
 # ===== 真的輸出 ===========================================================
