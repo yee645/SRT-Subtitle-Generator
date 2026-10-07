@@ -45,8 +45,12 @@ config.json，關掉只算這一次）。
 素材軌（第 7 項第二階段）：「加入畫面…」「加入音樂…」在播放頭的位置放一段疊加的影片
 ／圖片或背景音樂，畫在時間軸的兩條素材軌上，可以拖位置、選取後按 Delete 刪；「輸出多
 軌…」照這份時間軸（`subtitle/assemble.py`）把原檔連同素材合成一支新影片，字幕原封不
-動放一份同檔名 .srt。這一階段播放器還不會把素材疊上去預覽、素材的增刪拖不進復原，
-也還不能跟剪點一起輸出；換一支影片素材軌就清掉。
+動放一份同檔名 .srt。換一支影片素材軌就清掉。
+
+修頭尾與素材屬性（第 7 項第三階段）：時間軸上拖素材的左右邊修頭尾；選取一段素材後，
+「素材屬性」那一行可以改音樂的音量／循環到片尾／講話時壓低，與畫面的位置（蓋滿或四
+個角落的小畫面）／帶聲音。改了先用 `assemble.normalize` 檢查，不合理就不收。播放器還
+不會把素材疊上去預覽、素材的修改拖不進復原、也還不能跟剪點一起輸出。
 
 還沒做：與字幕清單雙向同步。見 `docs/ROADMAP_3.0.md`。
 """
@@ -62,7 +66,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QGraphicsItem, QGraphicsScene, QGraphicsView,
-    QHBoxLayout, QLabel, QMessageBox, QPushButton, QSlider, QVBoxLayout,
+    QHBoxLayout, QLabel, QMessageBox, QPushButton, QSlider, QSpinBox, QVBoxLayout,
     QWidget,
 )
 
@@ -304,6 +308,26 @@ class PlayerPanel(QWidget):
         self.assemble_btn = QPushButton("輸出多軌…")
         self.assemble_btn.setToolTip("把影片連同素材軌合成一支新影片，旁邊放一份字幕；原始影片不動")
         self.track_exporter = TrackExporter(self)
+        # 素材屬性（第三階段）：選取時間軸上的一段素材後才有東西可改
+        self.prop_label = QLabel(PROP_HINT)
+        self.volume_spin = QSpinBox()
+        self.volume_spin.setRange(0, 200)
+        self.volume_spin.setSingleStep(5)
+        self.volume_spin.setSuffix("%")
+        self.volume_spin.setPrefix("音量 ")
+        self.volume_spin.setToolTip("配樂的音量（100%＝原本的大小）")
+        self.loop_box = QCheckBox("循環到片尾")
+        self.loop_box.setToolTip("音樂放完從頭再放，一路到片尾（勾了之後只能修頭）")
+        self.duck_box = QCheckBox("講話時壓低")
+        self.duck_box.setToolTip("有人講話時自動把音樂壓低（照一般版的閃避設定）")
+        self.position_combo = QComboBox()
+        for key, label, _rect in assemble_mod.OVERLAY_POSITIONS:
+            self.position_combo.addItem(label, key)
+        self.position_combo.setToolTip("疊上去的畫面放在哪裡：蓋滿，或四個角落的小畫面")
+        self.overlay_audio_box = QCheckBox("帶聲音")
+        self.overlay_audio_box.setToolTip("疊加的影片自己的聲音也混進去（預設不帶，只用畫面）")
+        self._prop_widgets = {"music": (self.volume_spin, self.loop_box, self.duck_box),
+                              "overlays": (self.position_combo, self.overlay_audio_box)}
         self.last_assemble = None  # 上一次多軌輸出成功的結果
 
         controls = QHBoxLayout()
@@ -340,6 +364,14 @@ class PlayerPanel(QWidget):
         track_row.addWidget(self.track_label, 1)
         track_row.addWidget(self.assemble_btn)
         layout.addLayout(track_row)
+        prop_row = QHBoxLayout()
+        prop_row.addWidget(QLabel("素材屬性："))
+        prop_row.addWidget(self.prop_label)
+        for widgets in self._prop_widgets.values():
+            for w in widgets:
+                prop_row.addWidget(w)
+        prop_row.addStretch(1)
+        layout.addLayout(prop_row)
         layout.addWidget(self.timeline)
         layout.addLayout(footer)
 
@@ -382,6 +414,14 @@ class PlayerPanel(QWidget):
         self.track_exporter.finished.connect(self._on_assemble_done)
         self.track_exporter.failed.connect(self._on_assemble_failed)
         self.timeline.trackItemSelected.connect(lambda _k, _i: self._update_track_buttons())
+        self.timeline.trackItemChanged.connect(self._on_track_changed)
+        self.volume_spin.valueChanged.connect(
+            lambda v: self.set_track_props(volume=round(v / 100.0, 2)))
+        self.loop_box.toggled.connect(lambda on: self.set_track_props(loop=bool(on)))
+        self.duck_box.toggled.connect(lambda on: self.set_track_props(duck=bool(on)))
+        self.position_combo.currentIndexChanged.connect(
+            lambda _i: self.set_track_props(rect=assemble_mod.position_rect(self.position_combo.currentData())))
+        self.overlay_audio_box.toggled.connect(lambda on: self.set_track_props(audio=bool(on)))
         self.timeline.trackItemMoved.connect(self._on_track_moved)
         self.timeline.trackItemDeleteRequested.connect(self.remove_track)
         self.timeline.cutMarkToggled.connect(self._on_cut_toggled)
@@ -555,6 +595,71 @@ class PlayerPanel(QWidget):
         self.add_music_btn.setEnabled(ready and idle)
         self.remove_track_btn.setEnabled(idle and self.timeline.track_selected is not None)
         self.assemble_btn.setEnabled(ready and idle and any(self.tracks.values()))
+        self._show_track_props()
+
+    def _show_track_props(self):
+        """照選取的那段素材填屬性那一行（填的時候不送出修改）；沒選取時只寫怎麼用。"""
+        selected = self.timeline.track_selected
+        kind = selected[0] if selected and selected[1] < len(self.tracks.get(selected[0], ())) else None
+        item = self.tracks[kind][selected[1]] if kind else None
+        idle = not self.track_exporter.busy
+        for name, widgets in self._prop_widgets.items():
+            for w in widgets:
+                w.setVisible(name == kind)
+                w.setEnabled(idle)
+        self.prop_label.setText(os.path.basename(item["path"]) if item else PROP_HINT)
+        if not item:
+            return
+        for widgets in self._prop_widgets.values():
+            for w in widgets:
+                w.blockSignals(True)
+        try:
+            if kind == "music":
+                self.volume_spin.setValue(int(round(float(item.get("volume", 1.0)) * 100)))
+                self.loop_box.setChecked(bool(item.get("loop")))
+                self.duck_box.setChecked(bool(item.get("duck")))
+            else:
+                where = assemble_mod.overlay_position(item)
+                self.position_combo.setCurrentIndex(max(self.position_combo.findData(where), 0))
+                image = assemble_mod.is_image(item["path"])
+                self.overlay_audio_box.setChecked(bool(item.get("audio")) and not image)
+                # 圖片沒有聲音可帶
+                self.overlay_audio_box.setEnabled(idle and not image)
+        finally:
+            for widgets in self._prop_widgets.values():
+                for w in widgets:
+                    w.blockSignals(False)
+
+    def set_track_props(self, **changes):
+        """
+        改選取的那段素材的屬性（volume／loop／duck／rect／audio）。回傳是否改了；沒選取、
+        輸出中、或改了會不合理（normalize 不收）就不改。
+        """
+        selected = self.timeline.track_selected
+        if not selected or self.track_exporter.busy:
+            return False
+        kind, index = selected
+        if not 0 <= index < len(self.tracks.get(kind, ())):
+            return False
+        item = dict(self.tracks[kind][index], **changes)
+        try:
+            assemble_mod.normalize({"main": [{"path": self.media_path or "x", "out": self.media_duration()}],
+                                    kind: [item]})
+        except assemble_mod.AssembleError as exc:
+            self._show_track_error(str(exc))
+            self._show_track_props()
+            return False
+        if item == self.tracks[kind][index]:
+            return False
+        self.tracks[kind][index] = item
+        self.refresh_tracks()
+        return True
+
+    def _on_track_changed(self, kind, index, item):
+        """時間軸上修了頭尾：照新的 dict 改（輸出中不改，放回原樣）。"""
+        if 0 <= index < len(self.tracks.get(kind, ())) and not self.track_exporter.busy:
+            self.tracks[kind][index] = dict(item)
+        self.refresh_tracks()
 
     def add_track(self, kind, path=None):
         """
@@ -1121,6 +1226,9 @@ class CutExporter(QObject):
             return
         self.busy = False
         self.finished.emit(result)
+
+
+PROP_HINT = "點一下時間軸上的素材，就能在這裡改音量、循環、位置…"
 
 
 class TrackExporter(QObject):

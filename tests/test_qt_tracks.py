@@ -296,7 +296,7 @@ else:
     wait_until(lambda: panel.player.position() == 3500, 5000)
     check("加入音樂：在播放頭（3.5 秒）放整首、預設音量、講話時壓低",
           panel.add_track("music", song) is True
-          and panel.tracks["music"] == [{"path": song, "at": 3.5, "in": 0.0, "out": 1.5,
+          and panel.tracks["music"] == [{"path": song, "at": 3.5, "in": 0.0, "out": 1.5, "length": 1.5,
                                          "volume": assemble.DEFAULT_MUSIC_VOLUME, "loop": False, "duck": True}],
           str(panel.tracks["music"]))
     check("那一行寫兩種各幾段", "畫面 1 段、音樂 1 段" in panel.track_label.text(), panel.track_label.text())

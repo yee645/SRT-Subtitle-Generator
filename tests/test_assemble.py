@@ -14,6 +14,8 @@
 6. 給時間軸介面用（第二階段）：新加的素材長什麼樣（圖片 3 秒、影片整段、音樂整首＋
    預設音量＋閃避）、開始時間夾在片內、每段佔輸出的哪一段（超出片尾剪掉、循環到片尾）、
    量素材長度（量不到回 None，不猜）。
+7. 修頭尾與子畫面位置（第三階段）：拖頭時進點跟著動、尾巴不動；拖尾最多到素材長度與
+   片尾；至少留 MIN_CLIP；循環音樂只能修頭；預設位置認得出來、不認得的算自訂。
 """
 import copy
 import os
@@ -143,16 +145,16 @@ check("clamp_at：夾在 0～片尾前 MIN_CLIP、取到毫秒",
       == [0.0, 0.0, 4.123, round(10 - assemble.MIN_CLIP, 3), round(10 - assemble.MIN_CLIP, 3)])
 check("new_overlay：圖片放 3 秒、不用量長度",
       assemble.new_overlay("logo.PNG", 2.5, 10) == {"path": "logo.PNG", "at": 2.5, "duration": 3.0})
-check("new_overlay：影片整段（in 0、out＝片長）、開始夾在片內",
+check("new_overlay：影片整段（in 0、out＝片長、記下素材長度）、開始夾在片內",
       assemble.new_overlay("b.mp4", 12, 10, seconds=4.25)
-      == {"path": "b.mp4", "at": round(10 - assemble.MIN_CLIP, 3), "in": 0.0, "out": 4.25})
+      == {"path": "b.mp4", "at": round(10 - assemble.MIN_CLIP, 3), "in": 0.0, "out": 4.25, "length": 4.25})
 check("new_overlay：影片量不到長度 → 說清楚、不猜",
       "量不到" in (error_of(assemble.new_overlay, "b.mp4", 1, 10, None) or ""))
 check("new_overlay：影片太短 → 說清楚",
       "量不到" in (error_of(assemble.new_overlay, "b.mp4", 1, 10, assemble.MIN_CLIP / 2) or ""))
-check("new_music：整首、預設音量、不循環、講話時壓低",
+check("new_music：整首（記下素材長度）、預設音量、不循環、講話時壓低",
       assemble.new_music("s.mp3", -1, 10, seconds=95.5)
-      == {"path": "s.mp3", "at": 0.0, "in": 0.0, "out": 95.5,
+      == {"path": "s.mp3", "at": 0.0, "in": 0.0, "out": 95.5, "length": 95.5,
           "volume": assemble.DEFAULT_MUSIC_VOLUME, "loop": False, "duck": True})
 check("new_music：圖片 → 說清楚", "圖片" in (error_of(assemble.new_music, "a.jpg", 0, 10, 3) or ""))
 check("new_music：量不到長度 → 說清楚", "量不到" in (error_of(assemble.new_music, "s.mp3", 0, 10, None) or ""))
@@ -179,6 +181,59 @@ except ValueError:
 check("probe_seconds：圖片與不存在的檔回 None（不猜）",
       assemble.probe_seconds("logo.png") is None
       and assemble.probe_seconds(os.path.join(tempfile.gettempdir(), "沒有這個檔.mp4")) is None)
+
+# ----- 7. 修頭尾與子畫面位置 -----
+clip = {"path": "b.mp4", "at": 2.0, "in": 1.0, "out": 4.0, "length": 5.0}
+before = copy.deepcopy(clip)
+check("拖頭往右：開始與進點一起動、尾巴不動（剪掉前面一段）",
+      assemble.trim_item("overlays", clip, "start", 3.0, 10)
+      == dict(clip, at=3.0, **{"in": 2.0}) and clip == before)
+check("拖頭往左：最多拉到進點 0（不能比素材的開頭更早）",
+      assemble.trim_item("overlays", clip, "start", 0.0, 10) == dict(clip, at=1.0, **{"in": 0.0}))
+check("拖頭往右超過尾巴：至少留 MIN_CLIP",
+      assemble.trim_item("overlays", clip, "start", 9.0, 10)
+      == dict(clip, at=round(5.0 - assemble.MIN_CLIP, 3), **{"in": round(4.0 - assemble.MIN_CLIP, 3)}))
+check("拖尾往右：最多到素材本身的長度（length）",
+      assemble.trim_item("overlays", clip, "end", 9.0, 10) == dict(clip, out=5.0))
+check("拖尾往右：也不超過片尾", assemble.trim_item("overlays", clip, "end", 9.0, 5.5) == dict(clip, out=4.5))
+check("拖尾往左：至少留 MIN_CLIP",
+      assemble.trim_item("overlays", clip, "end", 0.0, 10) == dict(clip, out=round(1.0 + assemble.MIN_CLIP, 3)))
+check("沒記 length：拖尾只受片尾限制",
+      assemble.trim_item("music", {"path": "s.mp3", "at": 0, "in": 0, "out": 2}, "end", 7.5, 10)["out"] == 7.5)
+pic = {"path": "x.png", "at": 2.0, "duration": 3.0}
+check("圖片拖頭：只改開始與長度（尾巴不動、可以拉到 0）",
+      assemble.trim_item("overlays", pic, "start", 0.5, 10) == {"path": "x.png", "at": 0.5, "duration": 4.5})
+check("圖片拖尾：沒有素材長度限制，只到片尾",
+      assemble.trim_item("overlays", pic, "end", 30, 10) == {"path": "x.png", "at": 2.0, "duration": 8.0})
+check("開始時間夾在片內（片尾前 MIN_CLIP）",
+      assemble.trim_item("overlays", pic, "start", 20, 3.0)["at"] == round(3.0 - assemble.MIN_CLIP, 3))
+looped = {"path": "s.mp3", "at": 1.0, "in": 0.0, "out": 2.0, "loop": True}
+check("循環的音樂只能修頭（尾巴一路到片尾）",
+      assemble.trimmable_edges("music", looped) == ("start",)
+      and assemble.trim_item("music", looped, "end", 5, 10) == looped
+      and assemble.trimmable_edges("music", dict(looped, loop=False)) == ("start", "end")
+      and assemble.trimmable_edges("music", {"path": "s.mp3", "out": None}) == ("start",))
+check("修完的素材過得了 normalize",
+      len(assemble.normalize({"main": [{"path": "a.mp4", "out": 10}],
+                              "overlays": [assemble.trim_item("overlays", clip, "start", 0, 10),
+                                           assemble.trim_item("overlays", pic, "end", 30, 10)]})["overlays"]) == 2)
+check("預設位置：沒給 rect＝蓋滿；四個角落認得出來；其他算自訂",
+      assemble.overlay_position({}) == "full"
+      and [assemble.overlay_position({"rect": assemble.position_rect(k)})
+           for k, _l, _r in assemble.OVERLAY_POSITIONS] == [k for k, _l, _r in assemble.OVERLAY_POSITIONS]
+      and assemble.overlay_position({"rect": [0.1, 0.1, 0.5, 0.5]}) == "custom")
+check("預設位置都在畫布裡（normalize 收得下）",
+      len(assemble.normalize({"main": [{"path": "a.mp4", "out": 10}],
+                              "overlays": [{"path": "x.png", "rect": r} for _k, _l, r in assemble.OVERLAY_POSITIONS]})
+          ["overlays"]) == len(assemble.OVERLAY_POSITIONS))
+try:
+    assemble.position_rect("middle")
+    check("不認得的位置拋錯", False)
+except ValueError:
+    check("不認得的位置拋錯", True)
+r1 = assemble.position_rect("top_right")
+r1[0] = 0.5
+check("position_rect 回傳複本（改了不影響預設）", assemble.position_rect("top_right")[0] == 0.62)
 
 if not shutil.which("ffmpeg"):
     print("SKIP 這個環境沒有 ffmpeg：略過真的輸出")
