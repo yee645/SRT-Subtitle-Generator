@@ -16,6 +16,8 @@
    量素材長度（量不到回 None，不猜）。
 7. 修頭尾與子畫面位置（第三階段）：拖頭時進點跟著動、尾巴不動；拖尾最多到素材長度與
    片尾；至少留 MIN_CLIP；循環音樂只能修頭；預設位置認得出來、不認得的算自訂。
+8. 預覽用的幾何（第四階段）：疊加的框（輸出指令用的就是它）、素材在框裡等比置中、
+   第 t 秒有哪幾段疊加與素材的第幾秒。
 """
 import copy
 import os
@@ -234,6 +236,42 @@ except ValueError:
 r1 = assemble.position_rect("top_right")
 r1[0] = 0.5
 check("position_rect 回傳複本（改了不影響預設）", assemble.position_rect("top_right")[0] == 0.62)
+
+# ----- 8. 預覽用的幾何 -----
+check("overlay_box：蓋滿＝整張畫布；沒給 rect 也是",
+      assemble.overlay_box([0, 0, 1, 1], 1280, 720) == (0, 0, 1280, 720)
+      and assemble.overlay_box(None, 1280, 720) == (0, 0, 1280, 720))
+check("overlay_box：右上小畫面（寬高取偶數）",
+      assemble.overlay_box(assemble.position_rect("top_right"), 1280, 720) == (794, 29, 436, 244),
+      str(assemble.overlay_box(assemble.position_rect("top_right"), 1280, 720)))
+check("overlay_box：奇數尺寸也取偶數",
+      all(v % 2 == 0 for v in assemble.overlay_box([0.1, 0.1, 0.333, 0.333], 641, 359)[2:]))
+box_tl = {"main": [{"path": "a.mp4", "out": 6}],
+          "overlays": [{"path": "x.png", "at": 1, "duration": 2, "rect": [0.62, 0.04, 0.34, 0.34]}]}
+fc_box = assemble.build_command(assemble.normalize(box_tl), "o.mp4",
+                                {"a.mp4": {"video": True, "audio": True, "width": 640, "height": 360, "fps": 30}},
+                                (640, 360, 30))
+bx, by, bw, bh = assemble.overlay_box([0.62, 0.04, 0.34, 0.34], 640, 360)
+fc_box = fc_box[fc_box.index("-filter_complex") + 1]
+check("輸出指令的疊加位置與大小就是 overlay_box（預覽與輸出擺在同一個地方）",
+      f"scale={bw}:{bh}:" in fc_box and f"overlay={bx}:{by}:" in fc_box, fc_box)
+check("fit_inside：寬的素材放進方框：上下補黑、置中",
+      assemble.fit_inside(1920, 1080, 400, 400) == (0.0, 87.5, 400.0, 225.0))
+check("fit_inside：直的素材放進寬框：左右補黑、置中",
+      assemble.fit_inside(1080, 1920, 640, 360) == (218.75, 0.0, 202.5, 360.0))
+check("fit_inside：量不到尺寸就蓋滿框", assemble.fit_inside(0, 0, 100, 50) == (0.0, 0.0, 100.0, 50.0))
+ovs = [{"path": "x.png", "at": 1.0, "duration": 2.0},
+       {"path": "b.mp4", "at": 2.0, "in": 5.0, "out": 9.0},
+       {"path": "c.mp4", "at": 8.0, "in": 0.0, "out": 10.0}]
+check("overlays_at：之前沒有", assemble.overlays_at(ovs, 0.5, 10) == [])
+check("overlays_at：圖片沒有「第幾秒」", assemble.overlays_at(ovs, 1.0, 10) == [(0, None)])
+check("overlays_at：重疊時照順序（後加的在後面＝疊在上面）、影片算出素材的第幾秒",
+      assemble.overlays_at(ovs, 2.5, 10) == [(0, None), (1, 5.5)])
+check("overlays_at：結束那一刻就不在了（跟輸出的 between 一樣算到結束前）",
+      assemble.overlays_at(ovs, 3.0, 10) == [(1, 6.0)])
+check("overlays_at：超出片尾的剪掉", assemble.overlays_at(ovs, 9.5, 10) == [(2, 1.5)]
+      and assemble.overlays_at(ovs, 10.0, 10) == [])
+check("overlays_at：沒有疊加", assemble.overlays_at([], 1, 10) == [] and assemble.overlays_at(None, 1, 10) == [])
 
 if not shutil.which("ffmpeg"):
     print("SKIP 這個環境沒有 ffmpeg：略過真的輸出")

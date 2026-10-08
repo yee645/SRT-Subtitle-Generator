@@ -49,8 +49,12 @@ config.json，關掉只算這一次）。
 
 修頭尾與素材屬性（第 7 項第三階段）：時間軸上拖素材的左右邊修頭尾；選取一段素材後，
 「素材屬性」那一行可以改音樂的音量／循環到片尾／講話時壓低，與畫面的位置（蓋滿或四
-個角落的小畫面）／帶聲音。改了先用 `assemble.normalize` 檢查，不合理就不收。播放器還
-不會把素材疊上去預覽、素材的修改拖不進復原、也還不能跟剪點一起輸出。
+個角落的小畫面）／帶聲音。改了先用 `assemble.normalize` 檢查，不合理就不收。
+
+疊加預覽（第 7 項第四階段）：播放時照輸出的位置把畫面素材疊在影片上、字幕底下
+（`gui_qt/overlay_preview.py`）；圖片照實畫，影片素材每秒換一格（不是連續播放）。
+「預覽畫面素材」可以關掉。音樂還不會跟著播、素材的修改拖不進復原、也還不能跟剪點一起
+輸出。
 
 還沒做：與字幕清單雙向同步。見 `docs/ROADMAP_3.0.md`。
 """
@@ -66,11 +70,12 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QGraphicsItem, QGraphicsScene, QGraphicsView,
-    QHBoxLayout, QLabel, QMessageBox, QPushButton, QSlider, QSpinBox, QVBoxLayout,
+    QHBoxLayout, QLabel, QMessageBox, QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout,
     QWidget,
 )
 
 from gui_qt import timeline as timeline_mod
+from gui_qt.overlay_preview import OverlayPreview
 from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
 from subtitle import assemble as assemble_mod
 from subtitle import cueedit, cutmarks
@@ -244,6 +249,8 @@ class PlayerPanel(QWidget):
         self.subtitle_item.setZValue(1)
         self.subtitle_item.setVisible(False)
         self.scene.addItem(self.subtitle_item)
+        # 疊加軌的預覽（第 7 項第四階段）：疊在影片上、字幕底下
+        self.overlay_preview = OverlayPreview(self.scene, self)
 
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
@@ -308,6 +315,10 @@ class PlayerPanel(QWidget):
         self.assemble_btn = QPushButton("輸出多軌…")
         self.assemble_btn.setToolTip("把影片連同素材軌合成一支新影片，旁邊放一份字幕；原始影片不動")
         self.track_exporter = TrackExporter(self)
+        self.preview_box = QCheckBox("預覽畫面素材")
+        self.preview_box.setToolTip("播放器上照輸出的位置疊出畫面素材：圖片照實畫，影片每秒換一格"
+                                    "（不是連續播放）；音樂要輸出才聽得到")
+        self.preview_box.setChecked(True)
         # 素材屬性（第三階段）：選取時間軸上的一段素材後才有東西可改
         self.prop_label = QLabel(PROP_HINT)
         self.volume_spin = QSpinBox()
@@ -357,21 +368,23 @@ class PlayerPanel(QWidget):
         cut_row.addWidget(self.cut_reset_btn)
         cut_row.addWidget(self.export_btn)
         layout.addLayout(cut_row)
+        # 素材軌與選取那段的屬性擠在同一行：每多一行，1280x800 的影片畫面就矮一截
+        # （test_qt_cutedit 守著影片至少 300px 高）。摘要放不下就截掉，滑鼠停著看全文。
         track_row = QHBoxLayout()
         track_row.addWidget(QLabel("素材軌："))
         for w in (self.add_overlay_btn, self.add_music_btn, self.remove_track_btn):
             track_row.addWidget(w)
-        track_row.addWidget(self.track_label, 1)
-        track_row.addWidget(self.assemble_btn)
-        layout.addLayout(track_row)
-        prop_row = QHBoxLayout()
-        prop_row.addWidget(QLabel("素材屬性："))
-        prop_row.addWidget(self.prop_label)
+        track_row.addSpacing(8)
+        track_row.addWidget(self.prop_label)
         for widgets in self._prop_widgets.values():
             for w in widgets:
-                prop_row.addWidget(w)
-        prop_row.addStretch(1)
-        layout.addLayout(prop_row)
+                track_row.addWidget(w)
+        track_row.addSpacing(8)
+        self.track_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        track_row.addWidget(self.track_label, 1)
+        track_row.addWidget(self.preview_box)
+        track_row.addWidget(self.assemble_btn)
+        layout.addLayout(track_row)
         layout.addWidget(self.timeline)
         layout.addLayout(footer)
 
@@ -415,6 +428,8 @@ class PlayerPanel(QWidget):
         self.track_exporter.failed.connect(self._on_assemble_failed)
         self.timeline.trackItemSelected.connect(lambda _k, _i: self._update_track_buttons())
         self.timeline.trackItemChanged.connect(self._on_track_changed)
+        self.preview_box.toggled.connect(lambda _on: self.refresh_tracks())
+        self.overlay_preview.updated.connect(self.refresh_overlays)
         self.volume_spin.valueChanged.connect(
             lambda v: self.set_track_props(volume=round(v / 100.0, 2)))
         self.loop_box.toggled.connect(lambda on: self.set_track_props(loop=bool(on)))
@@ -573,8 +588,10 @@ class PlayerPanel(QWidget):
     def refresh_tracks(self, note=None):
         """把素材軌畫到時間軸上，順便更新那一行的說明與按鈕。"""
         self.timeline.set_tracks(self.tracks["overlays"], self.tracks["music"])
+        self.refresh_overlays()
         if not self.track_exporter.busy:  # 輸出中這一行寫進度，別蓋掉
             self.track_label.setText(note if note is not None else self._track_summary())
+            self.track_label.setToolTip(self.track_label.text())
         self._update_track_buttons()
 
     def _track_summary(self):
@@ -586,7 +603,20 @@ class PlayerPanel(QWidget):
             parts.append(f"畫面 {overlays} 段")
         if music:
             parts.append(f"音樂 {music} 段")
-        return "、".join(parts) + "　播放器還不會疊上去，按「輸出多軌…」合成"
+        note = "　畫面在播放器上預覽（影片每秒換一格）" if overlays and self.preview_box.isChecked() else ""
+        if music:
+            note += "　音樂還不會跟著播"
+        return "、".join(parts) + note + "，按「輸出多軌…」合成"
+
+    def refresh_overlays(self, ms=None):
+        """照目前的位置把該出現的畫面素材疊到播放器上（關掉「預覽畫面素材」就全拿掉）。"""
+        if not hasattr(self, "preview_box"):  # 建構到一半（版面先排）：素材軌還沒建好
+            return
+        seconds = (self.player.position() if ms is None else ms) / 1000.0
+        native = self.video_item.nativeSize()
+        self.overlay_preview.show(self.tracks["overlays"], seconds, self.media_duration(), self._video_rect(),
+                                  None if native.isEmpty() else (native.width(), native.height()),
+                                  enabled=self.preview_box.isChecked())
 
     def _update_track_buttons(self):
         ready = bool(self.media_path) and self.media_duration() > 0
@@ -943,6 +973,7 @@ class PlayerPanel(QWidget):
         self.time_label.setText(
             f"{format_clock(ms)} / {format_clock(self.player.duration())}")
         self._show_at(ms)
+        self.refresh_overlays(ms)
         self.timeline.set_position(ms)
 
     def _on_duration(self, ms):
@@ -1088,8 +1119,9 @@ class PlayerPanel(QWidget):
             self._refresh_info()
 
     def shutdown(self):
-        """關視窗前：停掉還在做的代理檔（不留下做一半的 ffmpeg）。"""
+        """關視窗前：停掉還在做的代理檔與預覽抽格（不留下做一半的 ffmpeg）。"""
         self.proxy_maker.stop()
+        self.overlay_preview.stop()
 
     def _show_at(self, ms):
         seconds = ms / 1000.0
@@ -1135,6 +1167,7 @@ class PlayerPanel(QWidget):
         self.video_item.setPos(0, 0)
         self.video_item.setSize(QSizeF(view))
         self._place_subtitle()
+        self.refresh_overlays()
 
     def _place_subtitle(self):
         place_subtitle(self.subtitle_item, self._video_rect(), self._style)
@@ -1228,7 +1261,7 @@ class CutExporter(QObject):
         self.finished.emit(result)
 
 
-PROP_HINT = "點一下時間軸上的素材，就能在這裡改音量、循環、位置…"
+PROP_HINT = "（點時間軸上的素材可改屬性）"
 
 
 class TrackExporter(QObject):

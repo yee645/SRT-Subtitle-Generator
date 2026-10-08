@@ -258,10 +258,7 @@ def build_command(timeline: dict, output_path: str, media: dict,
     for n, item in enumerate(timeline["overlays"]):
         meta = info(item["path"])
         length = min(item["out"] - item["in"], total - item["at"])
-        x, y, w, h = item["rect"]
-        ow = max(2, int(round(width * w / 2.0)) * 2)
-        oh = max(2, int(round(height * h / 2.0)) * 2)
-        ox, oy = int(round(width * x)), int(round(height * y))
+        ox, oy, ow, oh = overlay_box(item["rect"], width, height)
         if is_image(item["path"]):
             idx = add_input(item["path"], image_seconds=length)
             fit(f"{idx}:v", f"ov{n}", ow, oh, pts_offset=item["at"])
@@ -471,6 +468,43 @@ OVERLAY_POSITIONS = (
     ("bottom_right", "右下小畫面", [0.62, 0.62, 0.34, 0.34]),
     ("bottom_left", "左下小畫面", [0.04, 0.62, 0.34, 0.34]),
 )
+
+
+def overlay_box(rect, width: int, height: int) -> tuple:
+    """
+    疊加在 width x height 的畫布上佔的框 (x, y, w, h)（像素，寬高取偶數，x264 的要求）。
+    輸出與播放器的預覽都用這一個，兩邊才會擺在同一個地方。素材在框裡等比縮小、置中，
+    空出來的地方補黑（見 fit_inside）。
+    """
+    x, y, w, h = (float(v) for v in (rect or [0.0, 0.0, 1.0, 1.0]))
+    ow = max(2, int(round(width * w / 2.0)) * 2)
+    oh = max(2, int(round(height * h / 2.0)) * 2)
+    return int(round(width * x)), int(round(height * y)), ow, oh
+
+
+def fit_inside(src_w: float, src_h: float, box_w: float, box_h: float) -> tuple:
+    """素材在框裡的位置 (x, y, w, h)：等比縮放到放得進框、置中（同 ffmpeg 的 decrease＋pad）。"""
+    if src_w <= 0 or src_h <= 0:
+        return 0.0, 0.0, float(box_w), float(box_h)
+    scale = min(box_w / float(src_w), box_h / float(src_h))
+    w, h = src_w * scale, src_h * scale
+    return (box_w - w) / 2.0, (box_h - h) / 2.0, w, h
+
+
+def overlays_at(overlays, t: float, total: float) -> list:
+    """
+    輸出第 t 秒有哪幾段疊加：[(第幾段, 素材的第幾秒)]，照疊上去的順序（後加的在上面）。
+    圖片沒有「第幾秒」，回傳 None。給播放器的預覽用，時間範圍跟輸出一樣（item_span）。
+    """
+    t = float(t)
+    out = []
+    for index, item in enumerate(overlays or []):
+        start, end = item_span("overlays", item, total)
+        if start <= t < end:
+            source = None if is_image(item.get("path", "")) else \
+                round(float(item.get("in", 0.0)) + (t - float(item.get("at", 0.0))), 3)
+            out.append((index, source))
+    return out
 
 
 def overlay_position(item: dict) -> str:

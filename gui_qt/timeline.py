@@ -1195,6 +1195,14 @@ class TimelineLoader(QObject):
         return os.path.join(root, name) if root else name
 
     def _run(self, gen, cancel, media_path):
+        try:
+            self._load(gen, cancel, media_path)
+        except RuntimeError as exc:
+            # 視窗已經關了（物件被刪掉）才做完：結果不要了。其他 RuntimeError 照常拋出
+            if "has been deleted" not in str(exc):
+                raise
+
+    def _load(self, gen, cancel, media_path):
         if not shutil.which("ffmpeg"):
             for kind in ("wave", "thumbs"):
                 self.failed.emit(gen, kind, FFMPEG_MISSING)
