@@ -288,9 +288,10 @@ else:
     check("加完就選取那一段、畫到時間軸上",
           panel.timeline.track_selected == ("overlays", 0)
           and len(panel.timeline.track_rects("overlays")) == 1 and panel.remove_track_btn.isEnabled())
-    check("有素材之後可以輸出、那一行寫幾段與「播放器還不會疊上去」",
+    check("有素材之後可以輸出、那一行寫幾段、畫面在播放器上預覽（影片每秒換一格）",
           panel.assemble_btn.isEnabled() and "畫面 1 段" in panel.track_label.text()
-          and "還不會" in panel.track_label.text(), panel.track_label.text())
+          and "畫面在播放器上預覽（影片每秒換一格）" in panel.track_label.text()
+          and "音樂" not in panel.track_label.text(), panel.track_label.text())
 
     panel.player.setPosition(3500)
     wait_until(lambda: panel.player.position() == 3500, 5000)
@@ -299,7 +300,8 @@ else:
           and panel.tracks["music"] == [{"path": song, "at": 3.5, "in": 0.0, "out": 1.5, "length": 1.5,
                                          "volume": assemble.DEFAULT_MUSIC_VOLUME, "loop": False, "duck": True}],
           str(panel.tracks["music"]))
-    check("那一行寫兩種各幾段", "畫面 1 段、音樂 1 段" in panel.track_label.text(), panel.track_label.text())
+    check("那一行寫兩種各幾段、音樂還不會跟著播", "畫面 1 段、音樂 1 段" in panel.track_label.text()
+          and "音樂還不會跟著播" in panel.track_label.text(), panel.track_label.text())
 
     errors.clear()
     check("沒聲音的檔放音樂軌：不加、說明", panel.add_track("music", silent) is False
