@@ -53,8 +53,12 @@ config.json，關掉只算這一次）。
 
 疊加預覽（第 7 項第四階段）：播放時照輸出的位置把畫面素材疊在影片上、字幕底下
 （`gui_qt/overlay_preview.py`）；圖片照實畫，影片素材每秒換一格（不是連續播放）。
-「預覽畫面素材」可以關掉。音樂還不會跟著播、素材的修改拖不進復原、也還不能跟剪點一起
-輸出。
+「預覽畫面素材」可以關掉。音樂還不會跟著播、素材的修改拖不進復原。
+
+跟剪點一起輸出（第 7 項第五階段）：時間軸上顯示著剪點、而且有啟用的剪點時，「輸出多
+軌…」照剪點一起剪（`assemble.apply_cuts`）：主軌只留沒剪掉的部分，畫面素材蓋到剪掉的
+地方那一截跟著裁掉、其餘平移，音樂平移後一路播（不跟著一跳一跳）；字幕對齊到剪後的時
+間軸。不要剪就把剪點選單切到「不顯示」。
 
 還沒做：與字幕清單雙向同步。見 `docs/ROADMAP_3.0.md`。
 """
@@ -534,6 +538,10 @@ class PlayerPanel(QWidget):
         ready = (self.cut_plan is not None and self.media_duration() > 0
                  and any(m.get("enabled", True) for m in self.cut_plan["marks"]))
         self.export_btn.setEnabled(ready and not self.exporter.busy)
+        if hasattr(self, "preview_box") and not self.track_exporter.busy:  # 建構到一半時素材軌還沒建好
+            # 剪點變了，多軌輸出會剪掉幾處跟著變
+            self.track_label.setText(self._track_summary())
+            self.track_label.setToolTip(self.track_label.text())
 
     def export_cuts(self, output_path=None):
         """
@@ -606,7 +614,16 @@ class PlayerPanel(QWidget):
         note = "　畫面在播放器上預覽（影片每秒換一格）" if overlays and self.preview_box.isChecked() else ""
         if music:
             note += "　音樂還不會跟著播"
-        return "、".join(parts) + note + "，按「輸出多軌…」合成"
+        cuts = self._track_cut_count()
+        # 寫在段數後面：這一行太長時尾巴會被截掉，要剪的事不能被截掉
+        cut_note = f"（會照剪點一起剪掉 {cuts} 處）" if cuts else ""
+        return "、".join(parts) + cut_note + note + "，按「輸出多軌…」合成"
+
+    def _track_cut_count(self):
+        """多軌輸出會一起剪掉幾處：時間軸上顯示著剪點時，啟用中的那幾段；沒顯示就是 0。"""
+        if self.cut_plan is None:
+            return 0
+        return sum(1 for m in self.cut_plan["marks"] if m.get("enabled", True))
 
     def refresh_overlays(self, ms=None):
         """照目前的位置把該出現的畫面素材疊到播放器上（關掉「預覽畫面素材」就全拿掉）。"""
@@ -757,10 +774,16 @@ class PlayerPanel(QWidget):
         """照素材軌合成輸出。output_path 省略時先問要存到哪。回傳是否開始輸出。"""
         if self.track_exporter.busy or not self.media_path or not any(self.tracks.values()):
             return False
-        timeline = self.timeline_for_export()
+        timeline, cues, info = self.timeline_for_export(), self.cues, {"cut_count": 0, "dropped": 0}
         try:
+            if self._track_cut_count():
+                plan = cutmarks.export_plan(self.cut_plan["marks"], self.media_duration(), self.cues)
+                keep = assemble_mod.usable_keep(plan["keep"])
+                timeline = assemble_mod.apply_cuts(timeline, keep)
+                cues, dropped = cutmarks.remap_cues(self.cues, keep)
+                info = {"cut_count": plan["cut_count"], "dropped": dropped}
             assemble_mod.normalize(timeline)
-        except assemble_mod.AssembleError as exc:
+        except ValueError as exc:  # AssembleError 也是 ValueError
             self._show_track_error(str(exc))
             return False
         if output_path is None:
@@ -769,7 +792,7 @@ class PlayerPanel(QWidget):
             if not output_path:
                 return False
         self.track_label.setText(f"正在輸出 {os.path.basename(output_path)}…")
-        self.track_exporter.start(timeline, output_path, self.cues, dict(self._config))
+        self.track_exporter.start(timeline, output_path, cues, dict(self._config), info)
         self._update_track_buttons()
         return True
 
@@ -796,8 +819,12 @@ class PlayerPanel(QWidget):
     def _on_assemble_done(self, result):
         self.last_assemble = result
         note = f"已輸出 {os.path.basename(result['output'])}"
+        if result.get("cut_count"):
+            note += f"（剪掉 {result['cut_count']} 處）"
         if result["subtitles"]:
             note += f"＋{os.path.basename(result['subtitles'])}"
+            if result.get("dropped"):
+                note += f"（{result['dropped']} 句整句被剪掉）"
         self.refresh_tracks(note)
 
     def _on_assemble_failed(self, message):
@@ -1267,7 +1294,7 @@ PROP_HINT = "（點時間軸上的素材可改屬性）"
 class TrackExporter(QObject):
     """
     在背景執行緒照多軌時間軸合成（assemble.render）；進度與結果用訊號送回主執行緒。
-    主軌是整支原檔、時間不變，所以字幕原封不動存一份同檔名的 .srt。
+    字幕存一份同檔名的 .srt（沒剪就原封不動；跟剪點一起輸出時，呼叫端先對齊好再傳進來）。
     """
 
     progress = Signal(float, str)
@@ -1278,12 +1305,12 @@ class TrackExporter(QObject):
         super().__init__(parent)
         self.busy = False
 
-    def start(self, timeline, output_path, cues, config):
+    def start(self, timeline, output_path, cues, config, info=None):
         self.busy = True
         threading.Thread(target=self._run, args=(timeline, output_path, [dict(c) for c in cues or []],
-                                                 config), daemon=True).start()
+                                                 config, dict(info or {})), daemon=True).start()
 
-    def _run(self, timeline, output_path, cues, config):
+    def _run(self, timeline, output_path, cues, config, info):
         try:
             result = assemble_mod.render(
                 timeline, output_path,
@@ -1292,7 +1319,7 @@ class TrackExporter(QObject):
             if cues:
                 subtitles = os.path.splitext(output_path)[0] + ".srt"
                 cueedit.save_cues(cues, subtitles)
-            result = dict(result, subtitles=subtitles)
+            result = dict(result, subtitles=subtitles, **info)
         except (OSError, ValueError, RuntimeError) as exc:
             self.busy = False
             self.failed.emit(str(exc))
