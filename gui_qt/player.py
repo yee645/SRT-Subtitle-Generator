@@ -60,6 +60,10 @@ config.json，關掉只算這一次）。
 地方那一截跟著裁掉、其餘平移，音樂平移後一路播（不跟著一跳一跳）；字幕對齊到剪後的時
 間軸。不要剪就把剪點選單切到「不顯示」。
 
+接縫轉場（第 8 項第二階段）：剪點那一行可以選「接縫硬切／溶接／黑場」與長度。選了轉場，
+「照剪點輸出…」改用多軌的輸出（`assemble.apply_cuts` 帶轉場，ffmpeg `xfade`），「輸出多軌…」
+也一樣；兩段重疊那幾秒讓片子再短一點，字幕與素材照 `assemble.cut_time` 一起對齊。
+
 還沒做：與字幕清單雙向同步。見 `docs/ROADMAP_3.0.md`。
 """
 import os
@@ -73,7 +77,7 @@ from PySide6.QtGui import (
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QGraphicsItem, QGraphicsScene, QGraphicsView,
+    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGraphicsItem, QGraphicsScene, QGraphicsView,
     QHBoxLayout, QLabel, QMessageBox, QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout,
     QWidget,
 )
@@ -297,6 +301,22 @@ class PlayerPanel(QWidget):
         self.cut_combo.setToolTip("把自動剪輯會剪掉的段落畫在時間軸上（只是看，不會剪片）；"
                                   "參數跟一般版的設定同一份")
         self.cut_label = QLabel("")
+        # 接縫轉場（第 8 項第二階段）：剪點剪掉之後，前後兩段怎麼接
+        self.seam_combo = QComboBox()
+        self.seam_combo.addItem("接縫硬切", "")
+        for key, (label, _ffmpeg) in assemble_mod.TRANSITIONS.items():
+            self.seam_combo.addItem(f"接縫{label}", key)
+        self.seam_combo.setToolTip("剪掉一段之後前後怎麼接：硬切（直接接上）、溶接（兩段畫面交疊淡換）、"
+                                   "黑場（淡到黑再淡出）。照剪點輸出、輸出多軌都照這個；"
+                                   "有轉場時片子會再短一點（兩段重疊那幾秒）")
+        self.seam_spin = QDoubleSpinBox()
+        self.seam_spin.setRange(assemble_mod.MIN_TRANSITION, 2.0)
+        self.seam_spin.setSingleStep(0.1)
+        self.seam_spin.setDecimals(1)
+        self.seam_spin.setValue(SEAM_SECONDS)
+        self.seam_spin.setSuffix(" 秒")
+        self.seam_spin.setToolTip("轉場多長；前後兩段太短時自動縮短，短到放不下就改硬切")
+        self.seam_spin.setEnabled(False)
         self.cut_reset_btn = QPushButton("還原剪點")
         self.cut_reset_btn.setToolTip("清掉這種剪點的停用與範圍調整，回到自動算出來的樣子")
         self.cut_reset_btn.setEnabled(False)
@@ -369,6 +389,8 @@ class PlayerPanel(QWidget):
         cut_row.addWidget(QLabel("剪點："))
         cut_row.addWidget(self.cut_combo)
         cut_row.addWidget(self.cut_label, 1)
+        cut_row.addWidget(self.seam_combo)
+        cut_row.addWidget(self.seam_spin)
         cut_row.addWidget(self.cut_reset_btn)
         cut_row.addWidget(self.export_btn)
         layout.addLayout(cut_row)
@@ -419,6 +441,8 @@ class PlayerPanel(QWidget):
         self.fit_btn.clicked.connect(self.timeline.zoom_to_fit)
         self.cut_combo.currentIndexChanged.connect(lambda _i: self.refresh_cut_marks())
         self.cut_reset_btn.clicked.connect(self.reset_cut_marks)
+        self.seam_combo.currentIndexChanged.connect(lambda _i: self._on_seam_changed())
+        self.seam_spin.valueChanged.connect(lambda _v: self._update_export_button())
         self.export_btn.clicked.connect(lambda: self.export_cuts())
         self.exporter.progress.connect(self._on_export_progress)
         self.exporter.finished.connect(self._on_export_done)
@@ -534,6 +558,15 @@ class PlayerPanel(QWidget):
             self.cut_label.setText(text)
         self._update_export_button()
 
+    def seam_transition(self):
+        """剪點接縫的轉場 {"type", "duration"}；硬切回傳 None。"""
+        kind = self.seam_combo.currentData()
+        return {"type": kind, "duration": round(self.seam_spin.value(), 3)} if kind else None
+
+    def _on_seam_changed(self):
+        self.seam_spin.setEnabled(bool(self.seam_combo.currentData()))
+        self._update_export_button()
+
     def _update_export_button(self):
         ready = (self.cut_plan is not None and self.media_duration() > 0
                  and any(m.get("enabled", True) for m in self.cut_plan["marks"]))
@@ -553,7 +586,18 @@ class PlayerPanel(QWidget):
         media = self.media_path  # 播的可能是代理檔，剪一律用原檔
         try:
             plan = cutmarks.export_plan(self.cut_plan["marks"], self.media_duration(), self.cues)
-        except ValueError as exc:
+            transition = self.seam_transition()
+            if transition:
+                # 接縫有轉場：改用多軌的輸出（xfade），字幕照同一套時間對齊
+                keep = assemble_mod.usable_keep(plan["keep"])
+                main = {"main": [{"path": media, "in": 0.0, "out": self.media_duration()}]}
+                seams = assemble_mod.seam_durations(main, keep, transition)
+                timeline = assemble_mod.apply_cuts(main, keep, transition)
+                assemble_mod.normalize(timeline)
+                cues, dropped = assemble_mod.cut_cues(self.cues, keep, seams)
+                plan = dict(plan, timeline=timeline, cues=cues, dropped=dropped,
+                            seam=dict(transition, count=sum(1 for d in seams if d)))
+        except ValueError as exc:  # AssembleError 也是 ValueError
             self._show_export_error(str(exc))
             return False
         if output_path is None:
@@ -578,7 +622,10 @@ class PlayerPanel(QWidget):
     def _on_export_done(self, result):
         self.last_export = result
         note = f"已輸出 {os.path.basename(result['output'])}（剪掉 {result['cut_count']} 處、" \
-               f"{result['removed_seconds']:.1f} 秒）"
+               f"{result['removed_seconds']:.1f} 秒"
+        if result.get("seam") and result["seam"]["count"]:
+            note += f"，{result['seam']['count']} 個接縫用{assemble_mod.TRANSITIONS[result['seam']['type']][0]}"
+        note += "）"
         if result["subtitles"]:
             note += f"＋{os.path.basename(result['subtitles'])}"
             if result["dropped"]:
@@ -616,7 +663,9 @@ class PlayerPanel(QWidget):
             note += "　音樂還不會跟著播"
         cuts = self._track_cut_count()
         # 寫在段數後面：這一行太長時尾巴會被截掉，要剪的事不能被截掉
-        cut_note = f"（會照剪點一起剪掉 {cuts} 處）" if cuts else ""
+        transition = self.seam_transition() if cuts else None
+        seam = f"、接縫用{assemble_mod.TRANSITIONS[transition['type']][0]}" if transition else ""
+        cut_note = f"（會照剪點一起剪掉 {cuts} 處{seam}）" if cuts else ""
         return "、".join(parts) + cut_note + note + "，按「輸出多軌…」合成"
 
     def _track_cut_count(self):
@@ -779,8 +828,10 @@ class PlayerPanel(QWidget):
             if self._track_cut_count():
                 plan = cutmarks.export_plan(self.cut_plan["marks"], self.media_duration(), self.cues)
                 keep = assemble_mod.usable_keep(plan["keep"])
-                timeline = assemble_mod.apply_cuts(timeline, keep)
-                cues, dropped = cutmarks.remap_cues(self.cues, keep)
+                transition = self.seam_transition()
+                seams = assemble_mod.seam_durations(timeline, keep, transition)
+                timeline = assemble_mod.apply_cuts(timeline, keep, transition)
+                cues, dropped = assemble_mod.cut_cues(self.cues, keep, seams)
                 info = {"cut_count": plan["cut_count"], "dropped": dropped}
             assemble_mod.normalize(timeline)
         except ValueError as exc:  # AssembleError 也是 ValueError
@@ -1273,8 +1324,11 @@ class CutExporter(QObject):
 
     def _run(self, media_path, plan, output_path):
         try:
-            cutmarks.render(media_path, plan, output_path,
-                            lambda ratio, message: self.progress.emit(float(ratio), str(message)))
+            report = lambda ratio, message: self.progress.emit(float(ratio), str(message))  # noqa: E731
+            if plan.get("timeline"):  # 接縫有轉場：用多軌的輸出（xfade）
+                assemble_mod.render(plan["timeline"], output_path, report)
+            else:
+                cutmarks.render(media_path, plan, output_path, report)
             subtitles = None
             if plan["cues"]:
                 subtitles = os.path.splitext(output_path)[0] + ".srt"
@@ -1289,6 +1343,7 @@ class CutExporter(QObject):
 
 
 PROP_HINT = "（點時間軸上的素材可改屬性）"
+SEAM_SECONDS = 0.5  # 接縫轉場的預設長度（秒）
 
 
 class TrackExporter(QObject):
