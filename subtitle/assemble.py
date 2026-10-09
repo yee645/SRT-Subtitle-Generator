@@ -23,6 +23,12 @@
 是不是圖片」由呼叫端傳進來，測試不必真的有檔案）；`render` 真的跑 ffmpeg。
 `apply_cuts` 把剪點（`cutmarks.kept_segments`）套到時間軸上：主軌與畫面跟著剪，音樂平移。
 
+**轉場**（第 8 項）：主軌某一段可以帶 `"transition": {"type", "duration"}`，表示「從前一段
+轉進這一段」。`dissolve` 溶接（兩段畫面交疊淡換）、`fadeblack` 黑場（前一段淡到黑、再從黑淡
+出這一段）；兩種都讓前後兩段重疊 duration 秒，片長跟著少 duration 秒（ffmpeg `xfade`，聲音
+`acrossfade`）。整支片頭尾的淡入淡出是時間軸的 `fade_in`／`fade_out`（秒，從黑淡入／淡到黑，
+聲音一起），不改片長。
+
 零 GUI 依賴。
 """
 from __future__ import annotations
@@ -38,6 +44,11 @@ MAX_MAIN_CLIPS = 200     # filter_complex 太長會很慢；跟 jumpcut.MAX_SEGM
 DEFAULT_IMAGE_SECONDS = 3.0
 DEFAULT_MUSIC_VOLUME = 0.35   # 與 audio.DEFAULT_DUCKING["music_volume"] 一致
 DEFAULT_DUCK = {"threshold": 0.06, "ratio": 8.0}  # 與 audio.DEFAULT_DUCKING 的手動預設值一致
+# 轉場：名稱 → (說明, ffmpeg xfade 的 transition)
+TRANSITIONS = {"dissolve": ("溶接", "fade"), "fadeblack": ("黑場", "fadeblack")}
+MIN_TRANSITION = 0.1
+MAX_TRANSITION = 5.0
+MAX_FADE = 10.0          # 片頭淡入、片尾淡出最長幾秒
 
 
 class AssembleError(ValueError):
@@ -89,7 +100,8 @@ def normalize(timeline: dict) -> dict:
         raise AssembleError("主軌是空的：至少要放一段素材")
     if len(main) > MAX_MAIN_CLIPS:
         raise AssembleError(f"主軌片段太多（{len(main)} 段，上限 {MAX_MAIN_CLIPS}）")
-    out = {"width": None, "height": None, "fps": None, "main": [], "overlays": [], "music": []}
+    out = {"width": None, "height": None, "fps": None, "main": [], "overlays": [], "music": [],
+           "fade_in": 0.0, "fade_out": 0.0}
     for key in ("width", "height"):
         if timeline.get(key) is not None:
             value = int(_num(timeline[key], key, "畫布"))
@@ -107,8 +119,28 @@ def normalize(timeline: dict) -> dict:
         if not clip.get("path"):
             raise AssembleError(f"{where}沒有指定檔案")
         start, end = _span(clip, where, image_default=DEFAULT_IMAGE_SECONDS)
-        out["main"].append({"path": str(clip["path"]), "in": start, "out": end})
+        entry = {"path": str(clip["path"]), "in": start, "out": end}
+        if clip.get("transition"):
+            entry["transition"] = _transition(clip["transition"], where, i)
+        out["main"].append(entry)
+    for i, clip in enumerate(out["main"], 1):
+        # 一段的頭尾都可能被轉場吃掉：兩邊加起來要比這一段短，中間至少留 MIN_CLIP 秒
+        eaten = transition_seconds(clip)
+        if i < len(out["main"]):
+            eaten += transition_seconds(out["main"][i])
+        if eaten > clip["out"] - clip["in"] - MIN_CLIP + 1e-9:
+            raise AssembleError(f"主軌第 {i} 段太短（{clip['out'] - clip['in']:.3f} 秒），放不下頭尾的轉場"
+                                f"（共 {eaten:.3f} 秒）：請縮短轉場")
     total = main_duration(out)
+    for key, label in (("fade_in", "片頭淡入"), ("fade_out", "片尾淡出")):
+        if timeline.get(key):
+            value = round(_num(timeline[key], key, label), 3)
+            if not 0 <= value <= MAX_FADE:
+                raise AssembleError(f"{label}要在 0～{MAX_FADE:g} 秒之間")
+            out[key] = value
+    if out["fade_in"] + out["fade_out"] > total + 1e-9:
+        raise AssembleError(f"片頭淡入加片尾淡出（{out['fade_in'] + out['fade_out']:g} 秒）比片長"
+                            f"（{total:.3f} 秒）還長")
 
     for i, item in enumerate(timeline.get("overlays") or [], 1):
         where = f"疊加軌第 {i} 段"
@@ -151,17 +183,40 @@ def normalize(timeline: dict) -> dict:
     return out
 
 
+def _transition(value, where, index):
+    if index == 1:
+        raise AssembleError(f"{where}是第一段，前面沒有東西可以轉場（片頭請用 fade_in）")
+    if not isinstance(value, dict):
+        raise AssembleError(f"{where}的 transition 要是 {{\"type\", \"duration\"}}")
+    kind = value.get("type")
+    if kind not in TRANSITIONS:
+        raise AssembleError(f"{where}的轉場 {kind!r} 不認得（可用：{'、'.join(TRANSITIONS)}）")
+    duration = round(_num(value.get("duration", 1.0), "轉場長度", where), 3)
+    if not MIN_TRANSITION <= duration <= MAX_TRANSITION:
+        raise AssembleError(f"{where}的轉場長度要在 {MIN_TRANSITION:g}～{MAX_TRANSITION:g} 秒之間")
+    return {"type": kind, "duration": duration}
+
+
+def transition_seconds(clip: dict) -> float:
+    """這一段開頭的轉場吃掉幾秒（沒有轉場是 0）。"""
+    return float((clip.get("transition") or {}).get("duration", 0.0))
+
+
 def main_duration(timeline: dict) -> float:
-    """主軌總長（＝輸出片長）。"""
-    return round(sum(c["out"] - c["in"] for c in timeline["main"]), 3)
+    """主軌總長（＝輸出片長）：每段長度加起來，減掉轉場重疊的部分。"""
+    return round(sum(c["out"] - c["in"] - transition_seconds(c) for c in timeline["main"]), 3)
 
 
 def main_spans(timeline: dict) -> list:
-    """主軌每一段在輸出時間軸上的位置：[(開始, 結束, 片段), ...]。"""
+    """
+    主軌每一段在輸出時間軸上的位置：[(開始, 結束, 片段), ...]。有轉場時，這一段比前一段的
+    結束早 duration 秒開始（兩段重疊）。
+    """
     spans, t = [], 0.0
     for clip in timeline["main"]:
-        end = round(t + clip["out"] - clip["in"], 3)
-        spans.append((round(t, 3), end, clip))
+        start = max(0.0, t - transition_seconds(clip))
+        end = round(start + clip["out"] - clip["in"], 3)
+        spans.append((round(start, 3), end, clip))
         t = end
     return spans
 
@@ -169,13 +224,13 @@ def main_spans(timeline: dict) -> list:
 def source_at(timeline: dict, t: float):
     """
     輸出時間 t 秒播的是主軌哪一段的第幾秒：回傳 (第幾段, 來源秒數)；超出片長回 None。
-    接縫上算後一段（跟播放器「到了就換下一段」一致）。
+    接縫上算後一段（跟播放器「到了就換下一段」一致）；轉場重疊的那幾秒也算後一段。
     """
-    spans = main_spans(timeline)
-    for index, (start, end, clip) in enumerate(spans):
+    found = None
+    for index, (start, end, clip) in enumerate(main_spans(timeline)):
         if start <= t < end:
-            return index, round(clip["in"] + (t - start), 3)
-    return None
+            found = index, round(clip["in"] + (t - start), 3)
+    return found
 
 
 # ===== 組指令 =============================================================
@@ -251,8 +306,11 @@ def build_command(timeline: dict, output_path: str, media: dict,
                            f"channel_layouts=stereo,apad,atrim=duration={_fmt(length)}[ma{n}]")
         else:
             filters.append(f"anullsrc=r={SAMPLE_RATE}:cl=stereo,atrim=duration={_fmt(length)}[ma{n}]")
-    pairs = "".join(f"[mv{n}][ma{n}]" for n in range(len(timeline["main"])))
-    filters.append(f"{pairs}concat=n={len(timeline['main'])}:v=1:a=1[base0][voice]")
+    if not any(transition_seconds(c) for c in timeline["main"]):
+        pairs = "".join(f"[mv{n}][ma{n}]" for n in range(len(timeline["main"])))
+        filters.append(f"{pairs}concat=n={len(timeline['main'])}:v=1:a=1[base0][voice]")
+    else:
+        _join_with_transitions(timeline["main"], filters)
 
     # ---- 疊加軌 ----
     video = "base0"
@@ -325,12 +383,60 @@ def build_command(timeline: dict, output_path: str, media: dict,
     else:
         audio_label = "voice"
 
+    # ---- 片頭淡入、片尾淡出：整個畫面（含疊加）與混好的聲音一起 ----
+    fades_v, fades_a = [], []
+    if timeline.get("fade_in"):
+        fades_v.append(f"fade=t=in:st=0:d={_fmt(timeline['fade_in'])}")
+        fades_a.append(f"afade=t=in:st=0:d={_fmt(timeline['fade_in'])}")
+    if timeline.get("fade_out"):
+        start = _fmt(round(total - timeline["fade_out"], 3))
+        fades_v.append(f"fade=t=out:st={start}:d={_fmt(timeline['fade_out'])}")
+        fades_a.append(f"afade=t=out:st={start}:d={_fmt(timeline['fade_out'])}")
+    if fades_v:
+        filters.append(f"[{video}]" + ",".join(fades_v) + "[vfade]")
+        filters.append(f"[{audio_label}]" + ",".join(fades_a) + "[afade]")
+        video, audio_label = "vfade", "afade"
+
     return (["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y"] + inputs
             + ["-filter_complex", ";".join(filters),
                "-map", f"[{video}]", "-map", f"[{audio_label}]",
                "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
                "-c:a", "aac", "-b:a", "192k", "-t", _fmt(total),
                "-progress", "pipe:1", output_path])
+
+
+def _join_with_transitions(main: list, filters: list) -> None:
+    """
+    有轉場時把主軌接起來：沒有轉場的相鄰幾段先 concat 成一組，組與組之間用 xfade（畫面）
+    與 acrossfade（聲音）接。xfade 的 offset＝前面已經接好的長度減掉轉場長度。
+    輸出 [base0][voice]，跟沒有轉場時一樣。
+    """
+    groups = []  # [(第幾段起, 第幾段止, 進這一組的轉場)]
+    for n, clip in enumerate(main):
+        if n == 0 or transition_seconds(clip):
+            groups.append([n, n, clip.get("transition")])
+        else:
+            groups[-1][1] = n
+    lengths = []
+    for g, (first, last, _t) in enumerate(groups):
+        count = last - first + 1
+        pairs = "".join(f"[mv{n}][ma{n}]" for n in range(first, last + 1))
+        # 統一像素格式與時基：xfade 要兩邊一模一樣
+        filters.append(f"{pairs}concat=n={count}:v=1:a=1[gc{g}][ga{g}]")
+        filters.append(f"[gc{g}]format=yuv420p,settb=AVTB[gv{g}]")
+        lengths.append(sum(main[n]["out"] - main[n]["in"] for n in range(first, last + 1)))
+    video, audio, done = "gv0", "ga0", lengths[0]
+    for g in range(1, len(groups)):
+        transition = groups[g][2]
+        d = float(transition["duration"])
+        kind = TRANSITIONS[transition["type"]][1]
+        last = g == len(groups) - 1
+        v_out, a_out = ("base0", "voice") if last else (f"xv{g}", f"xa{g}")
+        filters.append(f"[{video}][gv{g}]xfade=transition={kind}:duration={_fmt(d)}:"
+                       f"offset={_fmt(round(done - d, 3))}[{v_out}]")
+        filters.append(f"[{audio}][ga{g}]acrossfade=d={_fmt(d)}:c1=tri:c2=tri[{a_out}]")
+        video, audio = v_out, a_out
+        done = done - d + lengths[g]
 
 
 # ===== 給時間軸介面用 =====================================================
@@ -553,6 +659,9 @@ def apply_cuts(timeline: dict, keep) -> dict:
     其他欄位（rect、audio、volume、length…）照抄。剪完片段太多（> MAX_MAIN_CLIPS）、
     什麼都不剩時拋 AssembleError。
     """
+    if any((c or {}).get("transition") for c in timeline.get("main") or []):
+        # 轉場讓前後兩段重疊，剪點的秒數對到哪一段說不清楚；先不支援
+        raise AssembleError("主軌有轉場時還不能跟剪點一起輸出：請先拿掉轉場")
     keep = usable_keep(keep)
     if not keep:
         raise AssembleError("剪完什麼都不剩：請停用幾段剪點")
