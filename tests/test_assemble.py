@@ -418,6 +418,67 @@ check("沒有轉場也沒有淡入淡出：照舊一次 concat、不加 xfade／
 check("主軌有轉場時不能跟剪點一起輸出：說清楚",
       "有轉場時還不能跟剪點一起輸出" in (error_of(assemble.apply_cuts, tr_raw, [(0, 3)]) or ""))
 
+# ----- 11. 剪點接縫的轉場 -----
+seam_tl = {"main": [{"path": "v.mp4", "in": 0, "out": 20}],
+           "overlays": [{"path": "b.mp4", "at": 3, "in": 1, "out": 9}, {"path": "p.png", "at": 4, "duration": 6}],
+           "music": [{"path": "m.mp3", "at": 2, "in": 0.5, "out": 12.5}]}
+seam_keep = [(0, 5), (6, 8), (9.5, 20)]
+dissolve = {"type": "dissolve", "duration": 0.5}
+seams = assemble.seam_durations(seam_tl, seam_keep, dissolve)
+check("seam_durations：第一段 0、其餘每個接縫照給的長度", seams == [0.0, 0.5, 0.5], str(seams))
+check("seam_durations：硬切（沒給轉場）全是 0", assemble.seam_durations(seam_tl, seam_keep) == [0.0, 0.0, 0.0])
+check("seam_durations：前後太短就縮短（最多吃掉 (長度−MIN_CLIP) 的一半），短到放不下就改硬切",
+      assemble.seam_durations(seam_tl, [(0, 5), (6, 6.45), (9, 20)], {"type": "fadeblack", "duration": 2})
+      == [0.0, 0.2, 0.2]
+      and assemble.seam_durations(seam_tl, [(0, 5), (6, 6.2), (9, 20)], dissolve) == [0.0, 0.0, 0.0])
+check("seam_durations：轉場不合理就說清楚", "轉場 'wipe' 不認得" in (error_of(
+    assemble.seam_durations, seam_tl, seam_keep, {"type": "wipe"}) or ""))
+check("cut_time：硬切時跟 cutmarks.remap_time 一模一樣",
+      all(assemble.cut_time(t, seam_keep) == cutmarks.remap_time(t, seam_keep)
+          for t in (0, 2.5, 5, 5.5, 6, 7, 8, 9, 9.5, 15, 20, 25)))
+check("cut_time：有接縫轉場時，後面每段往前挪（跟前一段重疊轉場那幾秒）",
+      [assemble.cut_time(t, seam_keep, seams) for t in (2, 5, 5.5, 6, 8, 9.5, 20)]
+      == [2.0, 5.0, 4.5, 4.5, 6.5, 6.0, 16.5])
+seam_cut = assemble.apply_cuts(seam_tl, seam_keep, dissolve)
+check("apply_cuts 帶接縫轉場：主軌每段保留片段的第一片帶上轉場", seam_cut["main"] == [
+    {"path": "v.mp4", "in": 0.0, "out": 5.0},
+    {"path": "v.mp4", "in": 6.0, "out": 8.0, "transition": {"type": "dissolve", "duration": 0.5}},
+    {"path": "v.mp4", "in": 9.5, "out": 20.0, "transition": {"type": "dissolve", "duration": 0.5}}],
+      str(seam_cut["main"]))
+check("apply_cuts 帶接縫轉場：片長再少掉兩個接縫（17.5 − 1 ＝ 16.5），過得了 normalize",
+      assemble.main_duration(assemble.normalize(seam_cut)) == 16.5)
+check("apply_cuts 帶接縫轉場：同一段影片素材前一片跟下一片重疊的尾巴裁掉（不會疊兩片）",
+      [(o["at"], o["in"], o["out"]) for o in seam_cut["overlays"] if o["path"] == "b.mp4"]
+      == [(3.0, 1.0, 2.5), (4.5, 4.0, 5.5), (6.0, 7.5, 9.0)], str(seam_cut["overlays"]))
+check("apply_cuts 帶接縫轉場：圖片接回一段（4～6.5 秒，中間沒有空檔）",
+      [o for o in seam_cut["overlays"] if o["path"] == "p.png"] == [{"path": "p.png", "at": 4.0, "duration": 2.5}],
+      str(seam_cut["overlays"]))
+check("apply_cuts 帶接縫轉場：音樂一路播到原本的結尾對到的時間（2～10.5 秒）",
+      seam_cut["music"] == [{"path": "m.mp3", "at": 2.0, "in": 0.5, "out": 9.0}], str(seam_cut["music"]))
+two_main = assemble.apply_cuts({"main": [{"path": "a.mp4", "out": 4}, {"path": "c.mp4", "out": 6}]},
+                               [(0, 2), (3, 7)], dissolve)
+check("apply_cuts 帶接縫轉場：一段保留片段跨過主軌接縫切成兩片時，只有第一片帶轉場（主軌接縫照舊硬切）",
+      two_main["main"] == [{"path": "a.mp4", "in": 0.0, "out": 2.0},
+                           {"path": "a.mp4", "in": 3.0, "out": 4.0,
+                            "transition": {"type": "dissolve", "duration": 0.475}},  # 這一片只有 1 秒
+                           {"path": "c.mp4", "in": 0.0, "out": 3.0}], str(two_main["main"]))
+check("apply_cuts 帶接縫轉場：主軌原本就有轉場的段被切開時，轉場不跟著複製到每一片",
+      "有轉場時還不能" in (error_of(assemble.apply_cuts, {"main": [{"path": "a.mp4", "out": 4}, {
+          "path": "b.mp4", "out": 4, "transition": dissolve}]}, [(0, 8)]) or ""))
+seam_cues = [{"start": 1, "end": 5, "text": "第一句"},
+             {"start": 6.1, "end": 7.9, "text": "第二句", "words": [{"start": 7.0, "end": 7.9, "word": "尾"}]},
+             {"start": 9.5, "end": 12, "text": "第三句"}]
+got_cues, got_dropped = assemble.cut_cues(seam_cues, seam_keep, seams)
+check("cut_cues：接縫前一句的結尾跑到下一句開頭後面（畫面重疊那幾秒）→ 收到下一句開始為止；逐字時間一起收",
+      [(c["start"], c["end"]) for c in got_cues] == [(1.0, 4.6), (4.6, 6.0), (6.0, 8.5)]
+      and got_cues[1]["words"] == [{"start": 5.5, "end": 6.0, "word": "尾"}] and got_dropped == 0,
+      f"{got_cues} {got_dropped}")
+check("cut_cues：硬切時跟 cutmarks.remap_cues 一樣", assemble.cut_cues(seam_cues, seam_keep)
+      == cutmarks.remap_cues(seam_cues, seam_keep))
+check("cut_cues：被下一句收到太短的那句拿掉",
+      assemble.cut_cues([{"start": 4.6, "end": 5, "text": "尾巴"}, {"start": 6.0, "end": 7, "text": "接縫後"}],
+                        seam_keep, [0.0, 0.5, 0.5]) == ([{"start": 4.5, "end": 5.5, "text": "接縫後"}], 1))
+
 if not shutil.which("ffmpeg"):
     print("SKIP 這個環境沒有 ffmpeg：略過真的輸出")
 else:
@@ -587,6 +648,22 @@ else:
     check("聲音跟著轉場重疊：紅的那兩段有聲音、藍與圖片那段沒聲音（聲音沒對齊的話最後一段會晚 2 秒才響）",
           loud_a is not None and loud_a > -40 and quiet_b is not None and quiet_b < -70
           and loud_c is not None and loud_c > -40, f"{loud_a} {quiet_b} {loud_c}")
+
+    # ----- 11. 剪點接縫的轉場：真的輸出 -----
+    # 0～4 秒紅、4～8 秒綠；剪掉 2.65～5.35，接縫溶接 0.5 秒 → 2.15～2.65 紅綠交疊、片長 4.8
+    run("-f", "lavfi", "-i", "color=c=red:size=320x180:rate=30:d=4", "-f", "lavfi",
+        "-i", "color=c=0x00ff00:size=320x180:rate=30:d=4", "-filter_complex", "[0:v][1:v]concat=n=2:v=1",
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", p("rg.mp4"))
+    seam_out = p("seam.mp4")
+    seam_result = assemble.render(assemble.apply_cuts({"main": [{"path": p("rg.mp4"), "out": 8}]},
+                                                      [(0, 2.65), (5.35, 8)], dissolve), seam_out)
+    seam_len = assemble.probe_seconds(seam_out)
+    check("接縫溶接真的輸出：片長＝留下的 5.3 − 0.5 ＝ 4.8", seam_result["duration"] == 4.8
+          and seam_len is not None and abs(seam_len - 4.8) < 0.1, f"{seam_result} {seam_len}")
+    before_seam, mid_seam, after_seam = (pixel(seam_out, t, 160, 90, "320x180") for t in (1.9, 2.4, 2.9))
+    check("接縫溶接：接縫前紅、轉場正中間紅綠各半、接縫後綠",
+          near(before_seam, (255, 0, 0)) and near(mid_seam, (128, 128, 0)) and near(after_seam, (0, 255, 0)),
+          f"{before_seam} {mid_seam} {after_seam}")
 
     # ----- 5. 錯誤 -----
     msg = error_of(assemble.render, {"main": [{"path": p("none.mp4"), "out": 1}]}, p("x.mp4"))

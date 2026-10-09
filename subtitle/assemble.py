@@ -637,27 +637,96 @@ def usable_keep(keep) -> list:
             if float(e) - float(s) >= MIN_CLIP - 1e-9]
 
 
-def _remap(t: float, keep) -> float:
-    from .cutmarks import remap_time
-    return remap_time(t, keep)
+def cut_time(t: float, keep, seams=None) -> float:
+    """
+    原本的第 t 秒 → 剪後的第幾秒。keep 是 `usable_keep` 過的保留片段；seams 是每段開頭的
+    接縫轉場吃掉幾秒（`seam_durations`，省略＝硬切，結果跟 `cutmarks.remap_time` 一樣）。
+    落在保留片段裡：照那一段算（有轉場時這一段整段往前挪，跟前一段重疊）；落在剪掉的
+    地方：下一段保留片段的開頭；最後一段之後：剪後的片尾。
+    """
+    t = float(t)
+    position = 0.0
+    for k, (start, end) in enumerate(keep):
+        position -= float(seams[k]) if seams else 0.0
+        if t < start:
+            return round(position, 3)
+        if t <= end:
+            return round(position + (t - start), 3)
+        position += end - start
+    return round(position, 3)
 
 
-def apply_cuts(timeline: dict, keep) -> dict:
+def _cut_main(timeline: dict, keep) -> tuple:
+    """主軌照 keep 切段：([(第幾段保留片段, 片段), ...], 原本的片長)。"""
+    clips = []
+    for i, clip in enumerate(timeline.get("main") or [], 1):
+        start, end = _span(clip, f"主軌第 {i} 段", image_default=DEFAULT_IMAGE_SECONDS)
+        clips.append(dict(clip, **{"in": start, "out": end}))
+    spans = main_spans({"main": clips})
+    total = spans[-1][1] if spans else 0.0
+    pieces = []
+    for k, (s, e) in enumerate(keep):
+        for start, end, clip in spans:
+            a, b = max(s, start), min(e, end)
+            if b - a < MIN_CLIP - 1e-9:
+                continue
+            piece = {key: v for key, v in clip.items() if key not in ("in", "out", "duration", "transition")}
+            if is_image(clip["path"]):
+                piece["duration"] = round(b - a, 3)
+            else:
+                piece["in"] = round(clip["in"] + (a - start), 3)
+                piece["out"] = round(clip["in"] + (b - start), 3)
+            pieces.append((k, piece))
+    return pieces, total
+
+
+def _piece_length(piece: dict) -> float:
+    return float(piece["duration"]) if "duration" in piece else float(piece["out"]) - float(piece["in"])
+
+
+def seam_durations(timeline: dict, keep, transition=None) -> list:
+    """
+    剪點接縫的轉場各吃掉幾秒：[每段保留片段一個數字]，第一段與硬切是 0。每個接縫最多吃掉
+    前後兩段各 (長度 − MIN_CLIP) 的一半（一段頭尾都有轉場也放得下），不到 MIN_TRANSITION 就
+    改硬切。keep 要先過 `usable_keep`。
+    """
+    seams = [0.0] * len(keep)
+    if not transition:
+        return seams
+    wanted = _transition(transition, "剪點接縫", 2)["duration"]
+    pieces, _total = _cut_main(timeline, keep)
+    first, last = {}, {}
+    for k, piece in pieces:
+        first.setdefault(k, piece)
+        last[k] = piece
+    for k in range(1, len(keep)):
+        if k not in first or k - 1 not in last:
+            continue
+        room = min(_piece_length(last[k - 1]), _piece_length(first[k])) - MIN_CLIP
+        d = int(min(wanted, room / 2.0) * 1000) / 1000.0
+        seams[k] = d if d >= MIN_TRANSITION - 1e-9 else 0.0
+    return seams
+
+
+def apply_cuts(timeline: dict, keep, transition=None) -> dict:
     """
     把剪點套到多軌時間軸上，回傳新的時間軸（不改原本的）。keep：要保留的 (開始, 結束)，
     是**原本**輸出時間軸上的秒數（`cutmarks.kept_segments`），依時間排序、不重疊；
-    先過 `usable_keep`。規則：
+    先過 `usable_keep`。transition：接縫的轉場 `{"type", "duration"}`（第 8 項第二階段），
+    省略＝硬切。規則：
 
-    * **主軌**：只留 keep 那幾段（跨過主軌接縫的切成兩段），一段接一段。
+    * **主軌**：只留 keep 那幾段（跨過主軌接縫的切成兩段），一段接一段。有接縫轉場時，
+      每段保留片段的第一片帶上轉場（長度照 `seam_durations`），片長再少掉那幾秒。
     * **畫面（疊加）**：跟著剪——剪掉的地方蓋到的那一截裁掉，其餘平移到剪後的位置
       （B-roll 對的是講者那句話，話被剪掉，畫面也該一起剪）。影片素材的進點跟著跳；
-      圖片剪完頭尾相接，接回一段。整段都在剪掉的地方就拿掉。
+      圖片剪完頭尾相接，接回一段。整段都在剪掉的地方就拿掉。有接縫轉場時，同一段影片
+      素材前一片的尾巴跟下一片重疊的那幾秒裁掉（不會兩片疊在一起、聲音也不會重複）。
     * **音樂**：不跟著剪（剪了會一跳一跳）：開始時間平移到剪後的位置（落在剪掉的地方
       就從接縫開始），從同一個進點一路播，長度縮成剪後那一段的長度；循環或沒給 out
       的一樣一路到片尾。剪後長度不到 MIN_CLIP 就拿掉。
 
-    其他欄位（rect、audio、volume、length…）照抄。剪完片段太多（> MAX_MAIN_CLIPS）、
-    什麼都不剩時拋 AssembleError。
+    時間都用 `cut_time` 對（字幕用 `cut_cues`，同一套）。其他欄位（rect、audio、volume、
+    length…）照抄。剪完片段太多（> MAX_MAIN_CLIPS）、什麼都不剩時拋 AssembleError。
     """
     if any((c or {}).get("transition") for c in timeline.get("main") or []):
         # 轉場讓前後兩段重疊，剪點的秒數對到哪一段說不清楚；先不支援
@@ -665,50 +734,44 @@ def apply_cuts(timeline: dict, keep) -> dict:
     keep = usable_keep(keep)
     if not keep:
         raise AssembleError("剪完什麼都不剩：請停用幾段剪點")
-    clips = []
-    for i, clip in enumerate(timeline.get("main") or [], 1):
-        start, end = _span(clip, f"主軌第 {i} 段", image_default=DEFAULT_IMAGE_SECONDS)
-        clips.append(dict(clip, **{"in": start, "out": end}))
-    spans = main_spans({"main": clips})
-    total = spans[-1][1] if spans else 0.0
-    main = []
-    for s, e in keep:
-        for start, end, clip in spans:
-            a, b = max(s, start), min(e, end)
-            if b - a < MIN_CLIP - 1e-9:
-                continue
-            piece = {k: v for k, v in clip.items() if k not in ("in", "out", "duration")}
-            if is_image(clip["path"]):
-                piece["duration"] = round(b - a, 3)
-            else:
-                piece["in"] = round(clip["in"] + (a - start), 3)
-                piece["out"] = round(clip["in"] + (b - start), 3)
-            main.append(piece)
+    seams = seam_durations(timeline, keep, transition)
+    kind = transition["type"] if transition else None
+    pieces, total = _cut_main(timeline, keep)
+    main, seen = [], set()
+    for k, piece in pieces:
+        if k not in seen and seams[k]:
+            piece = dict(piece, transition={"type": kind, "duration": seams[k]})
+        seen.add(k)
+        main.append(piece)
     if not main:
         raise AssembleError("剪完什麼都不剩：請停用幾段剪點")
     if len(main) > MAX_MAIN_CLIPS:
         raise AssembleError(f"剪完主軌片段太多（{len(main)} 段，上限 {MAX_MAIN_CLIPS}）：請停用一些剪點")
-    new_total = round(sum(min(e, total) - s for s, e in keep if s < total), 3)
 
     overlays = []
     for item in timeline.get("overlays") or []:
         start, end = item_span("overlays", item, total)
         image = is_image(item.get("path", ""))
-        merged = None
-        for s, e in keep:
+        previous = None
+        for k, (s, e) in enumerate(keep):
             a, b = max(s, start), min(e, end)
             if b - a < MIN_CLIP - 1e-9:
                 continue
-            at = _remap(a, keep)
+            at = cut_time(a, keep, seams)
             if image:
-                if merged is not None and abs(merged["at"] + merged["duration"] - at) < 0.002:
-                    merged["duration"] = round(merged["duration"] + (b - a), 3)
+                if previous is not None and at <= previous["at"] + previous["duration"] + 0.002:
+                    previous["duration"] = round(max(previous["at"] + previous["duration"], at + (b - a))
+                                                 - previous["at"], 3)
                     continue
                 piece = dict(item, at=at, duration=round(b - a, 3))
-                merged = piece
             else:
+                if previous is not None and previous["at"] + previous["out"] - previous["in"] > at + 1e-9:
+                    previous["out"] = round(previous["in"] + (at - previous["at"]), 3)  # 重疊的尾巴裁掉
+                    if previous["out"] - previous["in"] < MIN_CLIP - 1e-9:
+                        overlays.remove(previous)
                 source = float(item.get("in", 0.0)) + (a - float(item.get("at", 0.0)))
                 piece = dict(item, at=at, **{"in": round(source, 3), "out": round(source + (b - a), 3)})
+            previous = piece
             overlays.append(piece)
     if len(overlays) > MAX_MAIN_CLIPS:
         raise AssembleError(f"剪完畫面素材太多段（{len(overlays)} 段，上限 {MAX_MAIN_CLIPS}）："
@@ -717,8 +780,8 @@ def apply_cuts(timeline: dict, keep) -> dict:
     music = []
     for item in timeline.get("music") or []:
         start, end = item_span("music", item, total)
-        at, stop = _remap(start, keep), _remap(end, keep)
-        if min(stop, new_total) - at < MIN_CLIP - 1e-9:
+        at, stop = cut_time(start, keep, seams), cut_time(end, keep, seams)
+        if stop - at < MIN_CLIP - 1e-9:
             continue
         piece = dict(item, at=at)
         if not item.get("loop") and item.get("out") is not None:
@@ -728,6 +791,29 @@ def apply_cuts(timeline: dict, keep) -> dict:
     out = {k: v for k, v in timeline.items() if k not in ("main", "overlays", "music")}
     out.update(main=main, overlays=overlays, music=music)
     return out
+
+
+def cut_cues(cues, keep, seams=None) -> tuple:
+    """
+    字幕對齊到剪後的時間軸（跟 `apply_cuts` 同一套 `cut_time`）：回傳 (新字幕, 拿掉幾句)。
+    有接縫轉場時，接縫前一句的結尾可能跑到下一句的開頭後面（兩段畫面重疊那幾秒），
+    就把前一句收到下一句開始為止；收完太短的也拿掉。keep 要先過 `usable_keep`。
+    """
+    from .cutmarks import MIN_CUE, remap_cues
+    out, dropped = remap_cues(cues, keep, mapper=lambda t: cut_time(t, keep, seams))
+    fixed = []
+    for i, cue in enumerate(out):
+        if i + 1 < len(out) and cue["end"] > out[i + 1]["start"]:
+            end = out[i + 1]["start"]
+            if end - cue["start"] < MIN_CUE - 1e-9:
+                dropped += 1
+                continue
+            cue = dict(cue, end=end)
+            if cue.get("words"):
+                cue["words"] = [dict(w, start=min(w["start"], end), end=min(w["end"], end))
+                                if "start" in w and "end" in w else w for w in cue["words"]]
+        fixed.append(cue)
+    return fixed, dropped
 
 
 # ===== 真的輸出 ===========================================================

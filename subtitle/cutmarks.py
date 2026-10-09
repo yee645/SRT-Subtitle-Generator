@@ -305,20 +305,22 @@ def remap_time(t, keep):
     return round(new_start, 3)
 
 
-def remap_cues(cues, keep, min_len=MIN_CUE):
+def remap_cues(cues, keep, min_len=MIN_CUE, mapper=None):
     """
     字幕對齊到剪後的時間軸。回傳 (新字幕, 拿掉幾句)：剪後短於 min_len 秒的拿掉。
-    逐字時間（words）跟著對齊；其餘欄位不變。
+    逐字時間（words）跟著對齊；其餘欄位不變。mapper：換一套「原本第幾秒 → 剪後第幾秒」
+    （多軌接縫有轉場時用 `assemble.cut_time`），省略＝`remap_time`。
     """
+    remap = mapper or (lambda t: remap_time(t, keep))
     out, dropped = [], 0
     for cue in cues:
-        start, end = remap_time(cue["start"], keep), remap_time(cue["end"], keep)
+        start, end = remap(cue["start"]), remap(cue["end"])
         if end - start < min_len - 1e-9:
             dropped += 1
             continue
         new = dict(cue, start=start, end=end)
         if cue.get("words"):
-            new["words"] = [dict(w, start=remap_time(w["start"], keep), end=remap_time(w["end"], keep))
+            new["words"] = [dict(w, start=remap(w["start"]), end=remap(w["end"]))
                             if "start" in w and "end" in w else dict(w) for w in cue["words"]]
         out.append(new)
     return out, dropped
