@@ -346,6 +346,78 @@ check("apply_cuts：剪完畫面素材太多段 → 說上限", "畫面素材太
                           "overlays": [{"path": "b.mp4", "at": 0, "out": 300}, {"path": "c.mp4", "at": 0, "out": 300}]},
     [(i * 2.0, i * 2.0 + 1.0) for i in range(150)]))
 
+# ----- 10. 轉場與片頭片尾淡入淡出 -----
+tr_raw = {"main": [{"path": "a.mp4", "out": 4},
+                   {"path": "b.mp4", "out": 3, "transition": {"type": "dissolve", "duration": 1}},
+                   {"path": "s.png", "duration": 2},
+                   {"path": "c.mp4", "in": 1, "out": 4, "transition": {"type": "fadeblack", "duration": 0.5}}],
+          "fade_in": 0.5, "fade_out": 1}
+tr = assemble.normalize(tr_raw)
+check("轉場：留在那一段上（type、duration）；沒有轉場的段不多出欄位",
+      tr["main"][1]["transition"] == {"type": "dissolve", "duration": 1.0}
+      and tr["main"][3]["transition"] == {"type": "fadeblack", "duration": 0.5}
+      and "transition" not in tr["main"][0] and "transition" not in tr["main"][2], str(tr["main"]))
+check("轉場長度省略＝1 秒", assemble.normalize({"main": [{"path": "a.mp4", "out": 4}, {
+    "path": "b.mp4", "out": 4, "transition": {"type": "dissolve"}}]})["main"][1]["transition"]["duration"] == 1.0)
+check("片頭淡入、片尾淡出：照給的；沒給是 0", (tr["fade_in"], tr["fade_out"]) == (0.5, 1.0)
+      and (tl["fade_in"], tl["fade_out"]) == (0.0, 0.0))
+check("片長＝每段加起來減掉轉場重疊（4＋3＋2＋3 − 1 − 0.5 ＝ 10.5）", assemble.main_duration(tr) == 10.5,
+      str(assemble.main_duration(tr)))
+check("有轉場的段比前一段的結束早開始（重疊轉場那幾秒）",
+      [(s, e) for s, e, _c in assemble.main_spans(tr)] == [(0.0, 4.0), (3.0, 6.0), (6.0, 8.0), (7.5, 10.5)],
+      str(assemble.main_spans(tr)))
+check("轉場重疊的那幾秒算後一段；重疊之前算前一段",
+      assemble.source_at(tr, 3.5) == (1, 0.5) and assemble.source_at(tr, 2.9) == (0, 2.9)
+      and assemble.source_at(tr, 7.6) == (3, 1.1) and assemble.source_at(tr, 10.5) is None)
+tr_bad = [
+    ({"main": [{"path": "a.mp4", "out": 4, "transition": {"type": "dissolve", "duration": 1}}]}, "是第一段"),
+    ({"main": [{"path": "a.mp4", "out": 4}, {"path": "b.mp4", "out": 4, "transition": {"type": "wipe"}}]},
+     "轉場 'wipe' 不認得"),
+    ({"main": [{"path": "a.mp4", "out": 4}, {"path": "b.mp4", "out": 4, "transition": "dissolve"}]},
+     "transition 要是"),
+    ({"main": [{"path": "a.mp4", "out": 9}, {"path": "b.mp4", "out": 9,
+                                             "transition": {"type": "dissolve", "duration": 6}}]}, "轉場長度要在"),
+    ({"main": [{"path": "a.mp4", "out": 4}, {"path": "b.mp4", "out": 4,
+                                             "transition": {"type": "dissolve", "duration": 0.05}}]}, "轉場長度要在"),
+    ({"main": [{"path": "a.mp4", "out": 0.8}, {"path": "b.mp4", "out": 4,
+                                               "transition": {"type": "dissolve", "duration": 1}}]},
+     "主軌第 1 段太短（0.800 秒），放不下頭尾的轉場"),
+    ({"main": [{"path": "a.mp4", "out": 4},
+               {"path": "b.mp4", "out": 2, "transition": {"type": "dissolve", "duration": 1}},
+               {"path": "c.mp4", "out": 4, "transition": {"type": "fadeblack", "duration": 1}}]},
+     "主軌第 2 段太短（2.000 秒），放不下頭尾的轉場（共 2.000 秒）"),
+    ({"main": [{"path": "a.mp4", "out": 30}], "fade_in": 11}, "片頭淡入要在 0～10 秒"),
+    ({"main": [{"path": "a.mp4", "out": 30}], "fade_out": -1}, "片尾淡出要在 0～10 秒"),
+    ({"main": [{"path": "a.mp4", "out": 3}], "fade_in": 2, "fade_out": 2}, "比片長"),
+]
+wrong = [(want, error_of(assemble.normalize, case)) for case, want in tr_bad]
+wrong = [(want, got) for want, got in wrong if not got or want not in got]
+check(f"不合理的 {len(tr_bad)} 種轉場與淡入淡出都說清楚哪一段哪裡不對", not wrong, str(wrong))
+tr_media = {"a.mp4": {"video": True, "audio": True}, "b.mp4": {"video": True, "audio": False},
+            "c.mp4": {"video": True, "audio": True}}
+tr_cmd = assemble.build_command(tr, "o.mp4", tr_media, (640, 360, 30))
+tr_fc = tr_cmd[tr_cmd.index("-filter_complex") + 1]
+check("有轉場：沒有轉場的相鄰幾段先接成一組（b＋圖片），組與組之間用 xfade／acrossfade",
+      "[mv0][ma0]concat=n=1:v=1:a=1[gc0][ga0]" in tr_fc
+      and "[mv1][ma1][mv2][ma2]concat=n=2:v=1:a=1[gc1][ga1]" in tr_fc
+      and "[mv3][ma3]concat=n=1:v=1:a=1[gc2][ga2]" in tr_fc and "[mv0][ma0][mv1]" not in tr_fc, tr_fc)
+check("xfade 的 offset＝前面已經接好的長度減掉轉場（4−1＝3；3＋5−0.5＝7.5），最後一個輸出 [base0][voice]",
+      "[gv0][gv1]xfade=transition=fade:duration=1:offset=3[xv1]" in tr_fc
+      and "[xv1][gv2]xfade=transition=fadeblack:duration=0.5:offset=7.5[base0]" in tr_fc
+      and "[ga0][ga1]acrossfade=d=1:c1=tri:c2=tri[xa1]" in tr_fc
+      and "[xa1][ga2]acrossfade=d=0.5:c1=tri:c2=tri[voice]" in tr_fc, tr_fc)
+check("xfade 兩邊統一像素格式與時基", tr_fc.count(",format=yuv420p,settb=AVTB[gv") == 0
+      and all(f"[gc{g}]format=yuv420p,settb=AVTB[gv{g}]" in tr_fc for g in range(3)), tr_fc)
+check("片頭淡入、片尾淡出：整個畫面與聲音一起，淡出從片長−淡出秒數開始；輸出長度＝片長",
+      "[base0]fade=t=in:st=0:d=0.5,fade=t=out:st=9.5:d=1[vfade]" in tr_fc
+      and "[voice]afade=t=in:st=0:d=0.5,afade=t=out:st=9.5:d=1[afade]" in tr_fc
+      and tr_cmd[tr_cmd.index("-map") + 1] == "[vfade]" and tr_cmd[tr_cmd.index("-map") + 3] == "[afade]"
+      and tr_cmd[tr_cmd.index("-t", len(tr_cmd) - 12) + 1] == "10.5", " ".join(tr_cmd[-16:]))
+check("沒有轉場也沒有淡入淡出：照舊一次 concat、不加 xfade／fade",
+      "xfade" not in fc and "fade=" not in fc and "concat=n=3:v=1:a=1[base0][voice]" in fc, fc)
+check("主軌有轉場時不能跟剪點一起輸出：說清楚",
+      "有轉場時還不能跟剪點一起輸出" in (error_of(assemble.apply_cuts, tr_raw, [(0, 3)]) or ""))
+
 if not shutil.which("ffmpeg"):
     print("SKIP 這個環境沒有 ffmpeg：略過真的輸出")
 else:
@@ -482,6 +554,39 @@ else:
     same, unshifted = diff(main_after, left(gray(p("a.mp4"), 2.8))), diff(main_after, left(gray(p("a.mp4"), 1.8)))
     check("主軌接縫後是原片的第 2.8 秒（中間 1 秒剪掉）：左半邊跟原片那一格一樣、跟沒平移的那格不一樣",
           same < 1.5 and unshifted > 4 * max(same, 0.5), f"{same:.2f} {unshifted:.2f}")
+
+    # ----- 10. 轉場：真的輸出 -----
+    # 紅（有 440 Hz）3 秒 →溶接 1 秒→ 藍（沒聲音）3 秒、綠色圖片 2 秒 →黑場 1 秒→ 紅 2 秒；頭尾各淡 0.5 秒
+    run("-f", "lavfi", "-i", "color=c=red:size=320x180:rate=30:d=3", "-f", "lavfi", "-i", "sine=frequency=440:d=3",
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", p("tr_r.mp4"))
+    tr_out = p("tr.mp4")
+    tr_result = assemble.render({"main": [
+        {"path": p("tr_r.mp4"), "out": 3},
+        {"path": p("c.mp4"), "out": 3, "transition": {"type": "dissolve", "duration": 1}},
+        {"path": p("g.png"), "duration": 2},
+        {"path": p("tr_r.mp4"), "out": 2, "transition": {"type": "fadeblack", "duration": 1}}],
+        "fade_in": 0.5, "fade_out": 0.5}, tr_out)
+    tr_len = assemble.probe_seconds(tr_out)
+    check("轉場真的輸出：片長＝3＋3＋2＋2 − 1 − 1 ＝ 8 秒", tr_result["duration"] == 8.0
+          and tr_len is not None and abs(tr_len - 8.0) < 0.1, f"{tr_result} {tr_len}")
+    red, mid, blue = pixel(tr_out, 1.5, 160, 90, "320x180"), pixel(tr_out, 2.5, 160, 90, "320x180"), \
+        pixel(tr_out, 3.5, 160, 90, "320x180")
+    check("溶接：轉場前是紅、轉場正中間紅藍各半、轉場後是藍",
+          near(red, (255, 0, 0)) and near(mid, (128, 0, 128)) and near(blue, (0, 0, 255)), f"{red} {mid} {blue}")
+    green, back = pixel(tr_out, 5.2, 100, 90, "320x180"), pixel(tr_out, 7.2, 160, 90, "320x180")
+    # ffmpeg 的 fadeblack 不對稱：大約三成的地方最黑，所以看轉場那一秒裡最暗的一格
+    window = [pixel(tr_out, 6.05 + k * 0.1, 160, 90, "320x180") for k in range(10)]
+    darkest = min(window, key=max)
+    check("黑場：圖片（綠）→ 轉場那一秒裡有一格接近全黑 → 紅；轉場開始前還沒變黑",
+          green[1] > 100 and max(darkest) < 25 and near(back, (255, 0, 0))
+          and max(pixel(tr_out, 5.8, 100, 90, "320x180")) > 100, f"{green} {window} {back}")
+    first, last = pixel(tr_out, 0.1, 160, 90, "320x180"), pixel(tr_out, 7.9, 160, 90, "320x180")
+    check("片頭從黑淡入、片尾淡到黑（0.1 秒時只有兩成亮）", 30 < first[0] < 90 and last[0] < 90,
+          f"{first} {last}")
+    loud_a, quiet_b, loud_c = loudness(tr_out, 0.6, 1.2), loudness(tr_out, 3.3, 2.5), loudness(tr_out, 6.6, 0.8)
+    check("聲音跟著轉場重疊：紅的那兩段有聲音、藍與圖片那段沒聲音（聲音沒對齊的話最後一段會晚 2 秒才響）",
+          loud_a is not None and loud_a > -40 and quiet_b is not None and quiet_b < -70
+          and loud_c is not None and loud_c > -40, f"{loud_a} {quiet_b} {loud_c}")
 
     # ----- 5. 錯誤 -----
     msg = error_of(assemble.render, {"main": [{"path": p("none.mp4"), "out": 1}]}, p("x.mp4"))
