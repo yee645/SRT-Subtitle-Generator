@@ -29,6 +29,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from subtitle import assemble  # noqa: E402
+from subtitle import cutmarks  # noqa: E402
 
 failures = []
 
@@ -104,9 +105,13 @@ media = {"a.mp4": {"video": True, "audio": True}, "b.mp4": {"video": True, "audi
          "c.mp4": {"video": True, "audio": True}, "m.mp3": {"video": False, "audio": True}}
 cmd = assemble.build_command(tl, "out.mp4", media, (640, 360, 30))
 fc = cmd[cmd.index("-filter_complex") + 1]
-check("沒聲音的主軌補靜音（長度＝片段長）、有聲音的取 in～out",
+a_at = cmd.index("a.mp4")
+check("沒聲音的主軌補靜音（長度＝片段長）、有聲音的取 in～out（在輸入端跳到進點、只讀那一段）",
       "anullsrc=r=48000:cl=stereo,atrim=duration=2[ma1]" in fc
-      and "[0:a]atrim=start=1:end=3," in fc, fc)
+      and cmd[a_at - 5:a_at] == ["-ss", "1", "-t", "2", "-i"]
+      and "[0:a]asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo,apad,"
+          "atrim=duration=2[ma0]" in fc
+      and "[0:v]setpts=PTS-STARTPTS,scale=" in fc and ":v]trim=" not in fc, " ".join(cmd))
 check("主軌接起來：每段縮放置中補黑邊、同一影格率，concat 3 段",
       fc.count("scale=640:360:force_original_aspect_ratio=decrease,pad=640:360") >= 3
       and "[mv0][ma0][mv1][ma1][mv2][ma2]concat=n=3:v=1:a=1[base0][voice]" in fc, fc)
@@ -273,6 +278,74 @@ check("overlays_at：超出片尾的剪掉", assemble.overlays_at(ovs, 9.5, 10) 
       and assemble.overlays_at(ovs, 10.0, 10) == [])
 check("overlays_at：沒有疊加", assemble.overlays_at([], 1, 10) == [] and assemble.overlays_at(None, 1, 10) == [])
 
+# ----- 9. 跟剪點一起輸出 -----
+cut_tl = {"main": [{"path": "v.mp4", "in": 0, "out": 20}], "width": 1280,
+          "overlays": [{"path": "b.mp4", "at": 3, "in": 1, "out": 9, "rect": [0.62, 0.04, 0.34, 0.34],
+                        "audio": True, "length": 10},
+                       {"path": "p.png", "at": 4, "duration": 6},
+                       {"path": "q.png", "at": 5.2, "duration": 0.5}],
+          "music": [{"path": "m.mp3", "at": 2, "in": 0.5, "out": 12.5, "volume": 0.5, "loop": False,
+                     "duck": True, "length": 30},
+                    {"path": "n.mp3", "at": 5.5, "in": 0, "out": None, "loop": True},
+                    {"path": "o.mp3", "at": 5.2, "in": 0, "out": 0.5}]}
+cut_keep = [(0, 5), (6, 8), (9.5, 20)]
+before = copy.deepcopy(cut_tl)
+cut = assemble.apply_cuts(cut_tl, cut_keep)
+check("apply_cuts：不改原本的時間軸", cut_tl == before)
+check("apply_cuts：主軌只留沒剪掉的那幾段", cut["main"] == [
+    {"path": "v.mp4", "in": 0.0, "out": 5.0}, {"path": "v.mp4", "in": 6.0, "out": 8.0},
+    {"path": "v.mp4", "in": 9.5, "out": 20.0}], str(cut["main"]))
+check("apply_cuts：主軌以外的欄位（畫布）照抄", cut["width"] == 1280)
+check("apply_cuts：影片素材跨過剪點切成幾段，進點跟著跳、時間平移、其他欄位照抄", cut["overlays"][:3] == [
+    {"path": "b.mp4", "at": 3.0, "in": 1.0, "out": 3.0, "rect": [0.62, 0.04, 0.34, 0.34], "audio": True,
+     "length": 10},
+    {"path": "b.mp4", "at": 5.0, "in": 4.0, "out": 6.0, "rect": [0.62, 0.04, 0.34, 0.34], "audio": True,
+     "length": 10},
+    {"path": "b.mp4", "at": 7.0, "in": 7.5, "out": 9.0, "rect": [0.62, 0.04, 0.34, 0.34], "audio": True,
+     "length": 10}], str(cut["overlays"]))
+check("apply_cuts：圖片剪完頭尾相接、接回一段（1＋2＋0.5 秒）",
+      cut["overlays"][3:] == [{"path": "p.png", "at": 4.0, "duration": 3.5}], str(cut["overlays"][3:]))
+check("apply_cuts：整段都在剪掉的地方的素材拿掉", all(o["path"] != "q.png" for o in cut["overlays"]))
+check("apply_cuts：音樂不跟著剪——平移後從同一個進點一路播，長度縮成剪後那一段", cut["music"][0] == {
+    "path": "m.mp3", "at": 2.0, "in": 0.5, "out": 10.0, "volume": 0.5, "loop": False, "duck": True,
+    "length": 30}, str(cut["music"][0]))
+check("apply_cuts：循環的音樂開頭落在剪掉的地方 → 從接縫開始、一路到片尾",
+      cut["music"][1] == {"path": "n.mp3", "at": 5.0, "in": 0, "out": None, "loop": True}, str(cut["music"][1:]))
+check("apply_cuts：整段都在剪掉的地方的音樂拿掉", len(cut["music"]) == 2)
+norm = assemble.normalize(cut)
+check("apply_cuts：結果過得了 normalize、片長＝留下的總長（17.5 秒）",
+      assemble.main_duration(norm) == 17.5 and len(norm["overlays"]) == 4, str(assemble.main_duration(norm)))
+check("apply_cuts：剪後的素材時間跟字幕用同一套對時（cutmarks.remap_time）",
+      [o["at"] for o in cut["overlays"]] == [cutmarks.remap_time(t, cut_keep) for t in (3, 6, 9.5, 4)])
+
+multi = {"main": [{"path": "a.mp4", "in": 10, "out": 14}, {"path": "s.png", "duration": 3},
+                  {"path": "c.mp4", "in": 0, "out": 5}]}
+cut = assemble.apply_cuts(multi, [(1, 5), (6.5, 12)])
+check("apply_cuts：剪點跨過主軌接縫 → 切成兩段；圖片片段用 duration", cut["main"] == [
+    {"path": "a.mp4", "in": 11.0, "out": 14.0}, {"path": "s.png", "duration": 1.0},
+    {"path": "s.png", "duration": 0.5}, {"path": "c.mp4", "in": 0.0, "out": 5.0}], str(cut["main"]))
+cut = assemble.apply_cuts({"main": [{"path": "a.mp4", "in": 0, "out": 3}, {"path": "c.mp4", "in": 0, "out": 5}]},
+                          [(0, 3.02), (4, 8)])
+check("apply_cuts：保留片段只跨過主軌接縫一點點（後一段只剩 0.02 秒）→ 那一點點不接（接不起來）",
+      cut["main"] == [{"path": "a.mp4", "in": 0.0, "out": 3.0}, {"path": "c.mp4", "in": 1.0, "out": 5.0}],
+      str(cut["main"]))
+check("usable_keep：比 MIN_CLIP 短的保留片段不算（主軌接不起來）",
+      assemble.usable_keep([(0, 2), (3, 3.02), (4, 6)]) == [(0.0, 2.0), (4.0, 6.0)])
+cut = assemble.apply_cuts({"main": [{"path": "v.mp4", "in": 0, "out": 10}],
+                           "overlays": [{"path": "b.mp4", "at": 1.98, "in": 0, "out": 1}]}, [(0, 2), (2.5, 10)])
+check("apply_cuts：剪後不到 MIN_CLIP 的那一截拿掉（1.98～2 只剩 0.02 秒），其餘照常",
+      cut["overlays"] == [{"path": "b.mp4", "at": 2.0, "in": 0.52, "out": 1.0}], str(cut["overlays"]))
+check("apply_cuts：剪完什麼都不剩 → 說清楚",
+      "什麼都不剩" in error_of(assemble.apply_cuts, {"main": [{"path": "v.mp4", "out": 5}]}, [(0, 0.01)])
+      and "什麼都不剩" in error_of(assemble.apply_cuts, {"main": [{"path": "v.mp4", "out": 5}]}, [(6, 9)]))
+many = [(i * 2.0, i * 2.0 + 1.0) for i in range(assemble.MAX_MAIN_CLIPS + 1)]
+check("apply_cuts：剪完主軌片段太多 → 說上限",
+      "片段太多" in error_of(assemble.apply_cuts, {"main": [{"path": "v.mp4", "out": 1000}]}, many))
+check("apply_cuts：剪完畫面素材太多段 → 說上限", "畫面素材太多段" in error_of(
+    assemble.apply_cuts, {"main": [{"path": "v.mp4", "out": 400}],
+                          "overlays": [{"path": "b.mp4", "at": 0, "out": 300}, {"path": "c.mp4", "at": 0, "out": 300}]},
+    [(i * 2.0, i * 2.0 + 1.0) for i in range(150)]))
+
 if not shutil.which("ffmpeg"):
     print("SKIP 這個環境沒有 ffmpeg：略過真的輸出")
 else:
@@ -387,6 +460,28 @@ else:
     manual = band(p("duck_manual.mp4"), 880)
     check("關掉自動、手動門檻 0.3（比人聲大）→ 幾乎不壓（照 config 的 ducking 走）",
           loud - manual < 1, f"{loud}→{manual}")
+
+    # ----- 9. 跟剪點一起輸出：真的剪 -----
+    # 主軌 a.mp4（0～4 秒）剪掉 1.5～2.5；B-roll 前 2 秒綠、後 2 秒黃，從 0.5 秒開始蓋在右半邊
+    run("-f", "lavfi", "-i", "color=c=0x00c000:size=320x180:rate=30:d=2", "-f", "lavfi",
+        "-i", "color=c=yellow:size=320x180:rate=30:d=2", "-filter_complex", "[0:v][1:v]concat=n=2:v=1",
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", p("gy.mp4"))
+    cut_out = p("cut.mp4")
+    cut_result = assemble.render(assemble.apply_cuts(
+        {"main": [{"path": p("a.mp4"), "in": 0, "out": 4}],
+         "overlays": [{"path": p("gy.mp4"), "at": 0.5, "in": 0, "out": 3.5, "rect": [0.5, 0, 0.5, 1]}]},
+        [(0, 1.5), (2.5, 4)]), cut_out)
+    check("跟剪點一起輸出：片長＝留下的總長（3 秒）", abs(cut_result["duration"] - 3.0) < 1e-6
+          and abs(assemble.probe_seconds(cut_out) - 3.0) < 0.1, str(assemble.probe_seconds(cut_out)))
+    early, seam = pixel(cut_out, 1.0, 480, 180), pixel(cut_out, 1.8, 480, 180)
+    check("B-roll 跟著剪：接縫前是素材的第 0.5 秒（綠），接縫後直接跳到素材的第 2.3 秒（黃）",
+          near(early, (0, 192, 0)) and near(seam, (255, 255, 0)), f"{early} {seam}")
+    def left(frame):
+        return [frame[r * 96 + c] for r in range(54) for c in range(40)]
+    main_after = left(gray(cut_out, 1.8))
+    same, unshifted = diff(main_after, left(gray(p("a.mp4"), 2.8))), diff(main_after, left(gray(p("a.mp4"), 1.8)))
+    check("主軌接縫後是原片的第 2.8 秒（中間 1 秒剪掉）：左半邊跟原片那一格一樣、跟沒平移的那格不一樣",
+          same < 1.5 and unshifted > 4 * max(same, 0.5), f"{same:.2f} {unshifted:.2f}")
 
     # ----- 5. 錯誤 -----
     msg = error_of(assemble.render, {"main": [{"path": p("none.mp4"), "out": 1}]}, p("x.mp4"))

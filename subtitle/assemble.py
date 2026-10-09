@@ -21,6 +21,7 @@
 資料都是單純的 dict／list（可以直接存成 JSON，第 10 項專案檔會用到）。
 `normalize` 檢查並補齊預設值；`build_command` 只組指令（素材的「有沒有畫面／聲音、
 是不是圖片」由呼叫端傳進來，測試不必真的有檔案）；`render` 真的跑 ffmpeg。
+`apply_cuts` 把剪點（`cutmarks.kept_segments`）套到時間軸上：主軌與畫面跟著剪，音樂平移。
 
 零 GUI 依賴。
 """
@@ -203,11 +204,15 @@ def build_command(timeline: dict, output_path: str, media: dict,
 
     inputs, filters = [], []
 
-    def add_input(path, image_seconds=None, loop=False):
+    def add_input(path, image_seconds=None, loop=False, seek=None):
+        # seek=(進點, 長度)：在輸入端就跳到進點、只讀那一段（-ss 放在 -i 前面）。用 trim 濾鏡的話
+        # 每一段都要從檔頭解碼到進點，跟剪點一起輸出時同一支片會切成幾十段，慢一倍以上（實測）。
         if image_seconds is not None:
             inputs.extend(["-loop", "1", "-framerate", _fmt(fps), "-t", _fmt(image_seconds), "-i", path])
         elif loop:
             inputs.extend(["-stream_loop", "-1", "-i", path])
+        elif seek is not None:
+            inputs.extend(["-ss", _fmt(seek[0]), "-t", _fmt(seek[1]), "-i", path])
         else:
             inputs.extend(["-i", path])
         return inputs.count("-i") - 1
@@ -218,11 +223,9 @@ def build_command(timeline: dict, output_path: str, media: dict,
             return {"video": True, "audio": False}
         return {"video": bool(found.get("video", True)), "audio": bool(found.get("audio", False))}
 
-    def fit(label_in, label_out, w, h, trim=None, pts_offset=0.0):
+    def fit(label_in, label_out, w, h, pts_offset=0.0):
         chain = [f"[{label_in}]"]
         parts = []
-        if trim:
-            parts.append(f"trim=start={_fmt(trim[0])}:end={_fmt(trim[1])}")
         parts.append("setpts=PTS-STARTPTS" + (f"+{_fmt(pts_offset)}/TB" if pts_offset else ""))
         parts.append(f"scale={w}:{h}:force_original_aspect_ratio=decrease")
         parts.append(f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black")
@@ -238,14 +241,13 @@ def build_command(timeline: dict, output_path: str, media: dict,
             idx = add_input(clip["path"], image_seconds=length)
             fit(f"{idx}:v", f"mv{n}", width, height)
         else:
-            idx = add_input(clip["path"])
+            idx = add_input(clip["path"], seek=(clip["in"], length))
             if not meta["video"]:
                 raise AssembleError(f"主軌第 {n + 1} 段沒有畫面：{os.path.basename(clip['path'])}"
                                     "（只有聲音的請放音樂軌）")
-            fit(f"{idx}:v", f"mv{n}", width, height, trim=(clip["in"], clip["out"]))
+            fit(f"{idx}:v", f"mv{n}", width, height)
         if meta["audio"]:
-            filters.append(f"[{idx}:a]atrim=start={_fmt(clip['in'])}:end={_fmt(clip['out'])},"
-                           f"asetpts=PTS-STARTPTS,aformat=sample_rates={SAMPLE_RATE}:"
+            filters.append(f"[{idx}:a]asetpts=PTS-STARTPTS,aformat=sample_rates={SAMPLE_RATE}:"
                            f"channel_layouts=stereo,apad,atrim=duration={_fmt(length)}[ma{n}]")
         else:
             filters.append(f"anullsrc=r={SAMPLE_RATE}:cl=stereo,atrim=duration={_fmt(length)}[ma{n}]")
@@ -265,17 +267,15 @@ def build_command(timeline: dict, output_path: str, media: dict,
         else:
             if not meta["video"]:
                 raise AssembleError(f"疊加軌第 {n + 1} 段沒有畫面：{os.path.basename(item['path'])}")
-            idx = add_input(item["path"])
-            fit(f"{idx}:v", f"ov{n}", ow, oh, trim=(item["in"], item["in"] + length),
-                pts_offset=item["at"])
+            idx = add_input(item["path"], seek=(item["in"], length))
+            fit(f"{idx}:v", f"ov{n}", ow, oh, pts_offset=item["at"])
         end = round(item["at"] + length, 3)
         filters.append(f"[{video}][ov{n}]overlay={ox}:{oy}:eof_action=pass:"
                        f"enable='between(t,{_fmt(item['at'])},{_fmt(end)})'[base{n + 1}]")
         video = f"base{n + 1}"
         if item["audio"] and meta["audio"] and not is_image(item["path"]):
             delay = int(round(item["at"] * 1000))
-            filters.append(f"[{idx}:a]atrim=start={_fmt(item['in'])}:end={_fmt(item['in'] + length)},"
-                           f"asetpts=PTS-STARTPTS,aformat=sample_rates={SAMPLE_RATE}:"
+            filters.append(f"[{idx}:a]asetpts=PTS-STARTPTS,aformat=sample_rates={SAMPLE_RATE}:"
                            f"channel_layouts=stereo,adelay={delay}|{delay}[oa{n}]")
             extra_audio.append(f"oa{n}")
 
@@ -521,6 +521,104 @@ def position_rect(key: str) -> list:
         if name == key:
             return list(rect)
     raise ValueError(f"不認得的位置：{key!r}")
+
+
+# ===== 跟剪點一起輸出（第五階段） =========================================
+
+def usable_keep(keep) -> list:
+    """剪點留下的片段裡，夠長（≥ MIN_CLIP）才能接的那些；主軌、素材、字幕都照這一份對時間。"""
+    return [(round(float(s), 3), round(float(e), 3)) for s, e in keep or []
+            if float(e) - float(s) >= MIN_CLIP - 1e-9]
+
+
+def _remap(t: float, keep) -> float:
+    from .cutmarks import remap_time
+    return remap_time(t, keep)
+
+
+def apply_cuts(timeline: dict, keep) -> dict:
+    """
+    把剪點套到多軌時間軸上，回傳新的時間軸（不改原本的）。keep：要保留的 (開始, 結束)，
+    是**原本**輸出時間軸上的秒數（`cutmarks.kept_segments`），依時間排序、不重疊；
+    先過 `usable_keep`。規則：
+
+    * **主軌**：只留 keep 那幾段（跨過主軌接縫的切成兩段），一段接一段。
+    * **畫面（疊加）**：跟著剪——剪掉的地方蓋到的那一截裁掉，其餘平移到剪後的位置
+      （B-roll 對的是講者那句話，話被剪掉，畫面也該一起剪）。影片素材的進點跟著跳；
+      圖片剪完頭尾相接，接回一段。整段都在剪掉的地方就拿掉。
+    * **音樂**：不跟著剪（剪了會一跳一跳）：開始時間平移到剪後的位置（落在剪掉的地方
+      就從接縫開始），從同一個進點一路播，長度縮成剪後那一段的長度；循環或沒給 out
+      的一樣一路到片尾。剪後長度不到 MIN_CLIP 就拿掉。
+
+    其他欄位（rect、audio、volume、length…）照抄。剪完片段太多（> MAX_MAIN_CLIPS）、
+    什麼都不剩時拋 AssembleError。
+    """
+    keep = usable_keep(keep)
+    if not keep:
+        raise AssembleError("剪完什麼都不剩：請停用幾段剪點")
+    clips = []
+    for i, clip in enumerate(timeline.get("main") or [], 1):
+        start, end = _span(clip, f"主軌第 {i} 段", image_default=DEFAULT_IMAGE_SECONDS)
+        clips.append(dict(clip, **{"in": start, "out": end}))
+    spans = main_spans({"main": clips})
+    total = spans[-1][1] if spans else 0.0
+    main = []
+    for s, e in keep:
+        for start, end, clip in spans:
+            a, b = max(s, start), min(e, end)
+            if b - a < MIN_CLIP - 1e-9:
+                continue
+            piece = {k: v for k, v in clip.items() if k not in ("in", "out", "duration")}
+            if is_image(clip["path"]):
+                piece["duration"] = round(b - a, 3)
+            else:
+                piece["in"] = round(clip["in"] + (a - start), 3)
+                piece["out"] = round(clip["in"] + (b - start), 3)
+            main.append(piece)
+    if not main:
+        raise AssembleError("剪完什麼都不剩：請停用幾段剪點")
+    if len(main) > MAX_MAIN_CLIPS:
+        raise AssembleError(f"剪完主軌片段太多（{len(main)} 段，上限 {MAX_MAIN_CLIPS}）：請停用一些剪點")
+    new_total = round(sum(min(e, total) - s for s, e in keep if s < total), 3)
+
+    overlays = []
+    for item in timeline.get("overlays") or []:
+        start, end = item_span("overlays", item, total)
+        image = is_image(item.get("path", ""))
+        merged = None
+        for s, e in keep:
+            a, b = max(s, start), min(e, end)
+            if b - a < MIN_CLIP - 1e-9:
+                continue
+            at = _remap(a, keep)
+            if image:
+                if merged is not None and abs(merged["at"] + merged["duration"] - at) < 0.002:
+                    merged["duration"] = round(merged["duration"] + (b - a), 3)
+                    continue
+                piece = dict(item, at=at, duration=round(b - a, 3))
+                merged = piece
+            else:
+                source = float(item.get("in", 0.0)) + (a - float(item.get("at", 0.0)))
+                piece = dict(item, at=at, **{"in": round(source, 3), "out": round(source + (b - a), 3)})
+            overlays.append(piece)
+    if len(overlays) > MAX_MAIN_CLIPS:
+        raise AssembleError(f"剪完畫面素材太多段（{len(overlays)} 段，上限 {MAX_MAIN_CLIPS}）："
+                            "請停用一些剪點或縮短素材")
+
+    music = []
+    for item in timeline.get("music") or []:
+        start, end = item_span("music", item, total)
+        at, stop = _remap(start, keep), _remap(end, keep)
+        if min(stop, new_total) - at < MIN_CLIP - 1e-9:
+            continue
+        piece = dict(item, at=at)
+        if not item.get("loop") and item.get("out") is not None:
+            piece["out"] = round(float(item.get("in", 0.0)) + (stop - at), 3)
+        music.append(piece)
+
+    out = {k: v for k, v in timeline.items() if k not in ("main", "overlays", "music")}
+    out.update(main=main, overlays=overlays, music=music)
+    return out
 
 
 # ===== 真的輸出 ===========================================================
