@@ -479,6 +479,14 @@ check("cut_cues：被下一句收到太短的那句拿掉",
       assemble.cut_cues([{"start": 4.6, "end": 5, "text": "尾巴"}, {"start": 6.0, "end": 7, "text": "接縫後"}],
                         seam_keep, [0.0, 0.5, 0.5]) == ([{"start": 4.5, "end": 5.5, "text": "接縫後"}], 1))
 
+# ----- 12. 接縫轉場吃掉的地方（給時間軸標） -----
+check("seam_overlaps：每個接縫兩截——前一段的最後 d 秒、下一段的最前 d 秒（原本的時間）",
+      assemble.seam_overlaps(seam_keep, seams) == [(4.5, 5.0), (6.0, 6.5), (7.5, 8.0), (9.5, 10.0)],
+      str(assemble.seam_overlaps(seam_keep, seams)))
+check("seam_overlaps：硬切或改硬切的接縫不標", assemble.seam_overlaps(seam_keep, [0.0, 0.0, 0.0]) == []
+      and assemble.seam_overlaps(seam_keep, [0.0, 0.0, 0.3]) == [(7.7, 8.0), (9.5, 9.8)]
+      and assemble.seam_overlaps(seam_keep, None) == [])
+
 if not shutil.which("ffmpeg"):
     print("SKIP 這個環境沒有 ffmpeg：略過真的輸出")
 else:
