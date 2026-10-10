@@ -285,6 +285,26 @@ def kept_segments(marks, duration):
     return keep
 
 
+PREVIEW_SLACK = 0.04  # 預覽剪後：離剪點邊不到這麼多秒就當作到了（播放器的位置大約每 1/30 秒更新一次）
+
+
+def preview_jump(t, keep, slack=PREVIEW_SLACK):
+    """
+    「預覽剪後」播到第 t 秒時該怎麼辦：回傳 ("play", None) 照常播、("jump", 秒) 跳到下一段保留
+    片段的開頭、("stop", 秒) 最後一段播完了（停在那一段的結尾）。keep 是 kept_segments 的結果。
+    快到剪點的頭（不到 slack 秒）就先跳，免得剪掉的那一格閃一下。
+    """
+    t = float(t)
+    if not keep:
+        return ("play", None)
+    for start, end in keep:
+        if t < start - slack:
+            return ("jump", float(start))
+        if t < end - slack:
+            return ("play", None)
+    return ("stop", float(keep[-1][1]))
+
+
 MIN_CUE = 0.05  # 剪後比這還短的字幕拿掉（幾乎整句都被剪掉）
 
 

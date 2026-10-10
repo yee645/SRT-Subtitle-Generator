@@ -349,6 +349,21 @@ try:
 except ValueError:
     check("edge 只能是 start／end", True)
 
+# ===== 預覽剪後（3.0 第 8 項第三階段） =====
+K = [(0.0, 2.65), (5.35, 7.0), (7.5, 9.0)]
+jumps = {t: cutmarks.preview_jump(t, K) for t in (0, 1, 2.6, 2.62, 3, 5.0, 5.35, 6.9, 6.97, 7.2, 8.9, 8.97, 9, 12)}
+check("preview_jump：保留片段裡照常播；快到剪點（不到 PREVIEW_SLACK 秒）或在剪掉的地方就跳到下一段開頭",
+      jumps[0] == jumps[1] == jumps[2.6] == jumps[5.35] == jumps[6.9] == jumps[8.9] == ("play", None)
+      and jumps[2.62] == jumps[3] == jumps[5.0] == ("jump", 5.35)
+      and jumps[6.97] == jumps[7.2] == ("jump", 7.5), str(jumps))
+check("preview_jump：最後一段播完（或在它之後）→ 停在那一段的結尾",
+      jumps[8.97] == jumps[9] == jumps[12] == ("stop", 9.0), str(jumps))
+check("preview_jump：片頭就被剪掉 → 從第一段開始；沒有保留片段 → 照常播",
+      cutmarks.preview_jump(0.0, [(1.5, 4.0)]) == ("jump", 1.5) and cutmarks.preview_jump(3.0, []) == ("play", None))
+check("preview_jump：slack 可以調（0 ＝ 走到剪點才跳）",
+      cutmarks.preview_jump(2.62, K, slack=0) == ("play", None) and cutmarks.preview_jump(2.65, K, slack=0)
+      == ("jump", 5.35))
+
 print()
 if failures:
     print(f"{len(failures)} 項失敗")

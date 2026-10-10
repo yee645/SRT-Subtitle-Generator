@@ -171,6 +171,8 @@ def _palette_colors(view):
         # 剪點：半透明紅（深色底要亮一點才看得到），邊線不透明
         "cut": QColor(255, 90, 90, 80) if dark else QColor(220, 40, 40, 64),
         "cut_edge": QColor("#ff6b6b") if dark else QColor("#c62828"),
+        # 接縫轉場重疊的那幾秒：琥珀色斜線（跟剪點的紅分得開）
+        "seam": QColor("#ffc04d") if dark else QColor("#b26a00"),
         # 疊加軌（青）與音樂軌（紫）：跟字幕（橘）、剪點（紅）、波形（藍）分得開
         "overlays": QColor("#2fb5a3") if dark else QColor("#1f9e8c"),
         "music": QColor("#a77be0") if dark else QColor("#8655c9"),
@@ -356,6 +358,9 @@ class TimelineView(QGraphicsView):
         self.cut_marks = []        # set_cut_marks 傳進來的剪點（複本）
         self.cut_items = []        # 每段剪點蓋在上面幾列的半透明區塊
         self.cut_lane_items = []   # 每段剪點在剪點列上的方塊（點、拖的對象）
+        self.seam_spans = []       # 接縫轉場在原本時間軸上吃掉的地方（assemble.seam_overlaps）
+        self.seam_items = []
+        self.seam_label = ""       # 「溶接」「黑場」（寫在提示裡）
         # 拖曳剪點：(第幾段, "start"/"end"/"body", 原本的開始, 原本的結束, 按下的秒數, 按下的 x)
         self._cut_drag = None
         self.tracks = {kind: [] for kind in assemble_mod.TRACK_KINDS}       # set_tracks 傳進來的（複本）
@@ -412,6 +417,19 @@ class TimelineView(QGraphicsView):
         self._cut_drag = None
         self._build_cut_marks()
         self.cut_lane.update()
+
+    def set_seam_overlaps(self, spans, label=""):
+        """
+        在剪點列標出接縫轉場吃掉的地方（輸出時前後兩截疊在一起淡換）：[(開始, 結束), ...]，
+        空清單＝不標。label 是轉場的名字，寫在滑鼠提示裡。
+        """
+        self.seam_spans = [(float(a), float(b)) for a, b in (spans or []) if float(b) > float(a)]
+        self.seam_label = label
+        self._build_seams()
+
+    def seam_rects(self):
+        """每一截接縫轉場在剪點列上的矩形（給測試用）。"""
+        return [item.rect() for item in self.seam_items]
 
     def set_tracks(self, overlays, music):
         """換一份疊加軌與音樂軌（assemble 時間軸的 overlays／music）。同一段還在就保留選取。"""
@@ -994,6 +1012,7 @@ class TimelineView(QGraphicsView):
         self.playhead.setPen(QPen(self.colors["playhead"], 2))
         self._build_cues()
         self._build_cut_marks()
+        self._build_seams()
         self._build_tracks()
         self.set_position(self.position_ms, follow=False)
 
@@ -1008,6 +1027,25 @@ class TimelineView(QGraphicsView):
         built = [self._make_cut_item(m) for m in self.cut_marks]
         self.cut_items = [overlay for overlay, _lane in built]
         self.cut_lane_items = [lane for _overlay, lane in built]
+
+    def _build_seams(self):
+        if not hasattr(self, "seam_items"):
+            return  # 建構中
+        for item in self.seam_items:
+            self.scene_.removeItem(item)
+        self.seam_items = []
+        pps = self.px_per_sec
+        for start, end in self.seam_spans:
+            rect = QRectF(start * pps, ROW_Y["cuts"] + 3, max((end - start) * pps, 2.0), CUT_LANE_H - 6)
+            item = QGraphicsRectItem(rect)
+            item.setBrush(QBrush(self.colors["seam"], Qt.BDiagPattern))
+            item.setPen(QPen(self.colors["seam"], 1))
+            item.setZValue(2)  # 在剪點方塊底下：拖剪點邊時不擋到
+            item.setAcceptedMouseButtons(Qt.NoButton)
+            item.setToolTip(f"接縫{self.seam_label}：這 {end - start:.2f} 秒輸出時跟接縫另一邊疊在一起淡換"
+                            "（片子會短這麼多）")
+            self.scene_.addItem(item)
+            self.seam_items.append(item)
 
     def _refresh_cut(self, index):
         """只重畫一段剪點（拖曳中每次滑鼠移動都會呼叫）。"""

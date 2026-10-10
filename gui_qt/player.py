@@ -55,6 +55,10 @@ config.json，關掉只算這一次）。
 （`gui_qt/overlay_preview.py`）；圖片照實畫，影片素材每秒換一格（不是連續播放）。
 「預覽畫面素材」可以關掉。音樂還不會跟著播、素材的修改拖不進復原。
 
+預覽剪後（第 8 項第三階段）：剪點那一行勾「預覽剪後」，播放中走到啟用中的剪點就跳到下一
+段（`cutmarks.preview_jump`），最後一段播完就停；停著時照樣可以點進剪點裡看。轉場要輸出才
+看得到，時間軸的剪點列用琥珀色斜線標出接縫轉場重疊的那幾秒（`assemble.seam_overlaps`）。
+
 跟剪點一起輸出（第 7 項第五階段）：時間軸上顯示著剪點、而且有啟用的剪點時，「輸出多
 軌…」照剪點一起剪（`assemble.apply_cuts`）：主軌只留沒剪掉的部分，畫面素材蓋到剪掉的
 地方那一截跟著裁掉、其餘平移，音樂平移後一路播（不跟著一跳一跳）；字幕對齊到剪後的時
@@ -301,6 +305,12 @@ class PlayerPanel(QWidget):
         self.cut_combo.setToolTip("把自動剪輯會剪掉的段落畫在時間軸上（只是看，不會剪片）；"
                                   "參數跟一般版的設定同一份")
         self.cut_label = QLabel("")
+        # 預覽剪後（第 8 項第三階段）：播放時跳過啟用中的剪點
+        self.preview_cut_box = QCheckBox("預覽剪後")
+        self.preview_cut_box.setToolTip("播放時跳過剪掉的段落，聽看剪完接起來順不順（停下來時照樣可以點進剪點裡看）；"
+                                        "轉場要輸出才看得到，時間軸上用斜線標出接縫重疊的地方")
+        self.preview_cut_box.setEnabled(False)
+        self._preview_keep = []  # 預覽剪後要播的保留片段（cutmarks.kept_segments）
         # 接縫轉場（第 8 項第二階段）：剪點剪掉之後，前後兩段怎麼接
         self.seam_combo = QComboBox()
         self.seam_combo.addItem("接縫硬切", "")
@@ -389,6 +399,7 @@ class PlayerPanel(QWidget):
         cut_row.addWidget(QLabel("剪點："))
         cut_row.addWidget(self.cut_combo)
         cut_row.addWidget(self.cut_label, 1)
+        cut_row.addWidget(self.preview_cut_box)
         cut_row.addWidget(self.seam_combo)
         cut_row.addWidget(self.seam_spin)
         cut_row.addWidget(self.cut_reset_btn)
@@ -558,6 +569,34 @@ class PlayerPanel(QWidget):
             self.cut_label.setText(text)
         self._update_export_button()
 
+    def _refresh_seams(self):
+        """時間軸剪點列上標出接縫轉場吃掉的地方（硬切或沒有剪點就不標：沒有保留片段就沒有接縫）。"""
+        transition = self.seam_transition()
+        spans = []
+        if transition:
+            keep = assemble_mod.usable_keep(self._preview_keep)
+            main = {"main": [{"path": self.media_path or "x", "in": 0.0, "out": self.media_duration()}]}
+            try:
+                spans = assemble_mod.seam_overlaps(keep, assemble_mod.seam_durations(main, keep, transition))
+            except ValueError:
+                spans = []
+        label = assemble_mod.TRANSITIONS[transition["type"]][0] if transition else ""
+        self.timeline.set_seam_overlaps(spans, label)
+
+    def _preview_cuts(self, ms):
+        """預覽剪後：播放中走到剪掉的地方就跳到下一段，最後一段播完就停。"""
+        if not (self.preview_cut_box.isChecked() and self.preview_cut_box.isEnabled() and self._preview_keep):
+            return False
+        if self.player.playbackState() != QMediaPlayer.PlaybackState.PlayingState:
+            return False  # 停著時照樣可以點進剪點裡看
+        action, seconds = cutmarks.preview_jump(ms / 1000.0, self._preview_keep)
+        if action == "play":
+            return False
+        if action == "stop":
+            self.player.pause()
+        self.player.setPosition(int(round(seconds * 1000)))
+        return True
+
     def seam_transition(self):
         """剪點接縫的轉場 {"type", "duration"}；硬切回傳 None。"""
         kind = self.seam_combo.currentData()
@@ -571,6 +610,9 @@ class PlayerPanel(QWidget):
         ready = (self.cut_plan is not None and self.media_duration() > 0
                  and any(m.get("enabled", True) for m in self.cut_plan["marks"]))
         self.export_btn.setEnabled(ready and not self.exporter.busy)
+        self.preview_cut_box.setEnabled(ready)
+        self._preview_keep = cutmarks.kept_segments(self.cut_plan["marks"], self.media_duration()) if ready else []
+        self._refresh_seams()
         if hasattr(self, "preview_box") and not self.track_exporter.busy:  # 建構到一半時素材軌還沒建好
             # 剪點變了，多軌輸出會剪掉幾處跟著變
             self.track_label.setText(self._track_summary())
@@ -1046,6 +1088,8 @@ class PlayerPanel(QWidget):
             QMessageBox.warning(self, "載入字幕", str(exc))
 
     def _on_position(self, ms):
+        if self._preview_cuts(ms):
+            return  # 跳過去之後會再送一次新的位置
         if not self.slider.isSliderDown():
             self.slider.setValue(ms)
         self.time_label.setText(

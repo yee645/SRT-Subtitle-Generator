@@ -708,6 +708,20 @@ def seam_durations(timeline: dict, keep, transition=None) -> list:
     return seams
 
 
+def seam_overlaps(keep, seams) -> list:
+    """
+    接縫轉場在**原本**時間軸上吃掉的地方：[(開始, 結束), ...]，每個接縫兩段——前一段保留片段
+    的最後 d 秒、下一段的最前 d 秒（輸出時這兩截疊在一起淡換）。給時間軸標出來用。
+    """
+    spans = []
+    for k in range(1, len(keep)):
+        d = float(seams[k]) if seams and k < len(seams) else 0.0
+        if d > 0:
+            spans.append((round(keep[k - 1][1] - d, 3), round(keep[k - 1][1], 3)))
+            spans.append((round(keep[k][0], 3), round(keep[k][0] + d, 3)))
+    return spans
+
+
 def apply_cuts(timeline: dict, keep, transition=None) -> dict:
     """
     把剪點套到多軌時間軸上，回傳新的時間軸（不改原本的）。keep：要保留的 (開始, 結束)，
