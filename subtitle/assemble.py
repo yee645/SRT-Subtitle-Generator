@@ -15,6 +15,9 @@
   時間 `at` 開始放；`loop` 會重複到片尾；`duck` 講話時自動把音樂壓低（沿用
   `audio.py` 背景音樂閃避：config 的 `ducking` 參數，「自動適應人聲音量」打開時先量
   主軌人聲的響度再算門檻——手動的 0.06 對一般音量的人聲只壓得下 3dB 左右，實測）。
+  音樂的 `path` 也可以是 http／https 網址（線上配樂庫，見 `musiclib`）：ffmpeg 直接串流讀，
+  電腦裡不留檔；斷線會自動重連。主軌與疊加軌只收本機檔（要逐格對畫面，串流太慢）。
+  音樂段落上多記的曲名、授權等欄位（`musiclib.TRACK_META_KEYS`）normalize 不看。
 
 整條時間軸的長度＝主軌總長；疊加與音樂超出片尾的部分剪掉。
 
@@ -54,6 +57,11 @@ TRANSITIONS = {"dissolve": ("溶接", "fade"), "fadeblack": ("黑場", "fadeblac
 MIN_TRANSITION = 0.1
 MAX_TRANSITION = 5.0
 MAX_FADE = 10.0          # 片頭淡入、片尾淡出最長幾秒
+URL_SCHEMES = ("http://", "https://")
+URL_TIMEOUT = 30         # 網址素材多久讀不到資料就放棄（秒）
+# 網址素材的輸入參數：讀到一半斷線就重連（最多等 5 秒），卡住 URL_TIMEOUT 秒就失敗，不會一直掛著
+URL_INPUT_OPTIONS = ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+                     "-rw_timeout", str(URL_TIMEOUT * 1_000_000)]
 
 
 class AssembleError(ValueError):
@@ -64,6 +72,22 @@ class AssembleError(ValueError):
 
 def is_image(path: str) -> bool:
     return os.path.splitext(str(path))[1].lower() in IMAGE_EXTS
+
+
+def is_url(path) -> bool:
+    return str(path).lower().startswith(URL_SCHEMES)
+
+
+def item_label(item: dict) -> str:
+    """時間軸上、錯誤訊息裡顯示的名字：線上配樂用曲名，其他用檔名。"""
+    if item.get("title"):
+        return str(item["title"])
+    path = str(item.get("path", ""))
+    if is_url(path):
+        from urllib.parse import unquote, urlsplit
+        parts = urlsplit(path)
+        return os.path.basename(unquote(parts.path)) or parts.netloc
+    return os.path.basename(path)
 
 
 def _num(value, name, where):
@@ -123,6 +147,8 @@ def normalize(timeline: dict) -> dict:
         where = f"主軌第 {i} 段"
         if not clip.get("path"):
             raise AssembleError(f"{where}沒有指定檔案")
+        if is_url(clip["path"]):
+            raise AssembleError(f"{where}是網址：只有音樂軌能直接用線上素材")
         start, end = _span(clip, where, image_default=DEFAULT_IMAGE_SECONDS)
         entry = {"path": str(clip["path"]), "in": start, "out": end}
         if clip.get("transition"):
@@ -152,6 +178,8 @@ def normalize(timeline: dict) -> dict:
         where = f"疊加軌第 {i} 段"
         if not item.get("path"):
             raise AssembleError(f"{where}沒有指定檔案")
+        if is_url(item["path"]):
+            raise AssembleError(f"{where}是網址：只有音樂軌能直接用線上素材")
         start, end = _span(item, where, image_default=DEFAULT_IMAGE_SECONDS)
         at = round(_num(item.get("at", 0.0), "at", where), 3)
         if at < 0 or at >= total:
@@ -281,6 +309,8 @@ def build_command(timeline: dict, output_path: str, media: dict,
     def add_input(path, image_seconds=None, loop=False, seek=None):
         # seek=(進點, 長度)：在輸入端就跳到進點、只讀那一段（-ss 放在 -i 前面）。用 trim 濾鏡的話
         # 每一段都要從檔頭解碼到進點，跟剪點一起輸出時同一支片會切成幾十段，慢一倍以上（實測）。
+        if is_url(path):
+            inputs.extend(URL_INPUT_OPTIONS)
         if image_seconds is not None:
             inputs.extend(["-loop", "1", "-framerate", _fmt(fps), "-t", _fmt(image_seconds), "-i", path])
         elif loop:
@@ -372,7 +402,7 @@ def build_command(timeline: dict, output_path: str, media: dict,
     for n, item in enumerate(timeline["music"]):
         meta = info(item["path"])
         if not meta["audio"]:
-            raise AssembleError(f"音樂軌第 {n + 1} 段沒有聲音：{os.path.basename(item['path'])}")
+            raise AssembleError(f"音樂軌第 {n + 1} 段沒有聲音：{item_label(item)}")
         room = round(total - item["at"], 3)
         idx = add_input(item["path"], loop=item["loop"])
         trim = f"atrim=start={_fmt(item['in'])}"
@@ -855,6 +885,8 @@ def cut_cues(cues, keep, seams=None) -> tuple:
 def probe_media(path: str) -> dict:
     """有沒有畫面、有沒有聲音、畫面尺寸與影格率（給 build_command 與畫布預設值用）。"""
     from .media import has_audio_stream, has_video_stream, probe_dimensions, probe_fps
+    if is_url(path):  # 只有音樂軌收網址：只看聲音（每讀一次都要連一次網路）
+        return {"video": False, "audio": has_audio_stream(path), "width": None, "height": None, "fps": None}
     if is_image(path):
         width, height = probe_dimensions(path)
         return {"video": True, "audio": False, "width": width, "height": height, "fps": None}
@@ -901,19 +933,28 @@ def render(timeline: dict, output_path: str,
     照時間軸輸出一支影片。回傳 {"output", "duration", "width", "height", "fps"}。
     config：完整設定（只用到 ducking）。
 
-    素材不存在、輸出蓋到任何一個素材、ffmpeg 失敗 → 拋錯（AssembleError／RuntimeError）。
+    素材不存在、線上配樂讀不到、輸出蓋到任何一個素材、ffmpeg 失敗 → 拋錯
+    （AssembleError／RuntimeError）。
     先寫到同資料夾的暫存檔，成功才換名：失敗或中途停下（progress_cb 拋例外，例如使用者
     按取消）不留下半支檔案，目的地原本就有的檔案也不會被動到。
     """
+    raw_music = timeline.get("music") if isinstance(timeline, dict) else None
+    labels = {str(m.get("path", "")): item_label(m) for m in raw_music or []
+              if isinstance(m, dict)}  # normalize 會丟掉曲名，先記下來
     timeline = normalize(timeline)
     paths = all_paths(timeline)
-    missing = [p for p in paths if not os.path.isfile(p)]
+    missing = [p for p in paths if not is_url(p) and not os.path.isfile(p)]
     if missing:
         raise AssembleError("找不到素材：" + "、".join(os.path.basename(p) for p in missing))
     target = os.path.abspath(output_path)
-    if any(os.path.abspath(p) == target for p in paths):
+    if any(not is_url(p) and os.path.abspath(p) == target for p in paths):
         raise AssembleError("輸出檔跟其中一個素材是同一個檔案，會把素材蓋掉；請換個檔名")
     media = {p: probe_media(p) for p in paths}
+    unreachable = [labels.get(m["path"]) or item_label(m) for m in timeline["music"]
+                   if is_url(m["path"]) and not media[m["path"]]["audio"]]
+    if unreachable:
+        raise AssembleError("線上配樂讀不到（網路斷了，或原網址已失效）："
+                            + "、".join(dict.fromkeys(unreachable)))
     first = media[timeline["main"][0]["path"]]
     canvas = (first.get("width"), first.get("height"), first.get("fps"))
     if first.get("width") and first.get("height") and timeline["main"][0].get("adjust"):
