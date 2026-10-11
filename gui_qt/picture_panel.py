@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-3.0 第 9 項第二階段：畫面調整的小視窗（主片的亮度、對比、飽和度、旋轉、翻轉）。
+3.0 第 9 項第二、三階段：畫面調整的小視窗（亮度、對比、飽和度、旋轉、翻轉）。
 
-不擋住播放器（非強制回應）：拉滑桿時播放器的畫面跟著變，可以邊播邊調。每動一下就交給
-`apply`（播放器的 `set_main_adjust`），它不收（輸出中）就把控件放回它現在的值。數字照
+調的對象（`target`）是主片或選取的那段疊加素材，標題寫是哪一個；`set_target` 換對象時
+連同送給誰（`apply`）一起換。不擋住播放器（非強制回應）：拉滑桿時播放器的畫面跟著變，可以
+邊播邊調。每動一下就交給 `apply`（播放器的 `set_main_adjust`／`set_overlay_adjust`），它不收
+（輸出中）就把控件放回它現在的值。數字照
 `subtitle/picture.py` 的範圍：滑桿是百分之一的整數。
 """
 from __future__ import annotations
@@ -31,9 +33,10 @@ def slider_text(key, value):
 class PictureDialog(QDialog):
     def __init__(self, apply, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("畫面調整（主片）")
         self.setModal(False)
         self._apply = apply
+        self.target = "main"  # "main" 或 ("overlays", 第幾段)
+        self.setWindowTitle("畫面調整（主片）")
         self._filling = False
         self.sliders, self.value_labels = {}, {}
         grid = QGridLayout()
@@ -86,6 +89,13 @@ class PictureDialog(QDialog):
         self.reset_btn.clicked.connect(lambda: self._send(reset=True))
         self.close_btn.clicked.connect(self.close)
         self.fill({})
+
+    def set_target(self, target, title, apply, adjust):
+        """換調的對象：標題寫是誰，之後的變動送給 apply，控件照它現在的調整填。"""
+        self.target = target
+        self._apply = apply
+        self.setWindowTitle(f"畫面調整（{title}）")
+        self.fill(adjust)
 
     def current(self) -> dict:
         """控件現在的值（只留改過的項目）。"""
