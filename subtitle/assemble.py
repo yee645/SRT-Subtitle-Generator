@@ -29,6 +29,9 @@
 `acrossfade`）。整支片頭尾的淡入淡出是時間軸的 `fade_in`／`fade_out`（秒，從黑淡入／淡到黑，
 聲音一起），不改片長。
 
+**畫面調整**（第 9 項）：主軌與畫面素材的每一段都可以帶 `"adjust"`（亮度、對比、飽和度、
+裁切、旋轉、翻轉，格式見 `picture.py`），在縮放置中之前套上去。
+
 零 GUI 依賴。
 """
 from __future__ import annotations
@@ -36,6 +39,8 @@ from __future__ import annotations
 import os
 import subprocess
 from typing import Callable, Optional
+
+from . import picture
 
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tif", ".tiff")
 SAMPLE_RATE = 48000
@@ -122,6 +127,7 @@ def normalize(timeline: dict) -> dict:
         entry = {"path": str(clip["path"]), "in": start, "out": end}
         if clip.get("transition"):
             entry["transition"] = _transition(clip["transition"], where, i)
+        _put_adjust(entry, clip, where)
         out["main"].append(entry)
     for i, clip in enumerate(out["main"], 1):
         # 一段的頭尾都可能被轉場吃掉：兩邊加起來要比這一段短，中間至少留 MIN_CLIP 秒
@@ -158,8 +164,10 @@ def normalize(timeline: dict) -> dict:
         if len(rect) != 4 or rect[2] <= 0 or rect[3] <= 0 or min(rect[:2]) < 0 \
                 or rect[0] + rect[2] > 1.0001 or rect[1] + rect[3] > 1.0001:
             raise AssembleError(f"{where}的 rect 要在畫布裡（0～1 的比例，[x, y, w, h]）")
-        out["overlays"].append({"path": str(item["path"]), "at": at, "in": start, "out": end,
-                                "rect": rect, "audio": bool(item.get("audio", False))})
+        entry = {"path": str(item["path"]), "at": at, "in": start, "out": end,
+                 "rect": rect, "audio": bool(item.get("audio", False))}
+        _put_adjust(entry, item, where)
+        out["overlays"].append(entry)
 
     for i, item in enumerate(timeline.get("music") or [], 1):
         where = f"音樂軌第 {i} 段"
@@ -181,6 +189,17 @@ def normalize(timeline: dict) -> dict:
                              "volume": volume, "loop": bool(item.get("loop", False)),
                              "duck": bool(item.get("duck", False))})
     return out
+
+
+def _put_adjust(entry: dict, item: dict, where: str) -> None:
+    """有畫面調整就檢查並記上（只記跟預設不一樣的項目；什麼都沒改就不記）。"""
+    if item.get("adjust"):
+        try:
+            adjust = picture.changes(picture.normalize(item["adjust"], where))
+        except picture.PictureError as exc:
+            raise AssembleError(str(exc)) from None
+        if adjust:
+            entry["adjust"] = adjust
 
 
 def _transition(value, where, index):
@@ -278,10 +297,11 @@ def build_command(timeline: dict, output_path: str, media: dict,
             return {"video": True, "audio": False}
         return {"video": bool(found.get("video", True)), "audio": bool(found.get("audio", False))}
 
-    def fit(label_in, label_out, w, h, pts_offset=0.0):
+    def fit(label_in, label_out, w, h, pts_offset=0.0, adjust=None):
         chain = [f"[{label_in}]"]
         parts = []
         parts.append("setpts=PTS-STARTPTS" + (f"+{_fmt(pts_offset)}/TB" if pts_offset else ""))
+        parts.extend(picture.filters(adjust) if adjust else [])  # 畫面調整：縮放置中之前
         parts.append(f"scale={w}:{h}:force_original_aspect_ratio=decrease")
         parts.append(f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black")
         parts.append("setsar=1")
@@ -294,13 +314,13 @@ def build_command(timeline: dict, output_path: str, media: dict,
         length = clip["out"] - clip["in"]
         if is_image(clip["path"]):
             idx = add_input(clip["path"], image_seconds=length)
-            fit(f"{idx}:v", f"mv{n}", width, height)
+            fit(f"{idx}:v", f"mv{n}", width, height, adjust=clip.get("adjust"))
         else:
             idx = add_input(clip["path"], seek=(clip["in"], length))
             if not meta["video"]:
                 raise AssembleError(f"主軌第 {n + 1} 段沒有畫面：{os.path.basename(clip['path'])}"
                                     "（只有聲音的請放音樂軌）")
-            fit(f"{idx}:v", f"mv{n}", width, height)
+            fit(f"{idx}:v", f"mv{n}", width, height, adjust=clip.get("adjust"))
         if meta["audio"]:
             filters.append(f"[{idx}:a]asetpts=PTS-STARTPTS,aformat=sample_rates={SAMPLE_RATE}:"
                            f"channel_layouts=stereo,apad,atrim=duration={_fmt(length)}[ma{n}]")
@@ -321,12 +341,12 @@ def build_command(timeline: dict, output_path: str, media: dict,
         ox, oy, ow, oh = overlay_box(item["rect"], width, height)
         if is_image(item["path"]):
             idx = add_input(item["path"], image_seconds=length)
-            fit(f"{idx}:v", f"ov{n}", ow, oh, pts_offset=item["at"])
+            fit(f"{idx}:v", f"ov{n}", ow, oh, pts_offset=item["at"], adjust=item.get("adjust"))
         else:
             if not meta["video"]:
                 raise AssembleError(f"疊加軌第 {n + 1} 段沒有畫面：{os.path.basename(item['path'])}")
             idx = add_input(item["path"], seek=(item["in"], length))
-            fit(f"{idx}:v", f"ov{n}", ow, oh, pts_offset=item["at"])
+            fit(f"{idx}:v", f"ov{n}", ow, oh, pts_offset=item["at"], adjust=item.get("adjust"))
         end = round(item["at"] + length, 3)
         filters.append(f"[{video}][ov{n}]overlay={ox}:{oy}:eof_action=pass:"
                        f"enable='between(t,{_fmt(item['at'])},{_fmt(end)})'[base{n + 1}]")
@@ -896,6 +916,9 @@ def render(timeline: dict, output_path: str,
     media = {p: probe_media(p) for p in paths}
     first = media[timeline["main"][0]["path"]]
     canvas = (first.get("width"), first.get("height"), first.get("fps"))
+    if first.get("width") and first.get("height") and timeline["main"][0].get("adjust"):
+        # 第一段裁過或轉過：畫布照調整完的大小（直的轉成橫的不會被補一圈黑邊）
+        canvas = picture.output_size(timeline["main"][0]["adjust"], first["width"], first["height"]) + (canvas[2],)
     duck = duck_settings(timeline, media, config) if any(m["duck"] for m in timeline["music"]) else None
     root, ext = os.path.splitext(output_path)
     temp = f"{root}.tmp-{os.getpid()}{ext or '.mp4'}"
