@@ -311,6 +311,19 @@ if old_app_src is not None:
         # 3.0 第 3 項第二階段：時間軸的縮圖條（只解關鍵影格＋補空檔＋快取），
         # 零 GUI 依賴，回傳 (秒, 圖檔路徑)（全新檔案）。
         "subtitle/filmstrip.py",
+        # 3.0 第 4 項第二階段：拖曳字幕塊的邊改時間的規則（不重疊鄰句、最短
+        # 長度、片頭片尾、吸附），零 GUI 依賴，時間軸只換算像素（全新檔案）。
+        "subtitle/cueedit.py",
+        # 3.0 第 5 項第一階段：三種自動剪輯「會剪掉哪幾段」算成時間區間給時間
+        # 軸畫（全新檔案，零 GUI 依賴）；retakes.py 只把 apply_retake_removal
+        # 裡算保留片段的那段抽成 retake_keep_segments 共用，行為不變（測試比對）。
+        "subtitle/cutmarks.py", "subtitle/retakes.py",
+        # 3.0 第 6 項：代理檔（判斷要不要做、ffmpeg 轉成短邊 540＋關鍵影格密、
+        # 快取與清理），零 GUI 依賴，Qt 播放器只決定什麼時候換著播（全新檔案）。
+        "subtitle/proxy.py",
+        # 3.0 第 7 項：多段素材與多軌的時間軸資料模型＋輸出成 ffmpeg
+        # filter_complex（主軌接段、疊加 B-roll／圖片、音樂與閃避），零 GUI 依賴（全新檔案）。
+        "subtitle/assemble.py",
         # 3.0 第 2 項第二階段：burn_layout（預覽照燒錄的位置與大小畫）。
         # 與 cues_to_ass 同檔、共用對齊與邊距的算法；cues_to_ass 只把原本
         # 內嵌的邊距算式換成同一個函式，輸出逐字相同（測試比對）。

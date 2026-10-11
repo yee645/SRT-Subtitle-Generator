@@ -140,9 +140,19 @@ class MainWindow(QMainWindow):
         note.setContentsMargins(12, 8, 12, 0)
         layout.addWidget(note)
         # 字幕樣式與 Tk 版同一份（config 的 subtitle_style），疊加層照燒錄的規則畫。
-        self.player_panel = PlayerPanel(style=self.config_data.get("subtitle_style"))
+        # 剪點參數（停頓門檻、相似度…）也是同一份 config，畫出來的就是一般版會剪的。
+        self.player_panel = PlayerPanel(style=self.config_data.get("subtitle_style"),
+                                        config=self.config_data)
         layout.addWidget(self.player_panel, 1)
         return page
+
+    def closeEvent(self, event):  # noqa: N802 —— 字幕改過還沒存：先問（存檔／放棄／取消）
+        if self.player_panel is not None and not self.player_panel.maybe_discard():
+            event.ignore()
+            return
+        if self.player_panel is not None:
+            self.player_panel.shutdown()
+        super().closeEvent(event)
 
 
 SELFTEST_FLAG = "--selftest"
@@ -155,6 +165,10 @@ def main(argv=None):
     `--selftest <結果.json> <影片>`：打包後的自檢模式（見 gui_qt/selftest.py）。
     """
     argv = list(sys.argv if argv is None else argv)
+    # 一般版「自動安裝 ffmpeg」裝好的執行檔兩版共用：加進本行程的 PATH
+    # （時間軸的波形與縮圖要用；不改系統設定）。
+    from subtitle.ffmpeg_setup import ensure_ffmpeg_on_path
+    ensure_ffmpeg_on_path()
     app = QApplication.instance() or QApplication(argv[:1])
     data = config.load_config()
     apply_theme(app, data.get("theme", "light"))

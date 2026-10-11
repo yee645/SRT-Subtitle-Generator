@@ -35,8 +35,16 @@ TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
          "test_screentranslate.py",
          "test_screentranslate_gui.py", "test_v230.py", "test_v231.py",
          "test_v232.py", "test_v233.py", "test_v235.py", "test_v236.py",
-         "test_qt_skeleton.py", "test_qt_preview_pack.py", "test_qt_player.py",
-         "test_waveform.py", "test_filmstrip.py", "test_bgm_collector.py"]
+         "test_qt_skeleton.py", "test_qt_preview_pack.py", "test_qt_player.py", "test_waveform.py", "test_filmstrip.py",
+         "test_qt_timeline.py", "test_cueedit.py", "test_qt_timeline_edit.py",
+         "test_qt_timeline_undo.py", "test_qt_timeline_move.py",
+         "test_dynamic_preview.py", "test_qt_dynamic_preview.py",
+         "test_cutmarks.py", "test_qt_cutmarks.py", "test_qt_cutedit.py",
+         "test_cutexport.py", "test_qt_cutexport.py", "test_proxy.py", "test_qt_proxy.py",
+         "test_assemble.py", "test_qt_tracks.py", "test_qt_track_edit.py",
+         "test_qt_overlay_preview.py", "test_qt_track_cuts.py", "test_qt_seam.py",
+         "test_qt_preview_cut.py",
+         "test_bgm_collector.py"]
 
 
 def main() -> int:

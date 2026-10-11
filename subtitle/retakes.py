@@ -146,6 +146,30 @@ def suggest_output_path(input_path: str) -> str:
     return f"{base}_去重複{ext or '.mp4'}"
 
 
+def retake_keep_segments(duration: float, selected_retakes: list,
+                         pad: float) -> list:
+    """
+    剪掉勾選的重複片段（前後各多剪 pad 秒）後要保留的 (開始, 結束) 片段。
+
+    apply_retake_removal 與時間軸的剪點顯示（cutmarks.py）共用，畫出來的
+    就是真的會剪的。
+    """
+    cut_spans = sorted(
+        (max(r["start"] - pad, 0.0), min(r["end"] + pad, duration))
+        for r in selected_retakes)
+    keep = []
+    cursor = 0.0
+    for cut_start, cut_end in cut_spans:
+        if cut_start <= cursor:
+            cursor = max(cursor, cut_end)
+            continue
+        keep.append((cursor, cut_start))
+        cursor = cut_end
+    if cursor < duration:
+        keep.append((cursor, duration))
+    return keep
+
+
 def apply_retake_removal(
     media_path: str,
     cues: list,
@@ -173,21 +197,8 @@ def apply_retake_removal(
     pad = settings["pad"]
     duration = probe_duration(media_path)
 
-    cut_spans = sorted(
-        (max(r["start"] - pad, 0.0), min(r["end"] + pad, duration))
-        for r in selected_retakes)
     removed_indexes = {r["index"] for r in selected_retakes}
-
-    keep = []
-    cursor = 0.0
-    for cut_start, cut_end in cut_spans:
-        if cut_start <= cursor:
-            cursor = max(cursor, cut_end)
-            continue
-        keep.append((cursor, cut_start))
-        cursor = cut_end
-    if cursor < duration:
-        keep.append((cursor, duration))
+    keep = retake_keep_segments(duration, selected_retakes, pad)
     if not keep:
         raise ValueError("剪掉勾選的片段後沒有可保留的內容，請減少勾選項目。")
 

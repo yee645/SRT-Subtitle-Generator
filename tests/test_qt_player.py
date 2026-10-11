@@ -157,6 +157,8 @@ if PySide6 is not None:
         return cond()
 
     tmp = tempfile.mkdtemp(prefix="qt_player_")
+    from gui_qt import timeline as _timeline  # noqa: E402
+    _timeline.CACHE_ROOT = tmp  # 開片子會背景抽波形與縮圖：快取不留在 repo
     srt = os.path.join(tmp, "clip.srt")
     with open(srt, "w", encoding="utf-8") as fh:
         fh.write("1\n00:00:00,200 --> 00:00:00,900\n第一句 Hello\n\n"
