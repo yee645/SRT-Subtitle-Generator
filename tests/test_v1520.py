@@ -324,6 +324,9 @@ if old_app_src is not None:
         # 3.0 第 7 項：多段素材與多軌的時間軸資料模型＋輸出成 ffmpeg
         # filter_complex（主軌接段、疊加 B-roll／圖片、音樂與閃避），零 GUI 依賴（全新檔案）。
         "subtitle/assemble.py",
+        # 3.0 第 9 項：畫面調整（亮度／對比／飽和度／裁切／旋轉／翻轉）的資料模型與
+        # ffmpeg 濾鏡，零 GUI 依賴，assemble 每段素材照它加濾鏡（全新檔案）。
+        "subtitle/picture.py",
         # 3.0 第 13 項：線上配樂庫（Openverse 搜尋、授權／情境／風格分類、確認網址播得出來、
         # 標註文字），零 GUI 依賴（全新檔案）；分類規則從 bgm_collector/collect_bgm.py 搬來共用。
         "subtitle/musiclib.py",
