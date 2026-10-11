@@ -87,10 +87,12 @@ from PySide6.QtWidgets import (
 )
 
 from gui_qt import timeline as timeline_mod
+from gui_qt import picture_preview
 from gui_qt.overlay_preview import OverlayPreview
+from gui_qt.picture_panel import PictureDialog
 from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
 from subtitle import assemble as assemble_mod
-from subtitle import cueedit, cutmarks
+from subtitle import cueedit, cutmarks, picture
 from subtitle import proxy as proxy_mod
 from subtitle.cuetime import CueIndex
 from subtitle.exporter import burn_layout, dynamic_frame, split_emphasis_segments
@@ -295,6 +297,14 @@ class PlayerPanel(QWidget):
                                   "放在 proxy_cache）；輸出一律用原檔")
         self.proxy_box.setChecked(bool(self._config.get("qt_proxy", True)))
         self.proxy_maker = ProxyMaker(self)
+        # 畫面調整（3.0 第 9 項第二階段）：主片的亮度、對比、飽和度、旋轉、翻轉，播放器即時預覽
+        self.main_adjust = {}
+        self.picture_effect = None
+        self.picture_dialog = None
+        self.picture_btn = QPushButton("畫面調整…")
+        self.picture_btn.setToolTip("調主片的亮度、對比、飽和度，或把直拍的影片轉正；播放器上即時預覽，"
+                                    "「照剪點輸出…」「輸出多軌…」都照這個調整輸出")
+        self.picture_btn.setEnabled(False)
         for w in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn):
             w.setToolTip("時間軸縮放（也可以按住 Ctrl 轉滾輪）")
 
@@ -384,6 +394,7 @@ class PlayerPanel(QWidget):
         footer = QHBoxLayout()
         footer.addWidget(self.info_label, 1)
         footer.addWidget(self.proxy_box)
+        footer.addWidget(self.picture_btn)
         footer.addSpacing(12)
         for w in (self.undo_btn, self.redo_btn, self.save_btn):
             footer.addWidget(w)
@@ -462,6 +473,7 @@ class PlayerPanel(QWidget):
         self.add_music_btn.clicked.connect(lambda: self.add_track("music"))
         self.remove_track_btn.clicked.connect(self.remove_selected_track)
         self.assemble_btn.clicked.connect(lambda: self.export_tracks())
+        self.picture_btn.clicked.connect(self.show_picture_dialog)
         self.track_exporter.progress.connect(self._on_assemble_progress)
         self.track_exporter.finished.connect(self._on_assemble_done)
         self.track_exporter.failed.connect(self._on_assemble_failed)
@@ -509,6 +521,9 @@ class PlayerPanel(QWidget):
         self.loader.load(os.path.abspath(path))
         # 素材軌的位置是照上一支的片長放的，換片子就清掉
         self.tracks = {"overlays": [], "music": []}
+        # 畫面調整是這一支的，換片子就還原
+        self.main_adjust = {}
+        self._apply_picture_preview()
         self.refresh_tracks()
 
     def set_cues(self, cues, source=""):
@@ -629,16 +644,16 @@ class PlayerPanel(QWidget):
         try:
             plan = cutmarks.export_plan(self.cut_plan["marks"], self.media_duration(), self.cues)
             transition = self.seam_transition()
-            if transition:
-                # 接縫有轉場：改用多軌的輸出（xfade），字幕照同一套時間對齊
+            if transition or self.main_adjust:
+                # 接縫有轉場或調過畫面：改用多軌的輸出（xfade、畫面濾鏡），字幕照同一套時間對齊
                 keep = assemble_mod.usable_keep(plan["keep"])
-                main = {"main": [{"path": media, "in": 0.0, "out": self.media_duration()}]}
+                main = {"main": [self._main_clip()]}
                 seams = assemble_mod.seam_durations(main, keep, transition)
                 timeline = assemble_mod.apply_cuts(main, keep, transition)
                 assemble_mod.normalize(timeline)
                 cues, dropped = assemble_mod.cut_cues(self.cues, keep, seams)
                 plan = dict(plan, timeline=timeline, cues=cues, dropped=dropped,
-                            seam=dict(transition, count=sum(1 for d in seams if d)))
+                            seam=dict(transition, count=sum(1 for d in seams if d)) if transition else None)
         except ValueError as exc:  # AssembleError 也是 ValueError
             self._show_export_error(str(exc))
             return False
@@ -667,6 +682,8 @@ class PlayerPanel(QWidget):
                f"{result['removed_seconds']:.1f} 秒"
         if result.get("seam") and result["seam"]["count"]:
             note += f"，{result['seam']['count']} 個接縫用{assemble_mod.TRANSITIONS[result['seam']['type']][0]}"
+        if result.get("timeline") and result["timeline"]["main"][0].get("adjust"):
+            note += "，畫面照調整輸出"
         note += "）"
         if result["subtitles"]:
             note += f"＋{os.path.basename(result['subtitles'])}"
@@ -693,9 +710,11 @@ class PlayerPanel(QWidget):
 
     def _track_summary(self):
         overlays, music = len(self.tracks["overlays"]), len(self.tracks["music"])
-        if not overlays and not music:
+        adjusted = self.picture_summary()
+        if not overlays and not music and not adjusted:
             return ""
-        parts = []
+        # 前面只寫「主片調過畫面」：這一行太長時尾巴會被截掉，要剪的事要排在前面；細節放最後
+        parts = ["主片調過畫面"] if adjusted else []
         if overlays:
             parts.append(f"畫面 {overlays} 段")
         if music:
@@ -708,7 +727,8 @@ class PlayerPanel(QWidget):
         transition = self.seam_transition() if cuts else None
         seam = f"、接縫用{assemble_mod.TRANSITIONS[transition['type']][0]}" if transition else ""
         cut_note = f"（會照剪點一起剪掉 {cuts} 處{seam}）" if cuts else ""
-        return "、".join(parts) + cut_note + note + "，按「輸出多軌…」合成"
+        detail = f"　主片：{adjusted}" if adjusted else ""
+        return "、".join(parts) + cut_note + note + "，按「輸出多軌…」合成" + detail
 
     def _track_cut_count(self):
         """多軌輸出會一起剪掉幾處：時間軸上顯示著剪點時，啟用中的那幾段；沒顯示就是 0。"""
@@ -732,7 +752,8 @@ class PlayerPanel(QWidget):
         self.add_overlay_btn.setEnabled(ready and idle)
         self.add_music_btn.setEnabled(ready and idle)
         self.remove_track_btn.setEnabled(idle and self.timeline.track_selected is not None)
-        self.assemble_btn.setEnabled(ready and idle and any(self.tracks.values()))
+        self.assemble_btn.setEnabled(ready and idle and (any(self.tracks.values()) or bool(self.main_adjust)))
+        self.picture_btn.setEnabled(ready and idle and not self.exporter.busy)
         self._show_track_props()
 
     def _show_track_props(self):
@@ -855,15 +876,22 @@ class PlayerPanel(QWidget):
         else:
             self.refresh_tracks()  # 輸出中不改：拖過去的放回原位
 
+    def _main_clip(self):
+        """主軌那一段：整支原檔（播的可能是代理檔），帶上畫面調整。"""
+        clip = {"path": self.media_path, "in": 0.0, "out": self.media_duration()}
+        if self.main_adjust:
+            clip["adjust"] = dict(self.main_adjust)
+        return clip
+
     def timeline_for_export(self):
         """目前的多軌時間軸（assemble 的格式）：主軌是整支原檔（播的可能是代理檔）。"""
-        return {"main": [{"path": self.media_path, "in": 0.0, "out": self.media_duration()}],
+        return {"main": [self._main_clip()],
                 "overlays": [dict(x) for x in self.tracks["overlays"]],
                 "music": [dict(x) for x in self.tracks["music"]]}
 
     def export_tracks(self, output_path=None):
         """照素材軌合成輸出。output_path 省略時先問要存到哪。回傳是否開始輸出。"""
-        if self.track_exporter.busy or not self.media_path or not any(self.tracks.values()):
+        if self.track_exporter.busy or not self.media_path or not (any(self.tracks.values()) or self.main_adjust):
             return False
         timeline, cues, info = self.timeline_for_export(), self.cues, {"cut_count": 0, "dropped": 0}
         try:
@@ -1273,23 +1301,82 @@ class PlayerPanel(QWidget):
         return self.subtitle_item.segments() if self.subtitle_item.isVisible() else None
 
     def _video_rect(self):
-        """影片在場景裡實際占的矩形（保持比例、置中）。"""
+        """影片在場景裡實際占的矩形（保持比例、置中；轉 90 度時照轉完的比例）。"""
         view = QSizeF(self.view.viewport().size())
         native = self.video_item.nativeSize()
-        if native.isEmpty():
-            return QRectF(0, 0, view.width(), view.height())
-        fitted = native.scaled(view, Qt.KeepAspectRatio)
-        return QRectF((view.width() - fitted.width()) / 2,
-                      (view.height() - fitted.height()) / 2,
-                      fitted.width(), fitted.height())
+        return picture_preview.fitted_rect(view, picture_preview.display_size(self.main_adjust, native))
 
     def _layout(self):
-        view = self.view.viewport().size()
+        view = QSizeF(self.view.viewport().size())
         self.scene.setSceneRect(0, 0, view.width(), view.height())
-        self.video_item.setPos(0, 0)
-        self.video_item.setSize(QSizeF(view))
+        # 轉 90／270 度：影片那一項的寬高先對調，繞中心轉完剛好落回整個畫面
+        size = picture_preview.display_size(self.main_adjust, view)
+        self.video_item.setSize(size)
+        self.video_item.setPos((view.width() - size.width()) / 2, (view.height() - size.height()) / 2)
+        self.video_item.setTransform(picture_preview.item_transform(self.main_adjust, size))
         self._place_subtitle()
         self.refresh_overlays()
+
+    # ---- 畫面調整（3.0 第 9 項第二階段） ------------------------------------
+
+    def show_picture_dialog(self):
+        """開畫面調整的小視窗（不擋住播放器，可以邊播邊調）。"""
+        if self.picture_dialog is None:
+            self.picture_dialog = PictureDialog(self.set_main_adjust, self)
+        self.picture_dialog.fill(self.main_adjust)
+        self.picture_dialog.show()
+        self.picture_dialog.raise_()
+        return self.picture_dialog
+
+    def set_main_adjust(self, adjust):
+        """
+        改主片的畫面調整，播放器立刻照著畫。回傳之後實際的調整（只留改過的項目）：沒開影片、
+        輸出中、或數字不合理就不改，回傳原本的。
+        """
+        if not self.media_path or self.exporter.busy or self.track_exporter.busy:
+            return dict(self.main_adjust)
+        try:
+            wanted = picture.changes(adjust)
+        except picture.PictureError as exc:
+            self._show_track_error(str(exc))
+            return dict(self.main_adjust)
+        if wanted != self.main_adjust:
+            self.main_adjust = wanted
+            self._apply_picture_preview()
+            self.refresh_tracks()
+            self._update_export_button()
+        return dict(self.main_adjust)
+
+    def _apply_picture_preview(self):
+        """顏色：有調才掛效果（每一格都要多算）；轉、翻：影片那一項的變換（_layout 裡設）。"""
+        if picture_preview.has_color(self.main_adjust):
+            if self.picture_effect is None:
+                self.picture_effect = picture_preview.PictureEffect(self.main_adjust)
+                self.video_item.setGraphicsEffect(self.picture_effect)
+            else:
+                self.picture_effect.set_adjust(self.main_adjust)
+        elif self.picture_effect is not None:
+            self.video_item.setGraphicsEffect(None)  # Qt 會把效果刪掉
+            self.picture_effect = None
+        self._layout()
+        if self.picture_dialog is not None and not self.picture_dialog.isHidden():
+            self.picture_dialog.fill(self.main_adjust)
+
+    def picture_summary(self):
+        """主片調了什麼，一句話（沒調是空字串）。"""
+        adj = picture.normalize(self.main_adjust)
+        parts = []
+        for key, label in (("brightness", "亮度"), ("contrast", "對比"), ("saturation", "飽和度")):
+            if adj[key] != picture.DEFAULTS[key]:
+                value = adj[key] * 100
+                parts.append(f"{label} {value:+.0f}" if key == "brightness" else f"{label} {value:.0f}%")
+        if adj["rotate"]:
+            parts.append({90: "順時針轉 90°", 180: "轉 180°", 270: "逆時針轉 90°"}[adj["rotate"]])
+        if adj["flip_h"]:
+            parts.append("左右翻")
+        if adj["flip_v"]:
+            parts.append("上下翻")
+        return "、".join(parts)
 
     def _place_subtitle(self):
         place_subtitle(self.subtitle_item, self._video_rect(), self._style)
@@ -1369,7 +1456,7 @@ class CutExporter(QObject):
     def _run(self, media_path, plan, output_path):
         try:
             report = lambda ratio, message: self.progress.emit(float(ratio), str(message))  # noqa: E731
-            if plan.get("timeline"):  # 接縫有轉場：用多軌的輸出（xfade）
+            if plan.get("timeline"):  # 接縫有轉場或調過畫面：用多軌的輸出（xfade、畫面濾鏡）
                 assemble_mod.render(plan["timeline"], output_path, report)
             else:
                 cutmarks.render(media_path, plan, output_path, report)
