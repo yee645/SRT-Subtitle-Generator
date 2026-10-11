@@ -15,9 +15,11 @@ import tempfile
 import urllib.error
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE)
 sys.path.insert(0, os.path.join(BASE, "bgm_collector"))
 
 import collect_bgm as cb  # noqa: E402
+from subtitle import musiclib as ml  # noqa: E402  分類規則搬到這裡，收集器跟剪輯器共用
 
 failures = []
 def check(name, cond, extra=""):
@@ -87,6 +89,10 @@ QUIET = lambda *a, **k: None  # noqa: E731
 
 # ---- 分類 ----------------------------------------------------------------
 
+check("收集器跟剪輯器的線上配樂庫用同一套分類規則（subtitle/musiclib.py）",
+      cb.classify_moods is ml.classify_moods and cb.classify_style is ml.classify_style
+      and cb.skip_reason is ml.skip_reason and cb.LICENSE_CLASSES is ml.LICENSE_CLASSES)
+
 moods = cb.classify_moods(
     tags=["instrumental", "speed_medium", "piano", "relaxing", "calm", "romantic"],
     genres=["lounge", "easylistening"], title="Evening Tea")
@@ -104,15 +110,15 @@ check("Hip-Hop 這類寫法正規化後對得上",
       cb.classify_style([], ["Hip-Hop"], "") == "嘻哈")
 check("完全沒線索時用搜尋時的情境",
       cb.classify_moods([], [], "Untitled 3", hint="商務簡報") == ["商務簡報"])
-check("沒線索也沒提示 → 未分類情境", cb.classify_moods() == [cb.UNSORTED_MOOD])
+check("沒線索也沒提示 → 未分類情境", cb.classify_moods() == [ml.UNSORTED_MOOD])
 check("只靠標題一個字不會多掛第二個情境",
       cb.classify_moods(["happy"], [], "Sad Clown") == ["輕鬆愉快"],
       cb.classify_moods(["happy"], [], "Sad Clown"))
-check("沒有風格線索 → 其他風格", cb.classify_style() == cb.OTHER_STYLE)
-check("instrumental → 純音樂", cb.detect_vocal(["instrumental", "piano"]) is False)
-check("vocal／male → 有人聲", cb.detect_vocal(["vocal"]) and cb.detect_vocal(["male"]))
-check("沒標示 → 不明", cb.detect_vocal(["piano"]) is None)
-check("speed_high → 快", cb.detect_speed(["speed_high"]) == "快")
+check("沒有風格線索 → 其他風格", cb.classify_style() == ml.OTHER_STYLE)
+check("instrumental → 純音樂", ml.detect_vocal(["instrumental", "piano"]) is False)
+check("vocal／male → 有人聲", ml.detect_vocal(["vocal"]) and ml.detect_vocal(["male"]))
+check("沒標示 → 不明", ml.detect_vocal(["piano"]) is None)
+check("speed_high → 快", ml.detect_speed(["speed_high"]) == "快")
 
 # ---- 版權 ----------------------------------------------------------------
 

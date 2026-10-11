@@ -1130,7 +1130,7 @@ class TimelineView(QGraphicsView):
         else:
             item.setPen(QPen(color.darker(140), 1))
             item.setZValue(1 + index * 0.001)  # 後加的疊在上面（跟 track_hit 一致）
-        name = os.path.basename(str(data.get("path", "")))
+        name = assemble_mod.item_label(data)
         marks = []
         if kind == "music":
             marks.append(f"音量 {int(round(float(data.get('volume', 0)) * 100))}%")
@@ -1147,6 +1147,7 @@ class TimelineView(QGraphicsView):
                 marks.append("帶聲音")
         tip = (f"{TRACK_NAMES[kind]}：{name}\n{tick_label(start, 0.1)} → {tick_label(end, 0.1)}"
                f"（{end - start:.1f} 秒）" + (f"\n{'、'.join(marks)}" if marks else "")
+               + (f"\n線上配樂（不下載，輸出時直接讀網址）：{data['credit']}" if data.get("credit") else "")
                + "\n拖方塊改位置、拖左右邊修頭尾；選取後按 Delete 刪除")
         item.setToolTip(tip)
         if rect.width() > 24:

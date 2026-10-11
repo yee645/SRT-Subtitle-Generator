@@ -45,17 +45,24 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import Counter, namedtuple
+from collections import Counter
+
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE not in sys.path:
+    sys.path.insert(0, BASE)
+
+# 授權、情境、風格的分類規則與 Openverse 連線，跟剪輯器的線上配樂庫共用
+# （subtitle/musiclib.py）：同一首歌在兩邊分到的類別一樣。
+from subtitle import musiclib  # noqa: E402
+from subtitle.musiclib import (  # noqa: E402
+    ALL_USABLE_LICENSES, AUDIO_EXTS, COMMERCIAL_LICENSES, LICENSE_CLASSES, MAX_PAGES,
+    MOOD_NAMES, MOODS, STYLES, Http, NotAudioError, Openverse, RateLimited,
+    attribution_line, classify_moods, classify_style, format_duration, license_label,
+    post_json, search_params, skip_reason)
 
 API_BASE = "https://api.openverse.org/v1"
 USER_AGENT = ("SRT-Subtitle-Generator-BGMCollector/1.0 "
               "(+https://github.com/yee645/SRT-Subtitle-Generator)")
-
-# Openverse 對匿名與一般金鑰都只給前 240 筆（12 頁 × 20 筆），再往後翻會 400。
-PAGE_SIZE = 20
-MAX_PAGES = 12
-# 伺服器要求等待超過這個秒數就不等了，存檔後請使用者之後再跑。
-MAX_RETRY_AFTER = 120
 
 CATALOG_JSON = "配樂清單.json"
 CATALOG_CSV = "配樂清單.csv"
@@ -66,233 +73,7 @@ STATUS_DONE = "已下載"
 STATUS_PLANNED = "未下載（預覽）"
 STATUS_FAILED = "下載失敗"
 
-# ---------------------------------------------------------------------------
-# 版權分類
-# ---------------------------------------------------------------------------
-
-LicenseClass = namedtuple(
-    "LicenseClass",
-    "folder tag commercial attribution share_alike shareable note")
-
-_PD_FOLDER = "1_可商用-免標註(CC0-公眾領域)"
-_PERSONAL_FOLDER = "9_僅限自用-勿轉傳(Pixabay等平台授權)"
-
-LICENSE_CLASSES = {
-    "cc0": LicenseClass(
-        _PD_FOLDER, "免標註CC0", True, False, False, True,
-        "作者已放棄權利，商用、改編都可以，不標註也可以。"),
-    "pdm": LicenseClass(
-        _PD_FOLDER, "公眾領域PD", True, False, False, True,
-        "已進入公眾領域，商用、改編都可以，不標註也可以。"),
-    "by": LicenseClass(
-        "2_可商用-需標註作者(CC-BY)", "需標註BY", True, True, False, True,
-        "可商用（含開營利、業配），但影片說明欄一定要標註曲名、作者、來源與授權。"),
-    "by-sa": LicenseClass(
-        "3_可商用-需標註-影片需同授權(CC-BY-SA)", "需標註BY-SA",
-        True, True, True, True,
-        "可商用且需標註；但音樂配進影片在 CC 條款裡算「改作」，"
-        "整支影片也必須用 CC BY-SA 釋出。不想這樣就別用這一類。"),
-    "by-nc": LicenseClass(
-        "4_非商用-需標註作者(CC-BY-NC)", "非商用BY-NC", False, True, False, True,
-        "只能用在非營利影片：開了營利的 YouTube、業配、接案都不行。需標註。"),
-    "by-nc-sa": LicenseClass(
-        "5_非商用-需標註-影片需同授權(CC-BY-NC-SA)", "非商用BY-NC-SA",
-        False, True, True, True,
-        "只能非營利使用、需標註，而且整支影片要用 CC BY-NC-SA 釋出。"),
-    "pixabay": LicenseClass(
-        _PERSONAL_FOLDER, "自用Pixabay", True, False, False, False,
-        "Pixabay 授權：可商用、免標註，但禁止把音檔原封不動轉給別人。"
-        "朋友要用請給他原始網址自己下載。"),
-    "ytal": LicenseClass(
-        _PERSONAL_FOLDER, "自用YT音效庫", True, False, False, False,
-        "YouTube 音效庫：只能用在 YouTube 影片，部分曲目要求標註（以音效庫頁面為準），"
-        "不可轉傳。"),
-}
-
-# 這些授權的音樂不能當配樂：CC 條款明定「把音樂與影像同步」屬於改作，
-# ND（禁止改作）等於直接排除；sampling+ 系列已廢止且只允許取樣。
-UNUSABLE_LICENSES = {
-    "by-nd": "禁止改作（ND）——配進影片就算改作，不能當配樂",
-    "by-nc-nd": "禁止改作（ND）——配進影片就算改作，不能當配樂",
-    "sampling+": "已廢止的取樣授權，只允許取樣",
-    "nc-sampling+": "已廢止的取樣授權，只允許取樣",
-}
-
-COMMERCIAL_LICENSES = ["cc0", "pdm", "by", "by-sa"]
-ALL_USABLE_LICENSES = COMMERCIAL_LICENSES + ["by-nc", "by-nc-sa"]
 IMPORT_LICENSES = ["pixabay", "ytal"] + ALL_USABLE_LICENSES
-
-
-def license_label(license_key, version=""):
-    """授權代碼轉成人看得懂的名稱，例如 by-sa + 4.0 → CC BY-SA 4.0。"""
-    key = (license_key or "").lower()
-    names = {"cc0": "CC0", "pdm": "Public Domain Mark",
-             "pixabay": "Pixabay Content License",
-             "ytal": "YouTube Audio Library"}
-    name = names.get(key) or ("CC " + key.upper())
-    return f"{name} {version}".strip()
-
-
-# ---------------------------------------------------------------------------
-# 情境與風格
-# ---------------------------------------------------------------------------
-
-# 每個情境：(名稱, 拿去 Openverse 搜尋的標籤, 另外也算命中的同義詞)。
-# 標籤用英文，因為 Jamendo 的 mood tags 是英文。排在前面的同分時優先。
-MOODS = [
-    ("輕鬆愉快",
-     ["happy", "cheerful", "joyful", "fun", "playful", "positive", "bright", "sunny"],
-     ["joy", "feelgood", "lighthearted", "bouncy", "carefree", "summer"]),
-    ("放鬆療癒",
-     ["relaxing", "calm", "peaceful", "chill", "soft", "dreamy", "mellow", "soothing"],
-     ["relax", "relaxed", "relaxation", "meditation", "meditative", "gentle",
-      "serene", "tranquil", "quiet", "sleep", "lullaby", "spa", "yoga"]),
-    ("溫暖勵志",
-     ["inspiring", "uplifting", "motivational", "hopeful", "inspirational", "warm"],
-     ["motivation", "inspiration", "hope", "optimistic", "confident"]),
-    ("熱血動感",
-     ["energetic", "powerful", "action", "sport", "intense", "upbeat", "driving"],
-     ["energy", "sports", "workout", "fast", "aggressive", "strong"]),
-    ("史詩壯闊",
-     ["epic", "cinematic", "dramatic", "heroic", "trailer", "majestic", "adventure"],
-     ["orchestral", "grandiose", "battle", "triumphant", "glorious"]),
-    ("感傷抒情",
-     ["sad", "melancholic", "emotional", "sentimental", "lonely", "melancholy"],
-     ["sorrow", "tragic", "grief", "heartbreak", "tears", "reflective",
-      "introspective"]),
-    ("浪漫甜蜜",
-     ["romantic", "love", "tender", "sweet", "wedding", "romance"],
-     ["passion", "sensual", "valentine"]),
-    ("懸疑緊張",
-     ["dark", "suspense", "mysterious", "tension", "scary", "horror", "thriller",
-      "ominous"],
-     ["mystery", "creepy", "eerie", "sinister", "spooky", "tense", "suspenseful",
-      "haunting", "halloween"]),
-    ("搞笑逗趣",
-     ["funny", "comedy", "quirky", "silly", "whimsical", "cartoon", "comic", "humor"],
-     ["humorous", "goofy", "kids", "children", "childish"]),
-    ("科技未來",
-     ["futuristic", "technology", "tech", "scifi", "space", "digital", "cyberpunk"],
-     ["future", "robot", "cyber", "innovation"]),
-    ("商務簡報",
-     ["corporate", "business", "presentation", "commercial", "advertising"],
-     ["advertisement", "promo", "promotion", "marketing", "company"]),
-    ("復古懷舊",
-     ["retro", "vintage", "nostalgic", "80s", "oldschool", "nostalgia"],
-     ["70s", "90s", "60s", "oldies"]),
-    ("節慶派對",
-     ["party", "christmas", "holiday", "festive", "celebration", "xmas"],
-     ["birthday", "newyear", "club"]),
-]
-UNSORTED_MOOD = "未分類情境"
-
-STYLES = [
-    ("LoFi輕音", ["lofi", "lofihiphop", "chillhop", "chillout", "chill", "downtempo",
-                 "triphop", "lounge", "jazzhop", "easylistening"]),
-    ("電子", ["electronic", "electronica", "electro", "edm", "house", "deephouse",
-             "techno", "trance", "dubstep", "drumnbass", "dnb", "synthwave",
-             "electropop", "idm", "breakbeat", "dance", "synthpop", "chiptune",
-             "8bit", "futurebass", "glitch"]),
-    ("流行", ["pop", "indiepop", "dancepop", "kpop", "jpop", "cpop"]),
-    ("搖滾", ["rock", "alternative", "alternativerock", "indierock", "punk", "metal",
-             "heavymetal", "grunge", "hardrock", "postrock", "poprock",
-             "progressiverock"]),
-    ("嘻哈", ["hiphop", "rap", "trap", "boombap", "beats", "beat",
-             "instrumentalhiphop"]),
-    ("爵士藍調", ["jazz", "blues", "swing", "bossanova", "smoothjazz", "bebop",
-               "acidjazz"]),
-    ("放克靈魂", ["funk", "soul", "rnb", "disco", "motown", "groove", "neosoul"]),
-    ("電影配樂", ["soundtrack", "cinematic", "orchestral", "filmscore", "score",
-               "trailer", "videogame", "gamemusic", "film", "movie", "epic"]),
-    ("古典鋼琴", ["classical", "baroque", "chamber", "symphony", "symphonic", "opera",
-               "piano", "neoclassical"]),
-    ("原聲民謠", ["acoustic", "folk", "country", "singersongwriter", "americana",
-               "bluegrass", "guitar", "acousticguitar"]),
-    ("氛圍", ["ambient", "newage", "meditation", "drone", "atmospheric", "chillwave",
-             "darkambient"]),
-    ("世界音樂", ["world", "worldmusic", "latin", "reggae", "celtic", "african",
-               "asian", "ethnic", "oriental", "flamenco", "chinese", "japanese",
-               "indian", "arabic", "balkan", "tango", "salsa", "reggaeton", "ska"]),
-]
-OTHER_STYLE = "其他風格"
-
-MOOD_NAMES = [name for name, _, _ in MOODS]
-STYLE_NAMES = [name for name, _ in STYLES]
-
-SPEED_LABELS = {"speedlow": "慢", "speedmedium": "中", "speedhigh": "快"}
-_VOCAL_TAGS = {"vocal", "vocals", "singing", "male", "female"}
-
-
-def norm(text):
-    """英文標籤正規化：小寫、只留英數字（hip-hop、Hip Hop 都變成 hiphop）。"""
-    return re.sub(r"[^0-9a-z]+", "", (text or "").lower())
-
-
-def title_tokens(text):
-    """把標題拆成字，另外加上相鄰兩字的組合，讓 Lo Fi、Hip Hop 也能對上。"""
-    words = re.findall(r"[0-9a-z]+", (text or "").lower())
-    return set(words) | {a + b for a, b in zip(words, words[1:])}
-
-
-_MOOD_KEYWORDS = [(name, {norm(k) for k in search + extra})
-                  for name, search, extra in MOODS]
-_STYLE_KEYWORDS = [(name, {norm(k) for k in words}) for name, words in STYLES]
-
-
-def _rank(buckets, fields, bonus=None):
-    """各分類在各欄位命中的關鍵字數 × 欄位權重，回傳 [(分數, 名稱)] 由高到低。"""
-    ranked = []
-    for index, (name, keywords) in enumerate(buckets):
-        score = sum(len(tokens & keywords) * weight for tokens, weight in fields)
-        if bonus and bonus == name:
-            score += 1
-        if score > 0:
-            ranked.append((score, -index, name))
-    ranked.sort(reverse=True)
-    return [(score, name) for score, _, name in ranked]
-
-
-def classify_moods(tags=(), genres=(), title="", hint=None, max_moods=2):
-    """判斷情境，最多回傳兩個；第一個決定資料夾，全部都會寫進檔名。
-
-    情緒標籤最可信（權重 2），曲風與標題次之（1）。`hint` 是當初拿哪個
-    情境去搜尋到這首歌的，只加 1 分當沒有其他線索時的依據。第二個情境
-    至少要有一個標籤命中（2 分）才列，避免只靠標題某個字就多掛一類。
-    """
-    fields = [({norm(t) for t in tags}, 2), ({norm(g) for g in genres}, 1),
-              (title_tokens(title), 1)]
-    ranked = _rank(_MOOD_KEYWORDS, fields, bonus=hint)
-    if not ranked:
-        return [UNSORTED_MOOD]
-    moods = [ranked[0][1]]
-    moods += [name for score, name in ranked[1:max_moods] if score >= 2]
-    return moods
-
-
-def classify_style(tags=(), genres=(), title=""):
-    """判斷風格：曲風欄位最可信（權重 3），樂器等標籤與標題只當補充（1）。"""
-    fields = [({norm(g) for g in genres}, 3), ({norm(t) for t in tags}, 1),
-              (title_tokens(title), 1)]
-    ranked = _rank(_STYLE_KEYWORDS, fields)
-    return ranked[0][1] if ranked else OTHER_STYLE
-
-
-def detect_vocal(tags):
-    """True＝有人聲、False＝純音樂、None＝來源沒說。"""
-    tokens = {norm(t) for t in tags}
-    if "instrumental" in tokens:
-        return False
-    if tokens & _VOCAL_TAGS:
-        return True
-    return None
-
-
-def detect_speed(tags):
-    for tag in tags:
-        label = SPEED_LABELS.get(norm(tag))
-        if label:
-            return label
-    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -351,211 +132,14 @@ def parse_layout(text):
     return parts
 
 
-def attribution_line(rec):
-    """貼到影片說明欄用的標註（TASL：曲名、作者、來源、授權）。"""
-    text = f'Music: "{rec["title"]}"'
-    if rec.get("creator"):
-        text += f' by {rec["creator"]}'
-    if rec.get("landing_url"):
-        text += f' ({rec["landing_url"]})'
-    text += f' | License: {license_label(rec["license"], rec.get("license_version"))}'
-    if rec.get("license_url"):
-        text += f' {rec["license_url"]}'
-    return text
-
-
-def format_duration(seconds):
-    if not seconds:
-        return ""
-    seconds = int(round(seconds))
-    return f"{seconds // 60}:{seconds % 60:02d}"
-
-
 # ---------------------------------------------------------------------------
 # Openverse
 # ---------------------------------------------------------------------------
 
-EXT_BY_FILETYPE = {"mp32": "mp3", "mp3": "mp3", "wav": "wav", "flac": "flac",
-                   "m4a": "m4a", "aac": "aac", "aif": "aiff", "aiff": "aiff",
-                   "ogg": "ogg", "oga": "ogg", "opus": "opus"}
-# 剪輯軟體（Premiere、剪映、Final Cut…）都吃得下的格式；ogg／opus 有些吃不下。
-EDITOR_FRIENDLY_EXTS = {"mp3", "wav", "flac", "m4a", "aac", "aiff"}
-AUDIO_EXTS = set(EXT_BY_FILETYPE.values())
-
-
-def guess_ext(filetype, url):
-    ext = EXT_BY_FILETYPE.get((filetype or "").lower())
-    if ext:
-        return ext
-    path_ext = os.path.splitext(urllib.parse.urlsplit(url or "").path)[1]
-    return EXT_BY_FILETYPE.get(path_ext.lower().lstrip("."), "")
-
-
 def record_from_openverse(item, query_mood=None):
-    """Openverse 的一筆搜尋結果轉成配樂清單的一筆紀錄。"""
-    tags = [t.get("name") for t in item.get("tags") or []
-            if isinstance(t, dict) and t.get("name")]
-    genres = [g for g in item.get("genres") or [] if isinstance(g, str)]
-    title = (item.get("title") or "").strip() or "untitled"
-    duration_ms = item.get("duration")
-    return {
-        "id": f"openverse:{item.get('id')}",
-        "origin": "openverse",
-        "source": item.get("source") or item.get("provider") or "",
-        "title": title,
-        "creator": (item.get("creator") or "").strip(),
-        "creator_url": item.get("creator_url") or "",
-        "landing_url": item.get("foreign_landing_url") or "",
-        "audio_url": item.get("url") or "",
-        "ext": guess_ext(item.get("filetype"), item.get("url")),
-        "license": (item.get("license") or "").lower(),
-        "license_version": item.get("license_version") or "",
-        "license_url": item.get("license_url") or "",
-        "tags": tags,
-        "genres": genres,
-        "moods": classify_moods(tags, genres, title, hint=query_mood),
-        "style": classify_style(tags, genres, title),
-        "vocal": detect_vocal(tags),
-        "speed": detect_speed(tags),
-        "duration": round(duration_ms / 1000) if duration_ms else None,
-        "query_mood": query_mood or "",
-        "path": "",
-        "status": STATUS_PLANNED,
-    }
-
-
-def skip_reason(rec, options):
-    """不收這首的原因；回傳 None 表示可以收。"""
-    if rec["license"] in UNUSABLE_LICENSES:
-        return "授權不能當配樂"
-    if rec["license"] not in LICENSE_CLASSES:
-        return "授權不明"
-    if rec["license"] not in options["licenses"]:
-        return "授權不在這次的範圍"
-    if not rec["audio_url"]:
-        return "沒有音檔網址"
-    if rec["ext"] not in EDITOR_FRIENDLY_EXTS and not (
-            options.get("allow_ogg") and rec["ext"] in AUDIO_EXTS):
-        return "音檔格式剪輯軟體不一定吃得下"
-    if rec["vocal"] and not options.get("allow_vocal"):
-        return "有人聲"
-    duration = rec["duration"]
-    if duration and not (options["min_sec"] <= duration <= options["max_sec"]):
-        return "長度不在範圍內"
-    return None
-
-
-class RateLimited(Exception):
-    """API 額度用完，要等很久才能再查。"""
-
-
-class NotAudioError(IOError):
-    """拿到的不是音檔（例如錯誤網頁）；重試也沒用，直接算失敗。"""
-
-
-class Http:
-    """很薄的一層 urllib 包裝，測試時整個換成替身。"""
-
-    def __init__(self, token=None, timeout=30):
-        self.token = token
-        self.timeout = timeout
-
-    def _headers(self):
-        headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        return headers
-
-    def get_json(self, url, params=None):
-        if params:
-            url = f"{url}?{urllib.parse.urlencode(params)}"
-        request = urllib.request.Request(url, headers=self._headers())
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-
-    def post_form(self, url, fields):
-        data = urllib.parse.urlencode(fields).encode("ascii")
-        request = urllib.request.Request(url, data=data, headers={
-            "User-Agent": USER_AGENT,
-            "Content-Type": "application/x-www-form-urlencoded"})
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-
-    def download(self, url, dest):
-        """下載到 dest；先寫 .part 再改名，中斷不會留下半個檔。回傳位元組數。"""
-        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        part = dest + ".part"
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                content_type = response.headers.get("Content-Type", "")
-                if content_type.startswith(("text/", "application/json")):
-                    raise NotAudioError(f"伺服器回傳的不是音檔（{content_type}）")
-                with open(part, "wb") as handle:
-                    shutil.copyfileobj(response, handle, 1 << 16)
-            size = os.path.getsize(part)
-            if size < 20 * 1024:
-                raise NotAudioError(f"檔案太小（{size} bytes），大概不是完整的音檔")
-            os.replace(part, dest)
-            return size
-        finally:
-            if os.path.exists(part):
-                os.remove(part)
-
-
-def post_json(url, payload, timeout=30):
-    request = urllib.request.Request(
-        url, data=json.dumps(payload).encode("utf-8"),
-        headers={"User-Agent": USER_AGENT, "Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def fetch_token(http, client_id, client_secret):
-    """用 Openverse 的 client credentials 換 access token（有效 12 小時）。"""
-    data = http.post_form(f"{API_BASE}/auth_tokens/token/", {
-        "grant_type": "client_credentials",
-        "client_id": client_id, "client_secret": client_secret})
-    return data["access_token"]
-
-
-class Openverse:
-    def __init__(self, http, delay=1.5, sleep=time.sleep, log=print):
-        self.http = http
-        self.delay = delay
-        self.sleep = sleep
-        self.log = log
-        self._last_call = None
-
-    def search(self, params):
-        """查一頁；429 時照 Retry-After 等一下再試，等太久就丟 RateLimited。"""
-        for attempt in range(4):
-            if self._last_call is not None and self.delay:
-                self.sleep(self.delay)
-            self._last_call = True
-            try:
-                return self.http.get_json(f"{API_BASE}/audio/", params)
-            except urllib.error.HTTPError as error:
-                if error.code == 429:
-                    wait = _retry_after_seconds(error)
-                    if wait > MAX_RETRY_AFTER or attempt == 3:
-                        raise RateLimited(wait) from error
-                    self.log(f"  API 要求稍等 {wait} 秒…")
-                    self.sleep(wait)
-                    continue
-                raise
-            except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
-                if attempt == 3:
-                    raise
-                self.log(f"  連線失敗（{error}），重試中…")
-                self.sleep(2 ** (attempt + 1))
-        raise RuntimeError("unreachable")
-
-
-def _retry_after_seconds(error):
-    try:
-        return max(1, int(float(error.headers.get("Retry-After", "60"))))
-    except (TypeError, ValueError, AttributeError):
-        return 60
+    """musiclib 的配樂紀錄，再加上收集器自己的欄位：存放路徑與下載狀態。"""
+    return dict(musiclib.record_from_openverse(item, query_mood),
+                path="", status=STATUS_PLANNED)
 
 
 # ---------------------------------------------------------------------------
@@ -685,7 +269,7 @@ class Library:
             "- 所有歌曲的原始頁面都記在清單裡。上傳 YouTube 若被 Content ID 聲明，",
             "  拿原始頁面與授權條款去申訴即可（CC 授權的歌偶爾會被發行商誤登記）。",
             "- 「禁止改作（ND）」的歌沒有收：音樂配進影片在 CC 條款裡算改作。",
-            f"- 「{_PERSONAL_FOLDER}」裡的歌是手動從 Pixabay 等平台下載的，",
+            f"- 「{LICENSE_CLASSES['pixabay'].folder}」裡的歌是手動從 Pixabay 等平台下載的，",
             "  那些平台禁止把音檔原封不動轉給別人；分享配樂庫時請排除這個資料夾，",
             "  朋友要用就照清單上的原始頁面自己下載。",
             "",
@@ -706,21 +290,6 @@ def _short_id(rec_id):
 # ---------------------------------------------------------------------------
 # 收集流程
 # ---------------------------------------------------------------------------
-
-def search_params(tags, page, options):
-    params = {
-        "tags": " ".join(tags),
-        "category": "music",
-        "license": ",".join(options["licenses"]),
-        # short＝30 秒～2 分、medium＝2～10 分：剪輯配樂最常用的長度。
-        "length": "short,medium",
-        "page_size": PAGE_SIZE,
-        "page": page,
-    }
-    if options.get("sources"):
-        params["source"] = ",".join(options["sources"])
-    return params
-
 
 def collect(library, client, moods, options, log=print):
     """每個情境搜到 per_mood 首為止（已經在配樂庫裡的也算數，重跑會接續）。
@@ -911,11 +480,11 @@ def _select_moods(text):
 
 
 def _make_http(args):
-    http = Http()
+    http = Http(user_agent=USER_AGENT)
     client_id = args.client_id or os.environ.get("OPENVERSE_CLIENT_ID")
     secret = args.client_secret or os.environ.get("OPENVERSE_CLIENT_SECRET")
     if client_id and secret:
-        http.token = fetch_token(http, client_id, secret)
+        http.token = musiclib.fetch_token(http, client_id, secret, api_base=API_BASE)
         print("已使用 Openverse 金鑰（額度較高）")
     return http
 
@@ -924,7 +493,7 @@ def cmd_fetch(args):
     library = Library(args.out, parse_layout(args.layout))
     options = _options_from_args(args)
     http = _make_http(args)
-    client = Openverse(http, delay=args.delay)
+    client = Openverse(http, delay=args.delay, api_base=API_BASE)
     found, limited = collect(library, client, _select_moods(args.moods), options)
     if args.dry_run:
         for rec in found:
@@ -947,7 +516,8 @@ def cmd_download(args):
     if not records:
         print("沒有待下載的歌曲。")
         return 0
-    ok, failed = download_all(library, records, Http(), delay=args.download_delay)
+    ok, failed = download_all(library, records, Http(user_agent=USER_AGENT),
+                              delay=args.download_delay)
     print(f"\n完成：下載 {ok} 首" + (f"、失敗 {failed} 首" if failed else ""))
     return 1 if failed else 0
 
@@ -968,7 +538,7 @@ def cmd_import(args):
 def cmd_register(args):
     data = post_json(f"{API_BASE}/auth_tokens/register/", {
         "name": args.name, "email": args.email,
-        "description": args.description})
+        "description": args.description}, user_agent=USER_AGENT)
     print(f"""註冊成功。下面兩串只會顯示這一次，請自己記下來（不要放進配樂庫資料夾，
 免得跟著分享出去）：
 

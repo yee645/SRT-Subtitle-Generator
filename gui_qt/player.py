@@ -68,6 +68,10 @@ config.json，關掉只算這一次）。
 「照剪點輸出…」改用多軌的輸出（`assemble.apply_cuts` 帶轉場，ffmpeg `xfade`），「輸出多軌…」
 也一樣；兩段重疊那幾秒讓片子再短一點，字幕與素材照 `assemble.cut_time` 一起對齊。
 
+線上配樂庫（第 13 項）：素材軌那一行的「線上配樂…」開 `gui_qt/music_library.py`：搜尋、試聽開放
+授權的配樂（Openverse），選好放進音樂軌（`add_online_music`）。音樂軌記的是網址與曲名、授權，
+不下載到電腦；輸出時 ffmpeg 直接讀網址，影片旁邊寫一份 `_配樂標註.txt`（`musiclib.write_credits`）。
+
 還沒做：與字幕清單雙向同步。見 `docs/ROADMAP_3.0.md`。
 """
 import os
@@ -90,7 +94,7 @@ from gui_qt import timeline as timeline_mod
 from gui_qt.overlay_preview import OverlayPreview
 from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
 from subtitle import assemble as assemble_mod
-from subtitle import cueedit, cutmarks
+from subtitle import cueedit, cutmarks, musiclib
 from subtitle import proxy as proxy_mod
 from subtitle.cuetime import CueIndex
 from subtitle.exporter import burn_layout, dynamic_frame, split_emphasis_segments
@@ -343,6 +347,11 @@ class PlayerPanel(QWidget):
         self.add_overlay_btn.setToolTip("在播放頭的位置疊一段影片或圖片（預設蓋滿整個畫面、不帶聲音）")
         self.add_music_btn = QPushButton("加入音樂…")
         self.add_music_btn.setToolTip("在播放頭的位置放一段背景音樂（預設音量 35%、有人講話時自動壓低）")
+        # 線上配樂庫（第 13 項）：不下載，音樂軌直接記網址
+        self.music_lib_btn = QPushButton("線上配樂…")
+        self.music_lib_btn.setToolTip("搜尋、試聽開放授權的配樂，直接放進音樂軌：不下載到電腦，"
+                                      "輸出時直接讀網址，影片旁邊寫一份標註文字")
+        self.music_library = None  # 第一次按才建（gui_qt/music_library.py）
         self.remove_track_btn = QPushButton("刪除選取")
         self.remove_track_btn.setToolTip("刪掉時間軸上選取的那段素材（也可以按 Delete）")
         self.track_label = QLabel("")
@@ -409,7 +418,7 @@ class PlayerPanel(QWidget):
         # （test_qt_cutedit 守著影片至少 300px 高）。摘要放不下就截掉，滑鼠停著看全文。
         track_row = QHBoxLayout()
         track_row.addWidget(QLabel("素材軌："))
-        for w in (self.add_overlay_btn, self.add_music_btn, self.remove_track_btn):
+        for w in (self.add_overlay_btn, self.add_music_btn, self.music_lib_btn, self.remove_track_btn):
             track_row.addWidget(w)
         track_row.addSpacing(8)
         track_row.addWidget(self.prop_label)
@@ -460,6 +469,7 @@ class PlayerPanel(QWidget):
         self.exporter.failed.connect(self._on_export_failed)
         self.add_overlay_btn.clicked.connect(lambda: self.add_track("overlays"))
         self.add_music_btn.clicked.connect(lambda: self.add_track("music"))
+        self.music_lib_btn.clicked.connect(lambda: self.open_music_library())
         self.remove_track_btn.clicked.connect(self.remove_selected_track)
         self.assemble_btn.clicked.connect(lambda: self.export_tracks())
         self.track_exporter.progress.connect(self._on_assemble_progress)
@@ -699,7 +709,8 @@ class PlayerPanel(QWidget):
         if overlays:
             parts.append(f"畫面 {overlays} 段")
         if music:
-            parts.append(f"音樂 {music} 段")
+            online = sum(1 for m in self.tracks["music"] if assemble_mod.is_url(m["path"]))
+            parts.append(f"音樂 {music} 段" + (f"（{online} 段線上，輸出時要連網）" if online else ""))
         note = "　畫面在播放器上預覽（影片每秒換一格）" if overlays and self.preview_box.isChecked() else ""
         if music:
             note += "　音樂還不會跟著播"
@@ -731,6 +742,8 @@ class PlayerPanel(QWidget):
         idle = not self.track_exporter.busy
         self.add_overlay_btn.setEnabled(ready and idle)
         self.add_music_btn.setEnabled(ready and idle)
+        if self.music_library is not None:  # 配樂庫的「放進音樂軌」跟著灰
+            self.music_library.update_buttons()
         self.remove_track_btn.setEnabled(idle and self.timeline.track_selected is not None)
         self.assemble_btn.setEnabled(ready and idle and any(self.tracks.values()))
         self._show_track_props()
@@ -745,7 +758,8 @@ class PlayerPanel(QWidget):
             for w in widgets:
                 w.setVisible(name == kind)
                 w.setEnabled(idle)
-        self.prop_label.setText(os.path.basename(item["path"]) if item else PROP_HINT)
+        self.prop_label.setText(assemble_mod.item_label(item) if item else PROP_HINT)
+        self.prop_label.setToolTip((item.get("credit") or item["path"]) if item else "")
         if not item:
             return
         for widgets in self._prop_widgets.values():
@@ -836,6 +850,54 @@ class PlayerPanel(QWidget):
         self.timeline.select_track_item(kind, len(self.tracks[kind]) - 1, seek=False)
         return True
 
+    def can_add_track(self):
+        """現在能不能加素材：開了片子、量得到片長、不在輸出中。"""
+        return bool(self.media_path) and self.media_duration() > 0 and not self.track_exporter.busy
+
+    def open_music_library(self, client=None):
+        """
+        開線上配樂庫（第 13 項）。不擋住面板：可以邊試聽邊移動播放頭，再按「放進音樂軌」。
+        client：Openverse 用戶端（測試換成替身；省略＝第一次搜尋時照環境變數建）。
+        """
+        if self.music_library is None:
+            from gui_qt.music_library import MusicLibraryDialog
+            self.music_library = MusicLibraryDialog(self, client=client, on_add=self.add_online_music,
+                                                    can_add=self.can_add_track)
+        elif client is not None:
+            self.music_library.client = client
+        self.music_library.show()
+        self.music_library.raise_()
+        self.music_library.activateWindow()
+        return self.music_library
+
+    def add_online_music(self, rec, seconds=None):
+        """
+        把配樂庫選的那首（`musiclib` 的配樂紀錄）放在播放頭的位置。音樂軌記的是網址，不下載；
+        另外記曲名、授權與標註文字（`musiclib.track_meta`，輸出時寫標註用）。seconds 省略時先讀
+        一次網址確認播得出來（會連網；介面上由配樂庫在背景確認好再傳進來）。回傳是否放進去。
+        """
+        if not self.can_add_track():
+            return False
+        url = rec.get("audio_url") or ""
+        if seconds is None:
+            check = musiclib.check_stream(url)
+            if not check["ok"]:
+                self._show_track_error(f"「{rec.get('title') or url}」放不進去：{check['reason']}")
+                return False
+            seconds = check["seconds"]
+        try:
+            item = assemble_mod.new_music(url, self.player.position() / 1000.0, self.media_duration(), seconds)
+        except assemble_mod.AssembleError as exc:
+            self._show_track_error(str(exc))
+            return False
+        item.update(musiclib.track_meta(rec))
+        self.tracks["music"].append(item)
+        warning = musiclib.license_warning(rec)
+        self.refresh_tracks(f"已放進「{item['title']}」（{musiclib.license_tag(rec)}，線上串流、不佔硬碟）"
+                            + (f"——注意：{warning}" if warning else ""))
+        self.timeline.select_track_item("music", len(self.tracks["music"]) - 1, seek=False)
+        return True
+
     def remove_track(self, kind, index):
         if self.track_exporter.busy or not 0 <= index < len(self.tracks.get(kind, ())):
             return False
@@ -918,6 +980,8 @@ class PlayerPanel(QWidget):
             note += f"＋{os.path.basename(result['subtitles'])}"
             if result.get("dropped"):
                 note += f"（{result['dropped']} 句整句被剪掉）"
+        if result.get("credits"):
+            note += f"＋{os.path.basename(result['credits'])}（線上配樂的標註，貼到影片說明欄）"
         self.refresh_tracks(note)
 
     def _on_assemble_failed(self, message):
@@ -1241,9 +1305,11 @@ class PlayerPanel(QWidget):
             self._refresh_info()
 
     def shutdown(self):
-        """關視窗前：停掉還在做的代理檔與預覽抽格（不留下做一半的 ffmpeg）。"""
+        """關視窗前：停掉還在做的代理檔與預覽抽格（不留下做一半的 ffmpeg），關掉配樂庫（停止試聽）。"""
         self.proxy_maker.stop()
         self.overlay_preview.stop()
+        if self.music_library is not None:
+            self.music_library.close()
 
     def _show_at(self, ms):
         seconds = ms / 1000.0
@@ -1394,10 +1460,11 @@ class TrackExporter(QObject):
     """
     在背景執行緒照多軌時間軸合成（assemble.render）；進度與結果用訊號送回主執行緒。
     字幕存一份同檔名的 .srt（沒剪就原封不動；跟剪點一起輸出時，呼叫端先對齊好再傳進來）。
+    用到線上配樂時再寫一份 `<檔名>_配樂標註.txt`（只列真的留在輸出裡的那幾首）。
     """
 
     progress = Signal(float, str)
-    finished = Signal(object)  # {"output", "subtitles"（沒有字幕時 None）, "duration", …}
+    finished = Signal(object)  # {"output", "subtitles"／"credits"（沒有時 None）, "duration", …}
     failed = Signal(str)
 
     def __init__(self, parent=None):
@@ -1418,7 +1485,8 @@ class TrackExporter(QObject):
             if cues:
                 subtitles = os.path.splitext(output_path)[0] + ".srt"
                 cueedit.save_cues(cues, subtitles)
-            result = dict(result, subtitles=subtitles, **info)
+            credits = musiclib.write_credits(timeline.get("music") or [], output_path)
+            result = dict(result, subtitles=subtitles, credits=credits, **info)
         except (OSError, ValueError, RuntimeError) as exc:
             self.busy = False
             self.failed.emit(str(exc))
