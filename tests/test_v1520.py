@@ -324,6 +324,9 @@ if old_app_src is not None:
         # 3.0 第 7 項：多段素材與多軌的時間軸資料模型＋輸出成 ffmpeg
         # filter_complex（主軌接段、疊加 B-roll／圖片、音樂與閃避），零 GUI 依賴（全新檔案）。
         "subtitle/assemble.py",
+        # 3.0 第 9 項：畫面調整（亮度／對比／飽和度／裁切／旋轉／翻轉）的資料模型與
+        # ffmpeg 濾鏡，零 GUI 依賴，assemble 每段素材照它加濾鏡（全新檔案）。
+        "subtitle/picture.py",
         # 3.0 第 2 項第二階段：burn_layout（預覽照燒錄的位置與大小畫）。
         # 與 cues_to_ass 同檔、共用對齊與邊距的算法；cues_to_ass 只把原本
         # 內嵌的邊距算式換成同一個函式，輸出逐字相同（測試比對）。
