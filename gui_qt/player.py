@@ -381,8 +381,11 @@ class PlayerPanel(QWidget):
         self.position_combo.setToolTip("疊上去的畫面放在哪裡：蓋滿，或四個角落的小畫面")
         self.overlay_audio_box = QCheckBox("帶聲音")
         self.overlay_audio_box.setToolTip("疊加的影片自己的聲音也混進去（預設不帶，只用畫面）")
+        self.overlay_picture_btn = QPushButton("調畫面…")
+        self.overlay_picture_btn.setToolTip("調這段素材的亮度、對比、飽和度，或轉正、翻轉（跟主片的「畫面調整…」"
+                                            "同一個小視窗）")
         self._prop_widgets = {"music": (self.volume_spin, self.loop_box, self.duck_box),
-                              "overlays": (self.position_combo, self.overlay_audio_box)}
+                              "overlays": (self.position_combo, self.overlay_audio_box, self.overlay_picture_btn)}
         self.last_assemble = None  # 上一次多軌輸出成功的結果
 
         controls = QHBoxLayout()
@@ -473,7 +476,8 @@ class PlayerPanel(QWidget):
         self.add_music_btn.clicked.connect(lambda: self.add_track("music"))
         self.remove_track_btn.clicked.connect(self.remove_selected_track)
         self.assemble_btn.clicked.connect(lambda: self.export_tracks())
-        self.picture_btn.clicked.connect(self.show_picture_dialog)
+        self.picture_btn.clicked.connect(lambda: self.show_picture_dialog())
+        self.overlay_picture_btn.clicked.connect(lambda: self.show_picture_dialog("overlay"))
         self.track_exporter.progress.connect(self._on_assemble_progress)
         self.track_exporter.finished.connect(self._on_assemble_done)
         self.track_exporter.failed.connect(self._on_assemble_failed)
@@ -523,6 +527,8 @@ class PlayerPanel(QWidget):
         self.tracks = {"overlays": [], "music": []}
         # 畫面調整是這一支的，換片子就還原
         self.main_adjust = {}
+        if self.picture_dialog is not None:  # 疊加素材都清掉了：小視窗回到調主片
+            self._set_picture_target("main")
         self._apply_picture_preview()
         self.refresh_tracks()
 
@@ -767,6 +773,9 @@ class PlayerPanel(QWidget):
                 w.setVisible(name == kind)
                 w.setEnabled(idle)
         self.prop_label.setText(os.path.basename(item["path"]) if item else PROP_HINT)
+        if (kind == "overlays" and self._picture_dialog_open() and self.picture_dialog.target != "main"
+                and self.picture_dialog.target[1] != selected[1]):
+            self._set_picture_target(("overlays", selected[1]))  # 小視窗開著時改選別段：跟著改調那一段
         if not item:
             return
         for widgets in self._prop_widgets.values():
@@ -861,6 +870,13 @@ class PlayerPanel(QWidget):
         if self.track_exporter.busy or not 0 <= index < len(self.tracks.get(kind, ())):
             return False
         del self.tracks[kind][index]
+        target = self.picture_dialog.target if self.picture_dialog is not None else "main"
+        if kind == "overlays" and target != "main":
+            # 小視窗正在調的那段被刪了：回到調主片；刪的是它前面的：跟著往前一格
+            if target[1] == index:
+                self._set_picture_target("main")
+            elif target[1] > index:
+                self._set_picture_target(("overlays", target[1] - 1))
         self.timeline.select_track_item(kind, -1, seek=False)
         self.refresh_tracks()
         return True
@@ -1319,14 +1335,60 @@ class PlayerPanel(QWidget):
 
     # ---- 畫面調整（3.0 第 9 項第二階段） ------------------------------------
 
-    def show_picture_dialog(self):
-        """開畫面調整的小視窗（不擋住播放器，可以邊播邊調）。"""
+    def show_picture_dialog(self, target="main"):
+        """
+        開畫面調整的小視窗（不擋住播放器，可以邊播邊調）。target："main" 調主片、"overlay" 調
+        時間軸上選取的那段疊加素材（沒選取疊加素材就不開，回傳 None）。
+        """
+        if target == "overlay":
+            selected = self.timeline.track_selected
+            if not selected or selected[0] != "overlays" or not 0 <= selected[1] < len(self.tracks["overlays"]):
+                return None
+            target = ("overlays", selected[1])
         if self.picture_dialog is None:
             self.picture_dialog = PictureDialog(self.set_main_adjust, self)
-        self.picture_dialog.fill(self.main_adjust)
+        self._set_picture_target(target)
         self.picture_dialog.show()
         self.picture_dialog.raise_()
         return self.picture_dialog
+
+    def _set_picture_target(self, target):
+        """小視窗改調 target（"main" 或 ("overlays", 第幾段)）。"""
+        if target == "main":
+            self.picture_dialog.set_target("main", "主片", self.set_main_adjust, self.main_adjust)
+            return
+        index = target[1]
+        item = self.tracks["overlays"][index]
+        self.picture_dialog.set_target(target, f"疊加第 {index + 1} 段：{os.path.basename(item['path'])}",
+                                       lambda adjust, i=index: self.set_overlay_adjust(i, adjust),
+                                       item.get("adjust"))
+
+    def _picture_dialog_open(self):
+        return self.picture_dialog is not None and not self.picture_dialog.isHidden()
+
+    def set_overlay_adjust(self, index, adjust):
+        """
+        改第 index 段疊加素材的畫面調整，播放器上的預覽跟著變。回傳之後實際的調整；沒這一段、
+        輸出中、或數字不合理就不改，回傳原本的。
+        """
+        if not 0 <= index < len(self.tracks["overlays"]):
+            return {}
+        item = self.tracks["overlays"][index]
+        current = dict(item.get("adjust") or {})
+        if self.track_exporter.busy:
+            return current
+        try:
+            wanted = picture.changes(adjust)
+        except picture.PictureError as exc:
+            self._show_track_error(str(exc))
+            return current
+        if wanted != current:
+            item = dict(item, adjust=wanted)
+            if not wanted:
+                del item["adjust"]
+            self.tracks["overlays"][index] = item
+            self.refresh_tracks()
+        return wanted
 
     def set_main_adjust(self, adjust):
         """
@@ -1359,7 +1421,7 @@ class PlayerPanel(QWidget):
             self.video_item.setGraphicsEffect(None)  # Qt 會把效果刪掉
             self.picture_effect = None
         self._layout()
-        if self.picture_dialog is not None and not self.picture_dialog.isHidden():
+        if self._picture_dialog_open() and self.picture_dialog.target == "main":
             self.picture_dialog.fill(self.main_adjust)
 
     def picture_summary(self):

@@ -13,6 +13,9 @@
   次抽到的那格，再沒有就畫黑框寫檔名。所以播放中影片素材看起來是一秒一跳的幻燈片，
   位置與內容是對的、動作不是。
 
+素材帶畫面調整（第 9 項第三階段）時，圖照 `picture_preview.apply_to_image` 轉、翻、調色後再擺
+（調好的圖記住，同一張同一份調整不重算）。
+
 疊在影片上、字幕底下（輸出時字幕另存 .srt，不燒進去；預覽照舊把字幕畫在最上面，才看得
 到字幕有沒有被擋到）。
 """
@@ -27,7 +30,9 @@ from PySide6.QtCore import QObject, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPen, QPixmap
 from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsSimpleTextItem
 
+from gui_qt import picture_preview
 from subtitle import assemble as assemble_mod
+from subtitle import picture as picture_mod
 
 POSTER_STEP = 1.0     # 影片素材的預覽格多久換一次（秒）
 POSTER_WIDTH = 480    # 抽出來的預覽格縮到多寬（夠看清楚就好，抽得快）
@@ -70,6 +75,7 @@ class OverlayPreview(QObject):
         self._signature = None
         self._images = {}        # 圖片：路徑 → QImage
         self._posters = {}       # 影片：(路徑, 秒) → QImage
+        self._adjusted = {}      # (用哪張圖, 調整) → 調好的 QImage
         self._latest = {}        # 影片：路徑 → 最近一張抽到的 (路徑, 秒)
         self._pending = set()
         self._failed = set()     # 抽不到的格：不重試（不然每一刻都重跑一次 ffmpeg）
@@ -103,7 +109,8 @@ class OverlayPreview(QObject):
                         self._request(key)
                     key = self._latest.get(path)  # 先用上一次抽到的那格
                 art = key
-            plan.append((index, path, rect, art))
+            adjust = tuple(sorted(picture_mod.changes(item.get("adjust")).items()))
+            plan.append((index, path, rect, art, adjust))
         native = tuple(native_size) if native_size else None
         signature = (tuple(plan), (video_rect.x(), video_rect.y(), video_rect.width(), video_rect.height()),
                      native)
@@ -115,7 +122,7 @@ class OverlayPreview(QObject):
             (video_rect.width(), video_rect.height())
         scale_x = video_rect.width() / float(canvas_w) if canvas_w else 1.0
         scale_y = video_rect.height() / float(canvas_h) if canvas_h else 1.0
-        for index, path, rect, art in plan:
+        for index, path, rect, art, adjust in plan:
             ox, oy, ow, oh = assemble_mod.overlay_box(rect, int(round(canvas_w)), int(round(canvas_h)))
             box = QRectF(video_rect.x() + ox * scale_x, video_rect.y() + oy * scale_y,
                          ow * scale_x, oh * scale_y)
@@ -124,6 +131,8 @@ class OverlayPreview(QObject):
             frame.setPen(QPen(Qt.NoPen))
             frame.setZValue(Z_VALUE + index * 0.001)  # 後加的疊在上面（跟輸出一樣）
             image = self._image(art) if isinstance(art, str) else self._posters.get(art) if art else None
+            if image is not None and not image.isNull() and adjust:
+                image = self._adjust(art, image, adjust)
             if image is not None and not image.isNull():
                 x, y, w, h = assemble_mod.fit_inside(image.width(), image.height(), box.width(), box.height())
                 pixmap = QPixmap.fromImage(image).scaled(max(1, round(w)), max(1, round(h)),
@@ -161,6 +170,14 @@ class OverlayPreview(QObject):
             image = QImage(path)
             self._images[path] = None if image.isNull() else image
         return self._images[path]
+
+    def _adjust(self, art, image, adjust):
+        key = (art, adjust)
+        if key not in self._adjusted:
+            if len(self._adjusted) >= MAX_POSTERS:  # 調整一直在變（拉滑桿）：太多就整個清掉重算
+                self._adjusted.clear()
+            self._adjusted[key] = picture_preview.apply_to_image(image, dict(adjust))
+        return self._adjusted[key]
 
     def _request(self, key):
         if key not in self._pending:

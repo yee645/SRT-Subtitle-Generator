@@ -6,7 +6,8 @@
 數字近似：
 
 * **旋轉、翻轉**：影片那一項直接加變換（`item_transform`），畫面跟著轉，字幕與疊加素材照
-  轉完的畫面擺（`display_size`）。
+  轉完的畫面擺（`display_size`）。疊加素材（第三階段）是一張張圖，直接把圖轉好
+  （`apply_to_image`）。
 * **亮度、對比、飽和度**：`PictureEffect` 掛在影片那一項上，每畫一格就用 `adjust_image`
   調一次。只用 QPainter 的合成模式（加、反相、取亮），不需要 numpy，整張圖的運算都在 Qt
   的 C++ 裡做。
@@ -226,6 +227,22 @@ class PictureEffect(QGraphicsEffect):
         image = adjust_image(pixmap.toImage(), self._adjust)
         self.frames += 1
         painter.drawImage(self.sourceBoundingRect(Qt.LogicalCoordinates), image)
+
+
+def apply_to_image(image: QImage, adjust) -> QImage:
+    """
+    一張圖照整份調整（轉、翻、調色）做成預覽用的新圖：疊加素材的圖片與抽出來的預覽格用。
+    順序照 ffmpeg：先轉、再翻、最後調色。第三階段還不能裁切。
+    """
+    adj = picture.normalize(adjust)
+    out = image
+    if adj["rotate"]:
+        out = out.transformed(QTransform().rotate(adj["rotate"]))
+    if adj["flip_h"] or adj["flip_v"]:
+        out = out.mirrored(adj["flip_h"], adj["flip_v"])
+    if has_color(adj):
+        out = adjust_image(out, adj)
+    return out
 
 
 def fitted_rect(view: QSizeF, picture_size: QSizeF) -> QRectF:
