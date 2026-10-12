@@ -296,7 +296,11 @@ else:
     wait(150)
     check("全部還原：沒有調整、畫面回橫的、還原鈕變灰", panel.main_adjust == {}
           and abs(panel._video_rect().width() - landscape.width()) < 1 and not dialog.reset_btn.isEnabled()
-          and panel.video_item.transform().isIdentity())
+          and not panel.video_item.transform().isRotating() and not panel.video_item.transform().isScaling()
+          and (lambda r, v: max(abs(r.x() - v.x()), abs(r.y() - v.y()), abs(r.width() - v.width()),
+                                abs(r.height() - v.height())) < 1)(panel.video_item.sceneBoundingRect(),
+                                                                   panel._video_rect()))
+    # （第四階段起影片放在裁切框裡、平移到畫面矩形上，沒調整時的變換是純平移而不是單位矩陣）
     dialog.sliders["contrast"].setValue(160)
     wait(50)
     panel.open_video(other)

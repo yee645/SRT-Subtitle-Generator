@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-3.0 第 9 項第二階段：播放器上即時預覽畫面調整。
+3.0 第 9 項第二～四階段：播放器上即時預覽畫面調整。
 
 輸出走 ffmpeg（`subtitle/picture.py` 的濾鏡）；預覽不能每一格都叫 ffmpeg，改在 Qt 裡照同一份
 數字近似：
 
-* **旋轉、翻轉**：影片那一項直接加變換（`item_transform`），畫面跟著轉，字幕與疊加素材照
-  轉完的畫面擺（`display_size`）。疊加素材（第三階段）是一張張圖，直接把圖轉好
+* **裁切、旋轉、翻轉**：影片那一項放在一個只露出 `display_size` 那一塊的框裡，再加變換
+  （`item_geometry`）：整張畫面放大到裁切範圍剛好填滿那一塊，繞裁切範圍的中心轉、翻。字幕
+  與疊加素材照調整完的畫面擺。疊加素材（第三階段）是一張張圖，直接把圖裁好、轉好
   （`apply_to_image`）。
 * **亮度、對比、飽和度**：`PictureEffect` 掛在影片那一項上，每畫一格就用 `adjust_image`
   調一次。只用 QPainter 的合成模式（加、反相、取亮），不需要 numpy，整張圖的運算都在 Qt
@@ -177,27 +178,35 @@ def has_color(adjust) -> bool:
 
 
 def display_size(adjust, native: QSizeF) -> QSizeF:
-    """調整完的畫面比例（轉 90／270 度寬高對調；第二階段還不能裁切）。"""
+    """調整完的畫面大小（原畫面 native 先裁，轉 90／270 度時寬高對調）。"""
     adj = picture.normalize(adjust)
+    _x, _y, w, h = adj["crop"]
+    size = QSizeF(native.width() * w, native.height() * h)
     if adj["rotate"] in (90, 270):
-        return QSizeF(native.height(), native.width())
-    return QSizeF(native)
+        return QSizeF(size.height(), size.width())
+    return size
 
 
-def item_transform(adjust, size: QSizeF) -> QTransform:
+def item_geometry(adjust, native: QSizeF, target: QRectF):
     """
-    影片那一項（大小 size）要加的變換：繞中心轉、翻。轉 90／270 度時影片那一項的大小要先對調
-    （呼叫的人照 `display_size` 設），轉完剛好落回原本的範圍。
+    影片那一項要設的 (大小, 變換)：調整完的畫面剛好填滿 target（場景座標）。
+
+    整張原畫面放大成「裁切範圍的寬（轉完之後）＝target 的寬」，裁切範圍的中心對到 target 的
+    中心，繞那一點轉、翻。超出 target 的部分由外面那一層框切掉。
     """
     adj = picture.normalize(adjust)
-    w, h = size.width(), size.height()
+    x, y, w, h = adj["crop"]
+    shown = display_size(adj, native)
+    scale = target.width() / shown.width() if shown.width() > 0 else 1.0
+    full = QSizeF(native.width() * scale, native.height() * scale)
+    center = target.center()
     t = QTransform()
-    t.translate(w / 2, h / 2)
+    t.translate(center.x(), center.y())
     # 先翻再轉，套在點上的順序是「轉 → 翻」（QTransform 的乘法是反過來的）——跟 ffmpeg 一樣
     t.scale(-1 if adj["flip_h"] else 1, -1 if adj["flip_v"] else 1)
     t.rotate(adj["rotate"])
-    t.translate(-w / 2, -h / 2)
-    return t
+    t.translate(-(x + w / 2) * full.width(), -(y + h / 2) * full.height())
+    return full, t
 
 
 class PictureEffect(QGraphicsEffect):
@@ -231,11 +240,13 @@ class PictureEffect(QGraphicsEffect):
 
 def apply_to_image(image: QImage, adjust) -> QImage:
     """
-    一張圖照整份調整（轉、翻、調色）做成預覽用的新圖：疊加素材的圖片與抽出來的預覽格用。
-    順序照 ffmpeg：先轉、再翻、最後調色。第三階段還不能裁切。
+    一張圖照整份調整（裁、轉、翻、調色）做成預覽用的新圖：疊加素材的圖片與抽出來的預覽格用。
+    順序照 ffmpeg：先裁、再轉、再翻、最後調色；裁哪一塊照 `picture.crop_box`（跟輸出同一套取整）。
     """
     adj = picture.normalize(adjust)
     out = image
+    if adj["crop"] != picture.DEFAULTS["crop"]:
+        out = out.copy(*picture.crop_box(adj, out.width(), out.height()))
     if adj["rotate"]:
         out = out.transformed(QTransform().rotate(adj["rotate"]))
     if adj["flip_h"] or adj["flip_v"]:

@@ -76,12 +76,13 @@ import threading
 from PySide6.QtCore import QObject, QPointF, QRectF, QSizeF, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QBrush, QColor, QFont, QFontMetricsF, QKeySequence, QPainter, QPainterPath, QPen,
-    QShortcut,
+    QShortcut, QTransform,
 )
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGraphicsItem, QGraphicsScene, QGraphicsView,
+    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGraphicsItem, QGraphicsRectItem, QGraphicsScene,
+    QGraphicsView,
     QHBoxLayout, QLabel, QMessageBox, QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout,
     QWidget,
 )
@@ -258,7 +259,12 @@ class PlayerPanel(QWidget):
         self.view.setFrameShape(QGraphicsView.NoFrame)
 
         self.video_item = QGraphicsVideoItem()
-        self.scene.addItem(self.video_item)
+        # 裁切（第 9 項第四階段）：影片放在一個框裡，只露出裁切後的那一塊（沒裁時框就是整個畫面）
+        self.video_clip = QGraphicsRectItem()
+        self.video_clip.setPen(QPen(Qt.NoPen))
+        self.video_clip.setFlag(QGraphicsItem.ItemClipsChildrenToShape, True)
+        self.video_item.setParentItem(self.video_clip)
+        self.scene.addItem(self.video_clip)
         self.subtitle_item = OutlinedText()
         self.subtitle_item.setZValue(1)
         self.subtitle_item.setVisible(False)
@@ -748,8 +754,11 @@ class PlayerPanel(QWidget):
             return
         seconds = (self.player.position() if ms is None else ms) / 1000.0
         native = self.video_item.nativeSize()
+        # 輸出的畫布是主片調整完的大小（裁過、轉過）：疊加素材的框照它算
+        canvas = None if native.isEmpty() else picture.output_size(
+            self.main_adjust, int(round(native.width())), int(round(native.height())))
         self.overlay_preview.show(self.tracks["overlays"], seconds, self.media_duration(), self._video_rect(),
-                                  None if native.isEmpty() else (native.width(), native.height()),
+                                  canvas,
                                   enabled=self.preview_box.isChecked())
 
     def _update_track_buttons(self):
@@ -1325,11 +1334,19 @@ class PlayerPanel(QWidget):
     def _layout(self):
         view = QSizeF(self.view.viewport().size())
         self.scene.setSceneRect(0, 0, view.width(), view.height())
-        # 轉 90／270 度：影片那一項的寬高先對調，繞中心轉完剛好落回整個畫面
-        size = picture_preview.display_size(self.main_adjust, view)
-        self.video_item.setSize(size)
-        self.video_item.setPos((view.width() - size.width()) / 2, (view.height() - size.height()) / 2)
-        self.video_item.setTransform(picture_preview.item_transform(self.main_adjust, size))
+        native = self.video_item.nativeSize()
+        rect = self._video_rect()
+        self.video_item.setPos(0, 0)
+        if native.isEmpty():  # 還沒有畫面（量不到原本多大）：先照整個畫面擺，有了再重排
+            self.video_clip.setRect(QRectF(0, 0, view.width(), view.height()))
+            self.video_item.setSize(view)
+            self.video_item.setTransform(QTransform())
+        else:
+            # 裁、轉、翻：整張畫面放大到裁切範圍剛好填滿 rect，外面那一層框只露出 rect
+            self.video_clip.setRect(rect)
+            size, transform = picture_preview.item_geometry(self.main_adjust, native, rect)
+            self.video_item.setSize(size)
+            self.video_item.setTransform(transform)
         self._place_subtitle()
         self.refresh_overlays()
 
@@ -1432,6 +1449,8 @@ class PlayerPanel(QWidget):
             if adj[key] != picture.DEFAULTS[key]:
                 value = adj[key] * 100
                 parts.append(f"{label} {value:+.0f}" if key == "brightness" else f"{label} {value:.0f}%")
+        if adj["crop"] != picture.DEFAULTS["crop"]:
+            parts.append(f"裁成原畫面的 {adj['crop'][2]:.0%}×{adj['crop'][3]:.0%}")
         if adj["rotate"]:
             parts.append({90: "順時針轉 90°", 180: "轉 180°", 270: "逆時針轉 90°"}[adj["rotate"]])
         if adj["flip_h"]:

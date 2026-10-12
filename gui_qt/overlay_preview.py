@@ -109,7 +109,9 @@ class OverlayPreview(QObject):
                         self._request(key)
                     key = self._latest.get(path)  # 先用上一次抽到的那格
                 art = key
-            adjust = tuple(sorted(picture_mod.changes(item.get("adjust")).items()))
+            # 拿來當記住調好的圖的鍵：裁切是 list，換成 tuple 才能當鍵
+            adjust = tuple(sorted((k, tuple(v) if isinstance(v, list) else v)
+                                  for k, v in picture_mod.changes(item.get("adjust")).items()))
             plan.append((index, path, rect, art, adjust))
         native = tuple(native_size) if native_size else None
         signature = (tuple(plan), (video_rect.x(), video_rect.y(), video_rect.width(), video_rect.height()),
