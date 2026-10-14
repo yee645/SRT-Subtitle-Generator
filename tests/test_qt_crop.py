@@ -296,6 +296,7 @@ else:
     check("疊加素材全部還原：裁切也拿掉", "adjust" not in panel.tracks["overlays"][0])
     dialog.close()
     panel.shutdown()
+    panel._ask_project_discard = lambda: "discard"  # 有沒存成專案的編輯：關視窗會問，這裡不存
     win.close()
 
 print()

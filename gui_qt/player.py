@@ -70,6 +70,7 @@ config.json，關掉只算這一次）。
 
 還沒做：與字幕清單雙向同步。見 `docs/ROADMAP_3.0.md`。
 """
+import copy
 import os
 import threading
 
@@ -94,6 +95,7 @@ from gui_qt.picture_panel import PictureDialog
 from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
 from subtitle import assemble as assemble_mod
 from subtitle import cueedit, cutmarks, picture
+from subtitle import project as project_mod
 from subtitle import proxy as proxy_mod
 from subtitle.cuetime import CueIndex
 from subtitle.exporter import burn_layout, dynamic_frame, split_emphasis_segments
@@ -249,6 +251,11 @@ class PlayerPanel(QWidget):
         self.proxy_note = ""    # 代理檔的狀況（寫在影片名稱後面）
         self._orig_duration = 0.0  # 原檔片長（秒）；播代理檔時剪點與輸出照這個算
         self._pending_seek = None  # 換片源（原檔⇄代理檔）後要回到的 (位置 ms, 是否在播)
+        # 專案檔（3.0 第 10 項第二階段）：開過或存過的專案，以及那時的樣子（拿來算有沒有變更）
+        self.project_path = ""
+        self._saved_project = None
+        self._project_note = ""
+        self.last_project_missing = []  # 上一次開專案時找不到的檔案 [(哪一個, 路徑)]
 
         self.scene = QGraphicsScene(self)
         self.view = _VideoView(self.scene)
@@ -279,6 +286,13 @@ class PlayerPanel(QWidget):
 
         self.open_btn = QPushButton("開啟影片")
         self.subs_btn = QPushButton("載入字幕")
+        self.open_project_btn = QPushButton("開專案…")
+        self.open_project_btn.setToolTip("打開存過的專案：影片、字幕、畫面調整、素材軌、剪點的微調與接縫轉場"
+                                         "都回到存的時候的樣子")
+        self.save_project_btn = QPushButton("存專案")
+        self.save_project_btn.setToolTip("把整條時間軸存成專案檔（.srtproj）：第一次存會問要存到哪，之後存回"
+                                         "同一個檔。影片與素材只記位置，字幕內容整份存在專案裡")
+        self.save_project_btn.setEnabled(False)
         self.play_btn = QPushButton("播放")
         self.play_btn.setEnabled(False)
         self.slider = QSlider(Qt.Horizontal)
@@ -395,7 +409,7 @@ class PlayerPanel(QWidget):
         self.last_assemble = None  # 上一次多軌輸出成功的結果
 
         controls = QHBoxLayout()
-        for w in (self.open_btn, self.subs_btn, self.play_btn):
+        for w in (self.open_btn, self.subs_btn, self.open_project_btn, self.save_project_btn, self.play_btn):
             controls.addWidget(w)
         controls.addWidget(self.slider, 1)
         controls.addWidget(self.time_label)
@@ -447,6 +461,8 @@ class PlayerPanel(QWidget):
 
         self.open_btn.clicked.connect(self._choose_video)
         self.subs_btn.clicked.connect(self._choose_subtitles)
+        self.open_project_btn.clicked.connect(lambda: self.open_project())
+        self.save_project_btn.clicked.connect(lambda: self.save_project())
         self.play_btn.clicked.connect(self.toggle_play)
         self.slider.sliderMoved.connect(self.player.setPosition)
         self.player.positionChanged.connect(self._on_position)
@@ -473,7 +489,7 @@ class PlayerPanel(QWidget):
         self.cut_combo.currentIndexChanged.connect(lambda _i: self.refresh_cut_marks())
         self.cut_reset_btn.clicked.connect(self.reset_cut_marks)
         self.seam_combo.currentIndexChanged.connect(lambda _i: self._on_seam_changed())
-        self.seam_spin.valueChanged.connect(lambda _v: self._update_export_button())
+        self.seam_spin.valueChanged.connect(self._on_seam_length)
         self.export_btn.clicked.connect(lambda: self.export_cuts())
         self.exporter.progress.connect(self._on_export_progress)
         self.exporter.finished.connect(self._on_export_done)
@@ -516,6 +532,8 @@ class PlayerPanel(QWidget):
     def open_video(self, path):
         path = os.path.abspath(path)
         self.media_path = path
+        # 換了影片就不是原本那個專案了（開專案時由 open_project 在這之後再記上）
+        self.project_path, self._saved_project, self._project_note = "", None, ""
         self.proxy_maker.cancel()
         self.proxy_path, self.proxy_note = "", ""
         self._orig_duration = 0.0
@@ -581,6 +599,7 @@ class PlayerPanel(QWidget):
             self.cut_label.setText("")
             self.cut_reset_btn.setEnabled(False)
             self._update_export_button()
+            self._refresh_info()
             return
         duration = self.media_duration()
         plan = cutmarks.plan(source, self.cues, duration, self._config)
@@ -595,6 +614,7 @@ class PlayerPanel(QWidget):
         if not self.exporter.busy:  # 輸出中這一行寫進度，別蓋掉
             self.cut_label.setText(text)
         self._update_export_button()
+        self._refresh_info()  # 剪點微調算專案的變更
 
     def _refresh_seams(self):
         """時間軸剪點列上標出接縫轉場吃掉的地方（硬切或沒有剪點就不標：沒有保留片段就沒有接縫）。"""
@@ -632,6 +652,11 @@ class PlayerPanel(QWidget):
     def _on_seam_changed(self):
         self.seam_spin.setEnabled(bool(self.seam_combo.currentData()))
         self._update_export_button()
+        self._refresh_info()
+
+    def _on_seam_length(self, _value):
+        self._update_export_button()
+        self._refresh_info()
 
     def _update_export_button(self):
         ready = (self.cut_plan is not None and self.media_duration() > 0
@@ -719,6 +744,7 @@ class PlayerPanel(QWidget):
             self.track_label.setText(note if note is not None else self._track_summary())
             self.track_label.setToolTip(self.track_label.text())
         self._update_track_buttons()
+        self._refresh_info()  # 專案有沒有變更
 
     def _track_summary(self):
         overlays, music = len(self.tracks["overlays"]), len(self.tracks["music"])
@@ -1003,6 +1029,182 @@ class PlayerPanel(QWidget):
             change["start"], change["end"] = float(start), float(end)
             self.refresh_cut_marks()
 
+    # ---- 專案檔（3.0 第 10 項第二階段）------------------------------------
+
+    def project_state(self):
+        """目前的整條時間軸，照 subtitle/project.py 的格式（影片一律記原檔，不是代理檔）。"""
+        return {
+            "media": self.media_path,
+            "adjust": dict(self.main_adjust),
+            "subtitles": self._subtitle_path,
+            "cues": [dict(c) for c in self.cues],
+            "tracks": copy.deepcopy(self.tracks),
+            "cuts": {"source": self.cut_combo.currentData() or "",
+                     "overrides": copy.deepcopy(self.cut_overrides)},
+            "seam": {"type": self.seam_combo.currentData() or "", "duration": round(self.seam_spin.value(), 3)},
+        }
+
+    def _normalized_project(self):
+        try:
+            return project_mod.normalize_state(self.project_state())
+        except project_mod.ProjectError:
+            return None
+
+    def project_changed(self):
+        """
+        有沒有存起來才不會丟的變更。開過或存過專案：跟那時的樣子比（字幕的時間也算）。還沒有專案：
+        做了換片子或關掉就沒了的編輯（素材軌、畫面調整、剪點的停用或範圍）才算；只改字幕的時間照舊
+        由「存字幕」那邊問。
+        """
+        if self._saved_project is not None:
+            return self._normalized_project() != self._saved_project
+        if not self.media_path:
+            return False
+        return bool(self.tracks["overlays"] or self.tracks["music"] or self.main_adjust
+                    or any(self.cut_overrides.values()))
+
+    def save_project(self, path=None):
+        """
+        存專案。path 省略時：開過或存過專案就存回同一個檔，不然先問要存到哪。回傳是否存成功。
+        """
+        if not self.media_path:
+            return False
+        if path is None:
+            path = self.project_path or self._ask_project_path(self._suggested_project_path())
+            if not path:
+                return False
+        try:
+            saved = project_mod.save(self.project_state(), path)
+        except (OSError, project_mod.ProjectError) as exc:
+            self._show_project_message("存專案", f"沒有存成功：{exc}")
+            return False
+        self.project_path = saved
+        self._saved_project = self._normalized_project()
+        self._project_note = f"已存到 {os.path.basename(saved)}"
+        self._refresh_info()
+        return True
+
+    def open_project(self, path=None):
+        """
+        開專案：先問要不要存目前的變更，再照專案還原整條時間軸。主片找不到就不開（素材的位置、
+        剪點都是照它放的）；其他檔案找不到照樣開，列出來說是哪幾個。回傳是否開成功。
+        """
+        if self.exporter.busy or self.track_exporter.busy:
+            return False
+        if not self.maybe_close():
+            return False
+        if path is None:
+            path = self._ask_open_project_path()
+            if not path:
+                return False
+        try:
+            state, missing = project_mod.load(path)
+        except project_mod.ProjectError as exc:
+            self._show_project_message("開專案", f"打不開這個專案：{exc}")
+            return False
+        if not state["media"]:
+            self._show_project_message("開專案", "這個專案裡沒有影片，播放器沒辦法打開。")
+            return False
+        lost_media = [where for what, where in missing if what == "主片"]
+        if lost_media:
+            self._show_project_message(
+                "開專案", f"找不到專案的影片：\n{lost_media[0]}\n\n"
+                          "素材的位置與剪點都是照這支影片放的，所以沒有打開。把影片放回原處"
+                          "（或跟專案檔放在同一個資料夾裡原本的相對位置）再開一次。")
+            return False
+        self.apply_project(state)
+        self.project_path = os.path.abspath(path)
+        self._saved_project = self._normalized_project()
+        self._project_note = ""
+        self.last_project_missing = list(missing)
+        self._refresh_info()
+        if missing:
+            lines = "\n".join(f"・{what}：{where}" for what, where in missing)
+            self._show_project_message(
+                "開專案", f"專案打開了，但這些檔案找不到：\n{lines}\n\n"
+                          "其他的都照專案還原了。找不到的素材輸出時會失敗，請放回原處再開一次專案；"
+                          "字幕檔找不到不要緊，內容存在專案裡，存字幕時會再問要存到哪。")
+        return True
+
+    def apply_project(self, state):
+        """照專案狀態（subtitle/project.py 的格式）還原播放器：影片、字幕、調整、素材軌、剪點、接縫。"""
+        state = project_mod.normalize_state(state)
+        self.open_video(state["media"])  # 會清掉上一支的素材與調整
+        self.set_cues(state["cues"], state["subtitles"])
+        # 「改過幾處沒存」照字幕檔本身算：專案裡的字幕可能改過還沒存回字幕檔
+        if state["subtitles"] and os.path.isfile(state["subtitles"]):
+            try:
+                self._saved_cues = [dict(c) for c in load_subtitle_file(state["subtitles"])["cues"]]
+            except (OSError, ValueError, RuntimeError):
+                pass
+        self.tracks = copy.deepcopy(state["tracks"])
+        self.set_main_adjust(state["adjust"])
+        self.cut_overrides = copy.deepcopy(state["cuts"]["overrides"])
+        seam = state["seam"]
+        # 專案的轉場可以比選單給的長（最多 assemble.MAX_TRANSITION）：放得下才不會悄悄被改短
+        self.seam_spin.setMaximum(max(self.seam_spin.maximum(), seam["duration"]))
+        self.seam_spin.setValue(seam["duration"])
+        self.seam_combo.setCurrentIndex(self.seam_combo.findData(seam["type"]))
+        self.show_cut_marks(state["cuts"]["source"])
+        self.refresh_tracks()
+        self._refresh_info()
+
+    def maybe_close(self):
+        """
+        關視窗、開別的專案之前：專案有變更就先問（存專案／放棄／取消）；沒有專案時照舊問字幕。
+        回傳 True＝可以繼續。
+        """
+        if self.project_changed():
+            return self._maybe_drop_project()
+        if self.project_path:  # 字幕改過的時間存在專案裡，關掉也不會丟
+            return True
+        return self.maybe_discard()
+
+    def _maybe_drop_project(self):
+        if not self.project_changed():
+            return True
+        answer = self._ask_project_discard()
+        if answer == "save":
+            return self.save_project()
+        return answer == "discard"
+
+    def _project_label(self):
+        if not self.project_path:
+            return ""
+        name = os.path.basename(self.project_path)
+        if self.project_changed():
+            return f"專案：{name}（有變更還沒存）　"
+        if self._project_note:
+            return f"專案：{name}（{self._project_note}）　"
+        return f"專案：{name}　"
+
+    def _suggested_project_path(self):
+        return os.path.splitext(self.media_path)[0] + project_mod.SUFFIX if self.media_path else ""
+
+    def _ask_project_path(self, suggested):
+        path, _ = QFileDialog.getSaveFileName(self, "存專案", suggested, f"專案檔 (*{project_mod.SUFFIX})")
+        return path
+
+    def _ask_open_project_path(self):
+        path, _ = QFileDialog.getOpenFileName(self, "開專案", "", f"專案檔 (*{project_mod.SUFFIX})")
+        return path
+
+    def _show_project_message(self, title, text):
+        QMessageBox.warning(self, title, text)
+
+    def _ask_project_discard(self):
+        """回傳 "save"／"discard"／"cancel"。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("專案還沒存")
+        what = os.path.basename(self.project_path) if self.project_path else "素材軌、畫面調整、剪點的微調"
+        box.setText(f"{what}有變更還沒存，不存的話這些編輯會不見。")
+        save = box.addButton("存專案", QMessageBox.AcceptRole)
+        discard = box.addButton("不存，放棄", QMessageBox.DestructiveRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        return "save" if clicked is save else "discard" if clicked is discard else "cancel"
+
     def toggle_play(self):
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
@@ -1072,13 +1274,14 @@ class PlayerPanel(QWidget):
         video = f"影片：{name}" if name else "還沒開啟影片。"
         if name and self.proxy_note:
             video += f"（{self.proxy_note}）"
-        self.info_label.setText(video + self._subs_note())
+        self.info_label.setText(self._project_label() + video + self._subs_note())
         self._update_edit_buttons()
 
     def _update_edit_buttons(self):
         self.undo_btn.setEnabled(self.history.can_undo())
         self.redo_btn.setEnabled(self.history.can_redo())
         self.save_btn.setEnabled(bool(self.cues))
+        self.save_project_btn.setEnabled(bool(self.media_path))
 
     def _on_cue_times(self, index, start, end):
         """時間軸上拖了某句的邊：回寫字幕清單，畫面上的那句立刻照新時間顯示。"""
@@ -1123,10 +1326,16 @@ class PlayerPanel(QWidget):
         return "save" if clicked is save else "discard" if clicked is discard else "cancel"
 
     def _choose_video(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "開啟影片", "", "影片 (*.mp4 *.mov *.mkv *.avi *.webm *.m4v);;所有檔案 (*)")
+        if not self._maybe_drop_project():  # 換影片會清掉素材軌與畫面調整
+            return
+        path = self._ask_video_path()
         if path:
             self.open_video(path)
+
+    def _ask_video_path(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "開啟影片", "", "影片 (*.mp4 *.mov *.mkv *.avi *.webm *.m4v);;所有檔案 (*)")
+        return path
 
     def _choose_subtitles(self):
         if not self.maybe_discard():

@@ -169,6 +169,7 @@ else:
     panel.show_cut_marks("")
     check("不顯示剪點：不標接縫、預覽剪後不能勾", tv.seam_rects() == [] and not box.isEnabled())
     panel.shutdown()
+    panel._ask_project_discard = lambda: "discard"  # 有沒存成專案的編輯：關視窗會問，這裡不存
     win.close()
 
 print()

@@ -29,7 +29,10 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # 3.12 起：PySide6 6.12.0 在 Python 3.11 上，每呼叫一次沒有回傳值的方法（setText、
+          # setEnabled…）就把 None 的參照數多減一，用久了整個程式會崩潰（3.0 第 10 項第二階段實測：
+          # 6.11.2＋3.11、6.12.0＋3.12 都不會；3.12 起 None 是永生物件，多減也沒事）。
+          python-version: "3.12"
 
       - name: Install PySide6 and PyInstaller
         # QtMultimedia 在 PySide6-Addons，要裝完整的 PySide6（第 0 項實測）。

@@ -214,6 +214,7 @@ else:
           and errors and "什麼都不剩" in errors[-1] and not os.path.exists(os.path.join(tmp, "空.mp4")),
           f"{errors} {panel.cut_plan['marks']}")
     panel.shutdown()
+    panel._ask_project_discard = lambda: "discard"  # 有沒存成專案的編輯：關視窗會問，這裡不存
     win.close()
 
 print()

@@ -146,8 +146,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.player_panel, 1)
         return page
 
-    def closeEvent(self, event):  # noqa: N802 —— 字幕改過還沒存：先問（存檔／放棄／取消）
-        if self.player_panel is not None and not self.player_panel.maybe_discard():
+    def closeEvent(self, event):  # noqa: N802 —— 專案或字幕改過還沒存：先問（存檔／放棄／取消）
+        if self.player_panel is not None and not self.player_panel.maybe_close():
             event.ignore()
             return
         if self.player_panel is not None:

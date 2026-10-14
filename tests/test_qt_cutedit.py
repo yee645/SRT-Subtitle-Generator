@@ -278,6 +278,7 @@ else:
           and top_left.x() >= 0 and top_left.x() + btn.width() <= win.width()
           and top_left.y() + btn.height() <= win.height(),
           f"影片高 {panel.view.height()}、按鈕 {top_left} {btn.size()}")
+    panel._ask_project_discard = lambda: "discard"  # 有沒存成專案的編輯：關視窗會問，這裡不存
     win.close()
     shutil.rmtree(tmp, ignore_errors=True)
 
