@@ -299,6 +299,7 @@ else:
     check("循環的音樂放到片尾（原本 1.5 秒、3.5 秒開始，5 秒之後還聽得到）", late - early > 20,
           f"{late} {early}")
     panel.shutdown()
+    panel._ask_project_discard = lambda: "discard"  # 有沒存成專案的編輯：關視窗會問，這裡不存
     win.close()
 
 print()

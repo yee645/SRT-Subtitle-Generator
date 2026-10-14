@@ -180,6 +180,7 @@ else:
     check("黑場：字幕對齊（第二句 5.5 → 1.8，第一句收到 1.8 為止）",
           "00:00:00,200 --> 00:00:01,800" in srt and "00:00:01,800 --> 00:00:04,100" in srt, srt)
     panel.shutdown()
+    panel._ask_project_discard = lambda: "discard"  # 有沒存成專案的編輯：關視窗會問，這裡不存
     win.close()
 
 print()

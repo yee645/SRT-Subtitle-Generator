@@ -173,6 +173,7 @@ else:
           os.path.exists(os.path.join(tmp, "again.srt.bak"))
           and "舊的" in open(os.path.join(tmp, "again.srt.bak"), encoding="utf-8").read()
           and "舊的" not in open(os.path.join(tmp, "again.srt"), encoding="utf-8").read())
+    panel._ask_project_discard = lambda: "discard"  # 有沒存成專案的編輯：關視窗會問，這裡不存
     win.close()
     shutil.rmtree(tmp, ignore_errors=True)
 
