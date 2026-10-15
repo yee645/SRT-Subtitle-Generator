@@ -18,7 +18,7 @@ import sys
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
-    QApplication, QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QLabel, QMainWindow, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
 import config
@@ -102,9 +102,13 @@ def _placeholder_page(summary):
     return page
 
 
+# ②字幕頁：播放器與逐句校對左右並排（3.0 第 11 項第一階段），中間可以拖
+CUE_PANEL_WIDTH = 420
+
+
 def _subtitle_page_note():
-    return QLabel("這一頁先搬過來的是播放器：字幕疊在真的影片畫面上。"
-                  "生成、校對、翻譯、樣式還在一般版（不加 --qt）。")
+    return QLabel("這一頁有播放器（字幕疊在真的影片畫面上）與逐句校對（改字幕文字）。"
+                  "生成、新增刪除字幕、翻譯、樣式還在一般版（不加 --qt）。")
 
 
 class MainWindow(QMainWindow):
@@ -119,6 +123,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.player_panel = None
+        self.cue_panel = None
         for name, summary in STAGES:
             if name == "② 字幕":
                 self.tabs.addTab(self._subtitle_page(), name)
@@ -143,10 +148,21 @@ class MainWindow(QMainWindow):
         # 剪點參數（停頓門檻、相似度…）也是同一份 config，畫出來的就是一般版會剪的。
         self.player_panel = PlayerPanel(style=self.config_data.get("subtitle_style"),
                                         config=self.config_data)
-        layout.addWidget(self.player_panel, 1)
+        from gui_qt.cue_panel import CueListPanel
+        self.cue_panel = CueListPanel(self.player_panel)
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.addWidget(self.player_panel)
+        self.splitter.addWidget(self.cue_panel)
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setSizes([DEFAULT_SIZE[0] - CUE_PANEL_WIDTH, CUE_PANEL_WIDTH])
+        layout.addWidget(self.splitter, 1)
         return page
 
     def closeEvent(self, event):  # noqa: N802 —— 專案或字幕改過還沒存：先問（存檔／放棄／取消）
+        if self.cue_panel is not None:
+            self.cue_panel.commit()  # 編輯框裡改到一半的先套用，下面才問得到要不要存
         if self.player_panel is not None and not self.player_panel.maybe_close():
             event.ignore()
             return

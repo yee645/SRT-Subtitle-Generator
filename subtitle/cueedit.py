@@ -27,6 +27,13 @@
   檔案）；第一次覆蓋前把原檔複製成 `原檔名.bak`——載入時會拿掉斜體等標記、
   非 UTF-8 的檔案會改存成 UTF-8，留一份原檔才救得回來。`.bak` 已經存在就不
   再覆蓋，保住的永遠是最早的原檔。
+
+3.0 第 11 項第一階段加上逐句改文字（`with_text`）：
+
+* 換行統一成 `\n`，每一行去掉頭尾空白、拿掉空行；中間的換行保留（雙行字幕）。
+* 改完是空的不收（拋 ValueError）：空字幕存成 SRT 會讓下次讀檔對不上；要整句拿掉是「刪除」。
+* 復原／重做跟改時間同一疊（`EditHistory.record_text`），照做的順序一步一步退。
+* `text_changed_count`：跟存檔時比，有幾句的文字不一樣（句數不同的部分由 `changed_count` 算）。
 """
 
 import os
@@ -195,6 +202,29 @@ def with_times(cues, index, start, end):
     return out
 
 
+def clean_text(text):
+    """使用者打的字整理成字幕文字：換行統一、每行去頭尾空白、拿掉空行。"""
+    lines = str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    return "\n".join(line.strip() for line in lines if line.strip())
+
+
+def with_text(cues, index, text):
+    """回傳第 index 句換成新文字的新清單（不動原本的）；整理後是空的就拋 ValueError。"""
+    if not 0 <= index < len(cues):
+        raise IndexError(index)
+    cleaned = clean_text(text)
+    if not cleaned:
+        raise ValueError("字幕的文字不能是空的")
+    out = [dict(c) for c in cues]
+    out[index]["text"] = cleaned
+    return out
+
+
+def text_changed_count(cues, saved):
+    """cues 與存檔時的 saved 相比，文字不一樣的句數（依清單位置比；多出來的句子由 changed_count 算）。"""
+    return sum(1 for now, then in zip(cues, saved) if now.get("text", "") != then.get("text", ""))
+
+
 def changed_count(cues, saved):
     """cues 與存檔時的 saved 相比，時間不一樣的句數（依清單位置比；長度不同時多出來的都算）。"""
     count = abs(len(cues) - len(saved))
@@ -205,7 +235,7 @@ def changed_count(cues, saved):
 
 
 class EditHistory:
-    """改時間的復原／重做紀錄（只記時間，不存整份清單的複本）。"""
+    """改時間與改文字的復原／重做紀錄（只記改到的那一項，不存整份清單的複本）。"""
 
     def __init__(self, limit=HISTORY_LIMIT):
         self.limit = limit
@@ -222,7 +252,16 @@ class EditHistory:
         after = (float(after[0]), float(after[1]))
         if before == after:
             return
-        self._done.append((index, before, after))
+        self._push(("times", index, before, after))
+
+    def record_text(self, index, before, after):
+        """記一筆：第 index 句的文字從 before 改成 after。"""
+        if before == after:
+            return
+        self._push(("text", index, str(before), str(after)))
+
+    def _push(self, entry):
+        self._done.append(entry)
         if len(self._done) > self.limit:
             del self._done[0]
         self._undone.clear()
@@ -239,8 +278,8 @@ class EditHistory:
             return None
         entry = self._done.pop()
         self._undone.append(entry)
-        index, before, _after = entry
-        return with_times(cues, index, *before), index
+        kind, index, before, _after = entry
+        return _apply(cues, kind, index, before), index
 
     def redo(self, cues):
         """回傳 (重做後的新清單, 改到的是第幾句)；沒得重做回傳 None。"""
@@ -248,8 +287,16 @@ class EditHistory:
             return None
         entry = self._undone.pop()
         self._done.append(entry)
-        index, _before, after = entry
-        return with_times(cues, index, *after), index
+        kind, index, _before, after = entry
+        return _apply(cues, kind, index, after), index
+
+
+def _apply(cues, kind, index, value):
+    if kind == "text":
+        out = [dict(c) for c in cues]
+        out[index]["text"] = value  # 復原回原本的樣子：不再整理一次（原本的可能本來就有空行）
+        return out
+    return with_times(cues, index, *value)
 
 
 def backup_path(path):
