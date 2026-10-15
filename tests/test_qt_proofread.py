@@ -106,7 +106,7 @@ else:
     check("開影片、載入字幕之後：兩邊的寬度不跳（狀態那一行變長也不會撐寬播放器）",
           (panel.width(), cues_panel.width()) == widths, f"{widths} → {(panel.width(), cues_panel.width())}")
     check("狀態那一行在清單上面、可以折行", cues_panel.info is panel.info_label and panel.info_label.wordWrap()
-          and cues_panel.isAncestorOf(panel.info_label)
+          and cues_panel.isAncestorOf(panel.info_label) and panel._footer.indexOf(panel.info_label) == -1
           and panel.info_label.geometry().bottom() <= table.geometry().top()
           and "字幕：字幕.srt，3 句" in panel.info_label.text(), panel.info_label.text())
 
@@ -169,21 +169,39 @@ else:
           and cues_panel.selected_index() == 2 and editor.toPlainText() == "第三句")
 
     editor.setFocus()
+    editor.setPlainText("時間軸選別句前改的")
+    panel.timeline.select_cue(0, seek=False)  # 焦點還在編輯框：只有「換句」這件事
+    wait(50)
+    check("時間軸上換句（焦點沒離開編輯框）：也先套用正在改的", panel.cues[2]["text"] == "時間軸選別句前改的"
+          and cues_panel.selected_index() == 0 and editor.toPlainText() == "點別句前改的", repr(panel.cues[2]["text"]))
+    editor.setFocus()
+    editor.setPlainText("離開編輯框前改的")
+    panel.play_btn.setFocus()  # 只有焦點離開，選的還是同一句
+    wait(50)
+    check("離開編輯框（沒換句）：也套用", panel.cues[0]["text"] == "離開編輯框前改的"
+          and cues_panel.selected_index() == 0, repr(panel.cues[0]["text"]))
+    table.clearSelection()
+    wait(50)
+    check("沒選句子：編輯框灰掉、清空", not editor.isEnabled() and editor.toPlainText() == "")
+    cues_panel.select(2)
+    editor.setFocus()
     editor.setPlainText("  \n ")
     QTest.keyClick(editor, Qt.Key_Return, Qt.ControlModifier)
-    check("改成空的：不收、放回原本的、說原因", panel.cues[2]["text"] == "第三句" and editor.toPlainText() == "第三句"
+    check("改成空的：不收、放回原本的、說原因", panel.cues[2]["text"] == "時間軸選別句前改的"
+          and editor.toPlainText() == "時間軸選別句前改的"
           and "不能是空的" in cues_panel.note.text(), cues_panel.note.text())
 
     editor.setPlainText(" 上 \n\n 下 ")
     QTest.keyClick(editor, Qt.Key_Return, Qt.ControlModifier)
     check("雙行：照存（每行去頭尾空白、拿掉空行），清單用「 / 」接", panel.cues[2]["text"] == "上\n下"
           and cell(2, 2) == "上 / 下", repr(panel.cues[2]["text"]))
-    check("狀態列：文字改過 2 處", "文字改過 2 處" in panel.info_label.text(), panel.info_label.text())
+    check("狀態列：文字改過 2 處（第 1、3 句）", "文字改過 2 處" in panel.info_label.text(), panel.info_label.text())
 
     # ----- 5. 復原／重做（焦點在清單）-----
     table.setFocus()
     QTest.keyClick(table, Qt.Key_Z, Qt.ControlModifier)
-    check("Ctrl+Z：最後一次改的退回去，清單跟著換", panel.cues[2]["text"] == "第三句" and cell(2, 2) == "第三句")
+    check("Ctrl+Z：最後一次改的退回去，清單跟著換", panel.cues[2]["text"] == "時間軸選別句前改的"
+          and cell(2, 2) == "時間軸選別句前改的")
     QTest.keyClick(table, Qt.Key_Y, Qt.ControlModifier)
     check("Ctrl+Y：再做回來", panel.cues[2]["text"] == "上\n下" and cell(2, 2) == "上 / 下")
 
@@ -199,7 +217,7 @@ else:
     editor.setPlainText("存檔前改的")
     QTest.keyClick(editor, Qt.Key_S, Qt.ControlModifier)
     saved = [c["text"] for c in load_subtitle_file(srt)["cues"]]
-    check("編輯框裡按 Ctrl+S：先套用再存，檔案裡是新的", saved == ["點別句前改的", "上面一行\n下面一行", "存檔前改的"]
+    check("編輯框裡按 Ctrl+S：先套用再存，檔案裡是新的", saved == ["離開編輯框前改的", "上面一行\n下面一行", "存檔前改的"]
           and panel.unsaved_changes() == 0, str(saved))
 
     # ----- 8. 關視窗 -----
