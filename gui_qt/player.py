@@ -233,6 +233,9 @@ class _VideoView(QGraphicsView):
 class PlayerPanel(QWidget):
     """播放器面板：開影片、載字幕、播放／暫停、拖曳跳轉，字幕疊在畫面上。"""
 
+    # 字幕清單換了或改過（載入、拖時間、改文字、復原）：逐句校對的清單照這個重畫
+    cuesChanged = Signal()
+
     def __init__(self, parent=None, style=None, config=None):
         super().__init__(parent)
         self._style = dict(style or {})
@@ -415,6 +418,7 @@ class PlayerPanel(QWidget):
         controls.addWidget(self.time_label)
 
         footer = QHBoxLayout()
+        self._footer = footer
         footer.addWidget(self.info_label, 1)
         footer.addWidget(self.proxy_box)
         footer.addWidget(self.picture_btn)
@@ -568,6 +572,7 @@ class PlayerPanel(QWidget):
         self._show_at(self.player.position())
         self._refresh_info()
         self.refresh_cut_marks()
+        self.cuesChanged.emit()
 
     def load_subtitles(self, path):
         data = load_subtitle_file(path)
@@ -1031,6 +1036,17 @@ class PlayerPanel(QWidget):
 
     # ---- 專案檔（3.0 第 10 項第二階段）------------------------------------
 
+    def take_info_label(self):
+        """
+        把狀態那一行（影片、字幕、改過幾處）交給別的面板放（②字幕頁放在逐句校對上面，可以折行）。
+        留在這一列時，字越長播放器最窄的寬度就越寬：載入字幕後並排的清單會被擠窄。這一列改放一段
+        空白撐著，按鈕照樣靠右。
+        """
+        self._footer.removeWidget(self.info_label)
+        self._footer.insertStretch(0, 1)
+        self.info_label.setWordWrap(True)
+        return self.info_label
+
     def project_state(self):
         """目前的整條時間軸，照 subtitle/project.py 的格式（影片一律記原檔，不是代理檔）。"""
         return {
@@ -1218,8 +1234,35 @@ class PlayerPanel(QWidget):
     # ---- 內部 ----------------------------------------------------------
 
     def unsaved_changes(self):
-        """跟上次存檔（或載入）時相比，時間不一樣的句數。"""
-        return cueedit.changed_count(self.cues, self._saved_cues)
+        """跟上次存檔（或載入）時相比，改過的地方：時間不一樣的句數＋文字不一樣的句數。"""
+        return sum(self._unsaved_parts())
+
+    def _unsaved_parts(self):
+        return (cueedit.changed_count(self.cues, self._saved_cues),
+                cueedit.text_changed_count(self.cues, self._saved_cues))
+
+    def _unsaved_text(self):
+        """「時間改過 N 處、文字改過 M 處」（沒改的那一種不寫）。"""
+        times, texts = self._unsaved_parts()
+        parts = ([f"時間改過 {times} 處"] if times else []) + ([f"文字改過 {texts} 處"] if texts else [])
+        return "、".join(parts)
+
+    def set_cue_text(self, index, text):
+        """
+        改第 index 句的文字（逐句校對）：畫面上、時間軸上立刻換，可以復原。回傳改完的文字；
+        整理後是空的就拋 ValueError，原本的不動。
+        """
+        if not 0 <= index < len(self.cues):
+            raise IndexError(index)
+        before = self.cues[index].get("text", "")
+        cues = cueedit.with_text(self.cues, index, text)
+        after = cues[index]["text"]
+        if after != before:
+            self.history.record_text(index, before, after)
+            self.cues = cues
+            self.timeline.set_cues(self.cues, keep_selection=True)
+            self._after_edit()
+        return after
 
     def undo(self):
         self._step(self.history.undo(self.cues))
@@ -1262,9 +1305,8 @@ class PlayerPanel(QWidget):
             return "　字幕：尚未載入"
         name = os.path.basename(self._subtitle_path) if self._subtitle_path else "（目前的字幕）"
         note = f"　字幕：{name}，{len(self._index)} 句"
-        changed = self.unsaved_changes()
-        if changed:
-            note += f"（時間改過 {changed} 處，尚未存檔）"
+        if self.unsaved_changes():
+            note += f"（{self._unsaved_text()}，尚未存檔）"
         elif self._save_note:
             note += f"（{self._save_note}）"
         return note
@@ -1307,6 +1349,7 @@ class PlayerPanel(QWidget):
         self._show_at(self.player.position())
         self._refresh_info()
         self.refresh_cut_marks()  # 字幕時間變了，停頓與重講的位置跟著變
+        self.cuesChanged.emit()
 
     def _ask_save_path(self, suggested):
         base = os.path.splitext(suggested)[0] + ".srt" if suggested else ""
@@ -1317,7 +1360,7 @@ class PlayerPanel(QWidget):
         """回傳 "save"／"discard"／"cancel"。"""
         box = QMessageBox(self)
         box.setWindowTitle("還沒存檔")
-        box.setText(f"字幕的時間改過 {self.unsaved_changes()} 處，還沒存檔。")
+        box.setText(f"字幕{self._unsaved_text()}，還沒存檔。")
         save = box.addButton("存檔", QMessageBox.AcceptRole)
         discard = box.addButton("不存，放棄修改", QMessageBox.DestructiveRole)
         box.addButton("取消", QMessageBox.RejectRole)
