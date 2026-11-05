@@ -34,8 +34,20 @@
 * 改完是空的不收（拋 ValueError）：空字幕存成 SRT 會讓下次讀檔對不上；要整句拿掉是「刪除」。
 * 復原／重做跟改時間同一疊（`EditHistory.record_text`），照做的順序一步一步退。
 * `text_changed_count`：跟存檔時比，有幾句的文字不一樣（句數不同的部分由 `changed_count` 算）。
+
+第 11 項第二階段加上新增、刪除、尋找取代：
+
+* `place_new_cue`：新的一句放在播放頭那裡（落在某句裡面就接在那句後面），長 `NEW_CUE_LENGTH` 秒，
+  不蓋到下一句、不超過片尾；放不下（剩不到 `MIN_DURATION`）就拋 ValueError，不硬塞。
+* `with_cue_inserted`／`without_cue`：插入、拿掉一句，回傳新清單。
+* `replace_text`：用 subtitle/textedit 的字面取代（可選只改哪幾句），取代完再整理一次；
+  取代後會變成空的那幾句不改（回報出來，要拿掉請用刪除）——寧可漏改、不留空字幕。
+* 復原：插入／刪除是一筆（"cue"：之前或之後是 None＝那句不在），全部取代整批是一筆（"cues"），
+  跟改時間、改文字同一疊。
+* `diff_counts`：跟存檔時比，先把沒變的句子對齊再數，所以插一句不會讓後面每一句都算成「改過」。
 """
 
+import difflib
 import os
 import shutil
 import tempfile
@@ -43,6 +55,7 @@ import tempfile
 from . import exporter
 
 MIN_DURATION = 0.1
+NEW_CUE_LENGTH = 2.0
 HISTORY_LIMIT = 500
 BACKUP_SUFFIX = ".bak"
 
@@ -225,6 +238,106 @@ def text_changed_count(cues, saved):
     return sum(1 for now, then in zip(cues, saved) if now.get("text", "") != then.get("text", ""))
 
 
+def place_new_cue(cues, seconds, duration=None, length=NEW_CUE_LENGTH):
+    """
+    新增的一句放哪裡：回傳 (插在第幾個, 開始, 結束)。從 seconds（播放頭）開始；落在某句裡面就
+    往後接到那句結束（一路接到沒有字幕的地方）；最長 length 秒，不蓋到下一句、不超過片長。
+    剩下的空位不到 MIN_DURATION 就拋 ValueError。清單要照開始時間排好（載入時就是）。
+    """
+    spans = [(_ms(c["start"]), _ms(c["end"])) for c in cues]
+    start = max(0, _ms(seconds))
+    moved = True
+    while moved:
+        moved = False
+        for begin, end in spans:
+            if begin <= start < end:
+                start = end
+                moved = True
+    limit = start + _ms(length)
+    later = [begin for begin, _end in spans if begin > start]
+    if later:
+        limit = min(limit, min(later))
+    if duration is not None and duration > 0:
+        limit = min(limit, _ms(duration))
+    if limit - start < _ms(MIN_DURATION):
+        raise ValueError("播放頭這裡沒有空位放新的一句（跟下一句或片尾太近）")
+    position = sum(1 for begin, _end in spans if begin <= start)
+    return position, start / 1000.0, limit / 1000.0
+
+
+def with_cue_inserted(cues, index, cue):
+    """回傳在第 index 個位置插入 cue 的新清單（文字整理過；空的拋 ValueError）。"""
+    if not 0 <= index <= len(cues):
+        raise IndexError(index)
+    text = clean_text(cue.get("text", ""))
+    if not text:
+        raise ValueError("字幕的文字不能是空的")
+    out = [dict(c) for c in cues]
+    out.insert(index, dict(cue, start=float(cue["start"]), end=float(cue["end"]), text=text))
+    return out
+
+
+def without_cue(cues, index):
+    """回傳拿掉第 index 句的新清單。"""
+    if not 0 <= index < len(cues):
+        raise IndexError(index)
+    out = [dict(c) for c in cues]
+    del out[index]
+    return out
+
+
+def replace_text(cues, term, replacement, case_sensitive=False, only=None):
+    """
+    字面尋找取代（不改傳進來的清單）。回傳 (新清單, 取代了幾處, 改到的句子, 因為會變空而沒改的句子)。
+    only＝只在這幾句裡取代（None＝全部）。取代完每句再用 clean_text 整理（拿掉多出來的頭尾空白）。
+    """
+    from .textedit import replace_in_cues
+    replaced, _total = replace_in_cues(cues, term, replacement, case_sensitive, only_indices=only)
+    out = [dict(c) for c in cues]
+    count = 0
+    changed, emptied = [], []
+    for index, (old, new) in enumerate(zip(cues, replaced)):
+        if new is old or new.get("text") == old.get("text"):
+            continue
+        text = clean_text(new.get("text", ""))
+        if not text:
+            emptied.append(index)
+            continue
+        hits = len(_pattern(term, case_sensitive).findall(old.get("text") or ""))
+        out[index] = dict(new, text=text)
+        if out[index] != old:
+            changed.append(index)
+            count += hits
+    return out, count, changed, emptied
+
+
+def _pattern(term, case_sensitive):
+    import re
+    return re.compile(re.escape(term), 0 if case_sensitive else re.IGNORECASE)
+
+
+def diff_counts(cues, saved):
+    """
+    cues 跟存檔時的 saved 比：回傳 {"times", "texts", "added", "removed"}。先把完全沒變的句子對齊，
+    剩下一段一段照位置配對：配得上的比時間與文字，多出來的算新增、少掉的算刪除。
+    """
+    def key(c):
+        return (_ms(c["start"]), _ms(c["end"]), c.get("text", ""))
+    now_keys, then_keys = [key(c) for c in cues], [key(c) for c in saved]
+    counts = {"times": 0, "texts": 0, "added": 0, "removed": 0}
+    matcher = difflib.SequenceMatcher(None, then_keys, now_keys, autojunk=False)
+    for tag, a0, a1, b0, b1 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        pairs = min(a1 - a0, b1 - b0)
+        for then, now in zip(then_keys[a0:a0 + pairs], now_keys[b0:b0 + pairs]):
+            counts["times"] += then[:2] != now[:2]
+            counts["texts"] += then[2] != now[2]
+        counts["added"] += (b1 - b0) - pairs
+        counts["removed"] += (a1 - a0) - pairs
+    return counts
+
+
 def changed_count(cues, saved):
     """cues 與存檔時的 saved 相比，時間不一樣的句數（依清單位置比；長度不同時多出來的都算）。"""
     count = abs(len(cues) - len(saved))
@@ -235,7 +348,7 @@ def changed_count(cues, saved):
 
 
 class EditHistory:
-    """改時間與改文字的復原／重做紀錄（只記改到的那一項，不存整份清單的複本）。"""
+    """改時間、改文字、新增刪除、取代的復原／重做紀錄（只記改到的那幾句，不存整份清單的複本）。"""
 
     def __init__(self, limit=HISTORY_LIMIT):
         self.limit = limit
@@ -260,6 +373,20 @@ class EditHistory:
             return
         self._push(("text", index, str(before), str(after)))
 
+    def record_insert(self, index, cue):
+        """記一筆：在第 index 個位置加了 cue。"""
+        self._push(("cue", index, None, dict(cue)))
+
+    def record_delete(self, index, cue):
+        """記一筆：拿掉了第 index 句（cue 是拿掉前的樣子）。"""
+        self._push(("cue", index, dict(cue), None))
+
+    def record_cues(self, indices, before, after):
+        """記一筆整批的（全部取代）：indices 這幾句從 before 換成 after（都是整句的 dict）。"""
+        if not indices:
+            return
+        self._push(("cues", tuple(indices), tuple(dict(c) for c in before), tuple(dict(c) for c in after)))
+
     def _push(self, entry):
         self._done.append(entry)
         if len(self._done) > self.limit:
@@ -279,7 +406,7 @@ class EditHistory:
         entry = self._done.pop()
         self._undone.append(entry)
         kind, index, before, _after = entry
-        return _apply(cues, kind, index, before), index
+        return _apply(cues, kind, index, before), _focus(index)
 
     def redo(self, cues):
         """回傳 (重做後的新清單, 改到的是第幾句)；沒得重做回傳 None。"""
@@ -288,10 +415,27 @@ class EditHistory:
         entry = self._undone.pop()
         self._done.append(entry)
         kind, index, _before, after = entry
-        return _apply(cues, kind, index, after), index
+        return _apply(cues, kind, index, after), _focus(index)
+
+
+def _focus(index):
+    """復原／重做後要選哪一句：整批的選第一句。"""
+    return index[0] if isinstance(index, tuple) else index
 
 
 def _apply(cues, kind, index, value):
+    if kind == "cue":
+        out = [dict(c) for c in cues]
+        if value is None:
+            del out[index]
+        else:
+            out.insert(index, dict(value))
+        return out
+    if kind == "cues":
+        out = [dict(c) for c in cues]
+        for i, cue in zip(index, value):
+            out[i] = dict(cue)
+        return out
     if kind == "text":
         out = [dict(c) for c in cues]
         out[index]["text"] = value  # 復原回原本的樣子：不再整理一次（原本的可能本來就有空行）
