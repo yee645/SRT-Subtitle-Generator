@@ -1238,14 +1238,14 @@ class PlayerPanel(QWidget):
         return sum(self._unsaved_parts())
 
     def _unsaved_parts(self):
-        return (cueedit.changed_count(self.cues, self._saved_cues),
-                cueedit.text_changed_count(self.cues, self._saved_cues))
+        """(時間改過幾句, 文字改過幾句, 新增幾句, 刪除幾句)：沒變的句子先對齊再數。"""
+        counts = cueedit.diff_counts(self.cues, self._saved_cues)
+        return counts["times"], counts["texts"], counts["added"], counts["removed"]
 
     def _unsaved_text(self):
-        """「時間改過 N 處、文字改過 M 處」（沒改的那一種不寫）。"""
-        times, texts = self._unsaved_parts()
-        parts = ([f"時間改過 {times} 處"] if times else []) + ([f"文字改過 {texts} 處"] if texts else [])
-        return "、".join(parts)
+        """「時間改過 N 處、文字改過 M 處、新增 K 句、刪除 L 句」（沒有的那一種不寫）。"""
+        labels = ("時間改過 {} 處", "文字改過 {} 處", "新增 {} 句", "刪除 {} 句")
+        return "、".join(label.format(n) for label, n in zip(labels, self._unsaved_parts()) if n)
 
     def set_cue_text(self, index, text):
         """
@@ -1263,6 +1263,45 @@ class PlayerPanel(QWidget):
             self.timeline.set_cues(self.cues, keep_selection=True)
             self._after_edit()
         return after
+
+    def new_cue_slot(self, seconds=None):
+        """新的一句放哪裡（預設照播放頭）：回傳 (插在第幾個, 開始, 結束)；放不下拋 ValueError。"""
+        if seconds is None:
+            seconds = self.player.position() / 1000.0
+        duration = self.player.duration() / 1000.0 if self.player.duration() > 0 else None
+        return cueedit.place_new_cue(self.cues, seconds, duration)
+
+    def insert_cue(self, index, start, end, text):
+        """在第 index 個位置加一句（可以復原）；文字整理後是空的拋 ValueError。回傳加進去的那句。"""
+        cues = cueedit.with_cue_inserted(self.cues, index, {"start": start, "end": end, "text": text})
+        self.history.record_insert(index, cues[index])
+        self.cues = cues
+        self.timeline.set_cues(self.cues, keep_selection=True)
+        self.timeline.select_cue(index, seek=False)
+        self._after_edit()
+        return cues[index]
+
+    def delete_cue(self, index):
+        """拿掉第 index 句（可以復原）。"""
+        cues = cueedit.without_cue(self.cues, index)
+        self.history.record_delete(index, self.cues[index])
+        self.cues = cues
+        self.timeline.set_cues(self.cues, keep_selection=True)
+        self.timeline.select_cue(min(index, len(self.cues) - 1), seek=False)
+        self._after_edit()
+
+    def replace_text(self, term, replacement, case_sensitive=False, only=None):
+        """
+        尋找取代（整批是一步復原）。回傳 (取代了幾處, 改到的句子, 因為會變空而沒改的句子)。
+        """
+        cues, count, changed, emptied = cueedit.replace_text(self.cues, term, replacement,
+                                                             case_sensitive, only)
+        if changed:
+            self.history.record_cues(changed, [self.cues[i] for i in changed], [cues[i] for i in changed])
+            self.cues = cues
+            self.timeline.set_cues(self.cues, keep_selection=True)
+            self._after_edit()
+        return count, changed, emptied
 
     def undo(self):
         self._step(self.history.undo(self.cues))
@@ -1340,7 +1379,7 @@ class PlayerPanel(QWidget):
             return
         self.cues, index = result
         self.timeline.set_cues(self.cues, keep_selection=True)
-        self.timeline.select_cue(index, seek=False)
+        self.timeline.select_cue(min(index, len(self.cues) - 1), seek=False)  # 復原「新增」時那句已經不在
         self._after_edit()
 
     def _after_edit(self):
