@@ -185,6 +185,16 @@ def translate_texts(
     return results
 
 
+def outgoing_summary(cues: list) -> dict:
+    """
+    按下翻譯會送到 OpenAI 的是什麼：只有每句字幕的文字（不含時間、檔名、影片或聲音）。
+    回傳 {"lines": 有字的句數, "chars": 字數（不算換行）}，介面在送出前寫給使用者看。
+    """
+    texts = [str(cue.get("text") or "") for cue in cues or []]
+    return {"lines": sum(1 for t in texts if t.strip()),
+            "chars": sum(len(t.replace("\n", "")) for t in texts)}
+
+
 def translate_cues(
     cues: list,
     settings: dict,

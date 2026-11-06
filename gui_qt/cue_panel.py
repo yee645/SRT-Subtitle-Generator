@@ -19,6 +19,9 @@
   全部取代整批是一步復原。取代後會變成空的那幾句不改，下面列出來（要拿掉請用刪除）。
   一般版的「自動修正詞庫」要寫設定檔，預覽版不碰設定檔，所以這裡先不做。
 
+第三階段：「翻譯字幕…」打開翻譯的小視窗（gui_qt/translate_dialog.py）：送出前說會送什麼、可以中途停止、
+翻完整份是一步復原。
+
 清單只是看與選；字幕本身只有播放器那一份（`PlayerPanel.cues`），改過就照 `cuesChanged` 重畫。
 """
 from PySide6.QtCore import QEvent, Qt, QTimer
@@ -72,9 +75,12 @@ class CueListPanel(QWidget):
         self.find_btn = QPushButton("尋找取代")
         self.find_btn.setCheckable(True)
         self.find_btn.setToolTip("Ctrl+F")
+        self.translate_btn = QPushButton("翻譯字幕…")
+        self.translate_btn.setToolTip("用 OpenAI 把整份字幕翻成別的語言（送出前會先說送什麼）")
+        self.translate_dialog = None
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
-        for button in (self.add_btn, self.delete_btn, self.find_btn):
+        for button in (self.add_btn, self.delete_btn, self.find_btn, self.translate_btn):
             buttons.addWidget(button)
         buttons.addStretch(1)
 
@@ -143,6 +149,7 @@ class CueListPanel(QWidget):
         self.add_btn.clicked.connect(self.start_add)
         self.delete_btn.clicked.connect(self.delete_selected)
         self.find_btn.toggled.connect(self._on_find_toggled)
+        self.translate_btn.clicked.connect(self.open_translate)
         self.find_next_btn.clicked.connect(self.find_next)
         self.replace_one_btn.clicked.connect(self.replace_current)
         self.replace_all_btn.clicked.connect(self.replace_all)
@@ -262,6 +269,22 @@ class CueListPanel(QWidget):
         self.note.setText(f"已刪除第 {index + 1} 句（按 Ctrl+Z 救得回來）。")
         return True
 
+    def open_translate(self):
+        """「翻譯字幕…」：編輯框裡改到一半的先套用，再開翻譯的小視窗（翻的是套用後的字幕）。"""
+        self.commit()
+        if not self.player.cues:
+            self.note.setText("還沒有字幕可以翻。")
+            return None
+        if self.translate_dialog is None:
+            from gui_qt.translate_dialog import TranslateDialog
+            self.translate_dialog = TranslateDialog(self.player, self)
+            self.translate_dialog.applied.connect(self.note.setText)
+        self.translate_dialog.status.setText("")
+        self.translate_dialog.progress.setValue(0)
+        self.translate_dialog.refresh()
+        self.translate_dialog.open()
+        return self.translate_dialog
+
     def show_find(self):
         """Ctrl+F：展開尋找取代，游標放到「尋找」。"""
         self.find_btn.setChecked(True)
@@ -375,6 +398,7 @@ class CueListPanel(QWidget):
     def _update_buttons(self):
         has_cues = bool(self.player.cues)
         self.delete_btn.setEnabled(has_cues and self.selected_index() >= 0)
+        self.translate_btn.setEnabled(has_cues)
         has_term = bool(self.find_edit.text())
         for button in (self.find_next_btn, self.replace_one_btn, self.replace_all_btn):
             button.setEnabled(has_cues and has_term)
