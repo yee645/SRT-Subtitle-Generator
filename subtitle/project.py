@@ -12,6 +12,8 @@
 * `cuts`：剪點顯示哪一種（`cutmarks.SOURCES`），以及使用者對剪點的微調（停用、改範圍，照剪點的
   key 記）。剪點本身每次照字幕重算，所以只記微調。
 * `seam`：剪點接縫的轉場（硬切／溶接／黑場與長度）。
+* `style`：字幕樣式（`exporter.clean_style` 的格式：位置、字型、字級、顏色、重點字、動態）。
+  第 2 版才有；空的 `{}`＝專案沒記樣式（第 1 版存的），開的時候沿用目前的樣式。
 
 **路徑**：每個檔案記兩種——相對於專案檔的位置（整個資料夾搬走、換電腦還開得起來）與絕對路徑。
 讀的時候先找相對的、再找絕對的；兩個都找不到的不算錯，列在 `missing` 讓介面說清楚（使用者可能
@@ -33,18 +35,24 @@ import math
 import os
 import tempfile
 
-from . import assemble, cutmarks, picture
+from . import assemble, cutmarks, exporter, picture
 
 FORMAT = "srt-subtitle-generator-project"
-VERSION = 1
+VERSION = 2
 SUFFIX = ".srtproj"
 MAX_BYTES = 20 * 1024 * 1024   # 再大就不是正常的專案檔（字幕幾萬句也才幾 MB）
 MAX_CUES = 50000
 SEAM_TYPES = ("",) + tuple(assemble.TRANSITIONS)
 DEFAULT_SEAM = {"type": "", "duration": 0.5}
 
-# 舊版 → 新一版的轉換：{舊版號: 函式(doc) → 新 doc}。現在只有第 1 版，還沒有要轉的。
-MIGRATIONS = {}
+
+def _v1_to_v2(doc):
+    """第 1 版沒有字幕樣式：記成空的（＝沒記，開的時候沿用目前的樣式，不換成預設）。"""
+    return dict(doc, style={})
+
+
+# 舊版 → 新一版的轉換：{舊版號: 函式(doc) → 新 doc}。
+MIGRATIONS = {1: _v1_to_v2}
 
 
 class ProjectError(ValueError):
@@ -55,7 +63,7 @@ def new_state() -> dict:
     """空的專案狀態（還沒開影片）。"""
     return {"media": "", "adjust": {}, "subtitles": "", "cues": [],
             "tracks": {"overlays": [], "music": []},
-            "cuts": {"source": "", "overrides": {}}, "seam": dict(DEFAULT_SEAM)}
+            "cuts": {"source": "", "overrides": {}}, "seam": dict(DEFAULT_SEAM), "style": {}}
 
 
 # ---- 檢查 ------------------------------------------------------------------
@@ -163,6 +171,15 @@ def _seam(seam):
     return {"type": kind, "duration": duration}
 
 
+def _style(style):
+    """字幕樣式：空的＝沒記；有記就照 exporter.clean_style 整理（缺的補預設、超出範圍的夾回來）。"""
+    if not isinstance(style, dict):
+        raise ProjectError("字幕樣式要是 dict")
+    if not style:
+        return {}
+    return exporter.clean_style(_plain(style, "字幕樣式"))
+
+
 def normalize_state(state) -> dict:
     """檢查一份專案狀態，回傳整理過的新 dict（缺的補預設）；不合理就拋 ProjectError。"""
     if not isinstance(state, dict):
@@ -184,6 +201,7 @@ def normalize_state(state) -> dict:
     out["tracks"] = _tracks(state.get("tracks") or {}, out["media"])
     out["cuts"] = _cuts(state.get("cuts") or {})
     out["seam"] = _seam(state.get("seam") or DEFAULT_SEAM)
+    out["style"] = _style(state.get("style") if state.get("style") is not None else {})
     if (out["tracks"]["overlays"] or out["tracks"]["music"] or out["adjust"]) and not out["media"]:
         raise ProjectError("有素材軌或畫面調整，卻沒有主片")
     return out
@@ -238,6 +256,7 @@ def to_document(state, project_path) -> dict:
         "tracks": tracks,
         "cuts": state["cuts"],
         "seam": state["seam"],
+        "style": state["style"],
     }
 
 
@@ -291,6 +310,7 @@ def from_document(doc, project_path):
         "tracks": resolved,
         "cuts": doc.get("cuts") or {},
         "seam": doc.get("seam") or DEFAULT_SEAM,
+        "style": doc.get("style") if doc.get("style") is not None else {},
     }
     # 字幕檔找不到不要緊（內容在專案裡），只是存字幕時要另外選地方：照樣列出來
     return normalize_state(state), missing

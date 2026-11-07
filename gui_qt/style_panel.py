@@ -11,7 +11,8 @@
 * **垂直位置寫出會放在哪一段**：燒錄只分三段——上段字的頂邊對齊那條線、下段字的底邊對齊那條線、
   中段（34～65）一律放在正中間，拉了也不會動。滑桿旁邊寫出現在是哪一段，免得以為壞了。
 * **只記在這次開啟的設定裡**：Qt 預覽版不寫回 config.json（跟一般版同時開會互相蓋掉）。
-  「還原」回到打開預覽版時的樣式。
+  要留著就存專案：樣式會一起存進專案檔（第五階段），下次開專案就是這組。
+  「還原」回到打開預覽版時的樣式；開過有記樣式的專案，就回到專案裡的樣式。
 
 字型可以從清單選或自己打（按 Enter 或離開就套用）；電腦上沒有的字型，畫面用替代字型畫，
 燒錄時也一樣是替代字型。
@@ -93,10 +94,12 @@ class StyleDialog(QDialog):
         self.dynamic_combo = QComboBox()
         for value, label in DYNAMIC_LABELS:
             self.dynamic_combo.addItem(label, value)
-        self.note = QLabel("改了馬上在播放器畫面上看得到。只記在這次開啟的設定裡（預覽版不寫回 config.json）；"
-                           "要一直用這組樣式，請在一般版調。燒錄時字幕一律水平置中，所以這裡沒有水平位置。")
+        self.note = QLabel("改了馬上在播放器畫面上看得到。存專案時會一起存進專案檔，下次開專案就是這組；"
+                           "預覽版不寫回 config.json，要讓一般版也用這組，請在一般版調。"
+                           "燒錄時字幕一律水平置中，所以這裡沒有水平位置。")
         self.note.setWordWrap(True)
         self.reset_btn = QPushButton("還原成打開時的樣式")
+        self.reset_btn.setToolTip("回到打開預覽版時的樣式；開過有記樣式的專案，就回到專案裡的樣式")
         self.close_btn = QPushButton("關閉")
 
         grid = QGridLayout()
@@ -145,6 +148,7 @@ class StyleDialog(QDialog):
         self.dynamic_combo.currentIndexChanged.connect(self._send)
         self.reset_btn.clicked.connect(self.reset)
         self.close_btn.clicked.connect(self.close)
+        player.styleApplied.connect(self._on_project_style)
         self.fill(self.current())
 
     # ---- 對外 ----------------------------------------------------------
@@ -205,6 +209,11 @@ class StyleDialog(QDialog):
         """跳出選色視窗；回傳 "#RRGGBB" 或 None（取消）。測試換掉這一個。"""
         color = QColorDialog.getColor(QColor(current), self, f"選{title}")
         return color.name() if color.isValid() else None
+
+    def _on_project_style(self):
+        """開了有記樣式的專案：「還原」改成回到專案裡的樣式，控件照它擺。"""
+        self.opened_with = self.current()
+        self.fill(self.opened_with)
 
     def _send(self, *_args):
         if self._filling:
