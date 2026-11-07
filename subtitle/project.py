@@ -46,7 +46,6 @@ SEAM_TYPES = ("",) + tuple(assemble.TRANSITIONS)
 DEFAULT_SEAM = {"type": "", "duration": 0.5}
 
 
-
 def _v1_to_v2(doc):
     """第 1 版沒有字幕樣式：記成空的（＝沒記，開的時候沿用目前的樣式，不換成預設）。"""
     return dict(doc, style={})
