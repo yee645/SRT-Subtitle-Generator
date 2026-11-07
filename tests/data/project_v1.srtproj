@@ -1,0 +1,61 @@
+{
+  "format": "srt-subtitle-generator-project",
+  "version": 1,
+  "media": {
+    "file": {
+      "absolute": "/home/me/影片/訪談/訪談.mp4",
+      "path": "訪談.mp4"
+    },
+    "adjust": {
+      "brightness": 0.1
+    }
+  },
+  "subtitles": {
+    "file": {
+      "absolute": "/home/me/影片/訪談/訪談.srt",
+      "path": "訪談.srt"
+    },
+    "cues": [
+      {
+        "start": 0.5,
+        "end": 2.0,
+        "text": "第一句"
+      },
+      {
+        "start": 3.0,
+        "end": 5.5,
+        "text": "第二句"
+      }
+    ]
+  },
+  "tracks": {
+    "overlays": [],
+    "music": [
+      {
+        "path": {
+          "absolute": "/home/me/影片/訪談/素材/配樂.wav",
+          "path": "素材/配樂.wav"
+        },
+        "at": 0.0,
+        "in": 0.0,
+        "out": 30.0,
+        "length": 30.0,
+        "volume": 0.35,
+        "loop": false,
+        "duck": true
+      }
+    ]
+  },
+  "cuts": {
+    "source": "jumpcut",
+    "overrides": {
+      "jumpcut:2.650-5.350": {
+        "enabled": false
+      }
+    }
+  },
+  "seam": {
+    "type": "dissolve",
+    "duration": 0.8
+  }
+}

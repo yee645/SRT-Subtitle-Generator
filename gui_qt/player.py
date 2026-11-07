@@ -98,7 +98,7 @@ from subtitle import cueedit, cutmarks, picture
 from subtitle import project as project_mod
 from subtitle import proxy as proxy_mod
 from subtitle.cuetime import CueIndex
-from subtitle.exporter import burn_layout, dynamic_frame, split_emphasis_segments
+from subtitle.exporter import burn_layout, clean_style, dynamic_frame, split_emphasis_segments
 from subtitle.importer import load_subtitle_file
 
 
@@ -235,6 +235,7 @@ class PlayerPanel(QWidget):
 
     # 字幕清單換了或改過（載入、拖時間、改文字、復原）：逐句校對的清單照這個重畫
     cuesChanged = Signal()
+    styleApplied = Signal()  # 開專案換了字幕樣式（樣式的小視窗開著就跟著換）
 
     def __init__(self, parent=None, style=None, config=None):
         super().__init__(parent)
@@ -580,10 +581,11 @@ class PlayerPanel(QWidget):
         return data
 
     def set_style(self, style):
-        """換字幕樣式（config 的 subtitle_style）；畫面上那句立刻重畫。"""
+        """換字幕樣式（config 的 subtitle_style）；畫面上那句立刻重畫。樣式存在專案裡：狀態列跟著更新。"""
         self._style = dict(style or {})
         self._show_at(self.player.position())  # 動態模式可能換了：照新模式重算這一刻
         self._place_subtitle()
+        self._refresh_info()
 
     def show_cut_marks(self, source):
         """選要畫哪一種剪點（cutmarks.SOURCES 之一；空字串＝不顯示）。"""
@@ -1058,6 +1060,7 @@ class PlayerPanel(QWidget):
             "cuts": {"source": self.cut_combo.currentData() or "",
                      "overrides": copy.deepcopy(self.cut_overrides)},
             "seam": {"type": self.seam_combo.currentData() or "", "duration": round(self.seam_spin.value(), 3)},
+            "style": clean_style(self._style),
         }
 
     def _normalized_project(self):
@@ -1143,7 +1146,10 @@ class PlayerPanel(QWidget):
         return True
 
     def apply_project(self, state):
-        """照專案狀態（subtitle/project.py 的格式）還原播放器：影片、字幕、調整、素材軌、剪點、接縫。"""
+        """
+        照專案狀態（subtitle/project.py 的格式）還原播放器：影片、字幕、調整、素材軌、剪點、接縫、字幕
+        樣式。專案沒記樣式（第 1 版存的）就沿用目前的。樣式只記在這次開啟的設定裡，不寫回 config.json。
+        """
         state = project_mod.normalize_state(state)
         self.open_video(state["media"])  # 會清掉上一支的素材與調整
         self.set_cues(state["cues"], state["subtitles"])
@@ -1162,6 +1168,10 @@ class PlayerPanel(QWidget):
         self.seam_spin.setValue(seam["duration"])
         self.seam_combo.setCurrentIndex(self.seam_combo.findData(seam["type"]))
         self.show_cut_marks(state["cuts"]["source"])
+        if state["style"]:
+            self._config["subtitle_style"] = dict(state["style"])
+            self.set_style(state["style"])
+            self.styleApplied.emit()
         self.refresh_tracks()
         self._refresh_info()
 

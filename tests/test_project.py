@@ -10,12 +10,17 @@
    - 兩個都找不到列在 missing，不算錯。
 3. 版本：
    - 較新的不硬讀。
-   - 較舊的照 MIGRATIONS 一步步升上來（用假的第 2 版驗這條路）。
+   - 較舊的照 MIGRATIONS 一步步升上來（用假的第 3 版驗這條路）。
    - 格式不對、不是 JSON、太大，都說清楚。
 4. 檢查：不合理的內容都拋 ProjectError，說是哪一項（素材軌照 assemble、調整照 picture 的規則）。
 5. 寫入：先寫暫存檔再換名，寫到一半失敗時原本的專案檔不動、也不留暫存檔；沒副檔名補 .srtproj。
 6. 真的照專案輸出：讀回來的素材軌與調整交給 assemble 輸出，成品跟直接用原本的狀態輸出一樣大、
    一樣長。
+7. 字幕樣式（第 11 項第五階段，格式第 2 版）：
+   - 存了再讀回來一樣（整理過：顏色大寫、超出範圍的夾回來）；沒記樣式＝空的。
+   - 真的第 1 版專案檔（tests/data/project_v1.srtproj，用第 1 版的程式存的）照樣打得開：
+     其他東西都在、樣式是空的（＝沿用目前的）；再存一次就是第 2 版。
+   - 樣式不是 dict、有存不進檔案的值：拋 ProjectError。
 """
 import json
 import os
@@ -136,8 +141,10 @@ check("格式名稱不對：不是本程式的專案檔", "不是本程式的專
                                                                       dict(doc, format="other"), saved) or ""))
 check("版本號不合理", "版本不合理" in (error_of(project.from_document, dict(doc, version="1"), saved) or "")
       and "版本不合理" in (error_of(project.from_document, dict(doc, version=True), saved) or ""))
-# 假裝現在是第 2 版：第 1 版的檔要照 MIGRATIONS 升上來
+# 假裝現在是第 3 版（換掉真的第 1→2 步）：第 1 版的檔要照 MIGRATIONS 一步步升上來
 real_version, real_migrations = project.VERSION, dict(project.MIGRATIONS)
+v1doc = {k: v for k, v in doc.items() if k != "style"}
+v1doc["version"] = 1
 steps = []
 
 
@@ -154,15 +161,15 @@ def two_to_three(old):
 project.VERSION = 3
 project.MIGRATIONS[1] = one_to_two
 project.MIGRATIONS[2] = two_to_three
-upgraded_doc = project.upgrade(dict(doc))
-upgraded, _m = project.from_document(dict(doc), saved)
+upgraded_doc = project.upgrade(dict(v1doc))
+upgraded, _m = project.from_document(dict(v1doc), saved)
 check("較舊的版本照 MIGRATIONS 一步步升上來（每一步拿到的版本號對、最後記成現在的版本）",
       steps == [1, 2, 1, 2] and upgraded_doc["version"] == 3 and upgraded["seam"]["duration"] == 2.0, str(steps))
 del project.MIGRATIONS[2]
-check("缺中間一步：說不知道怎麼升", "不知道怎麼把第 2 版" in (error_of(project.from_document, dict(doc), saved) or ""))
+check("缺中間一步：說不知道怎麼升", "不知道怎麼把第 2 版" in (error_of(project.from_document, dict(v1doc), saved) or ""))
 project.VERSION = 2
 del project.MIGRATIONS[1]
-check("缺一步升級：說不知道怎麼升", "不知道怎麼把第 1 版" in (error_of(project.from_document, dict(doc), saved) or ""))
+check("缺一步升級：說不知道怎麼升", "不知道怎麼把第 1 版" in (error_of(project.from_document, dict(v1doc), saved) or ""))
 project.VERSION, project.MIGRATIONS = real_version, real_migrations
 
 junk = os.path.join(tmp, "壞的.srtproj")
@@ -284,6 +291,59 @@ if shutil.which("ffmpeg"):
           f"{probe(a)} {probe(b)}")
 else:
     print("SKIP 沒有 ffmpeg：略過照專案真的輸出")
+
+# ----- 7. 字幕樣式（格式第 2 版） -----
+from subtitle import exporter  # noqa: E402
+
+check("現在是第 2 版、第 1 版有升級的那一步", project.VERSION == 2 and 1 in project.MIGRATIONS)
+check("沒記樣式：存進檔案是空的、讀回來也是空的", doc["style"] == {} and loaded["style"] == {})
+given_style = {"position_y": 0.12, "font_size": 200, "text_color": "#ff0000", "emphasis_enabled": True,
+               "emphasis_words": " 剪輯 ", "dynamic_mode": "karaoke", "future_option": "keep"}
+styled = project.save(dict(state, style=given_style), os.path.join(work, "有樣式"))
+with open(styled, encoding="utf-8") as fh:
+    styled_doc = json.load(fh)
+styled_state, _m = project.load(styled)
+want_style = exporter.clean_style(given_style)
+check("樣式存進檔案（整理過：字級夾到 96、顏色大寫、不認得的欄位留著）",
+      styled_doc["version"] == 2 and styled_doc["style"] == want_style and want_style["font_size"] == 96
+      and want_style["text_color"] == "#FF0000" and want_style["future_option"] == "keep", str(styled_doc["style"]))
+check("樣式讀回來一樣（其他東西照舊）", styled_state["style"] == want_style
+      and dict(styled_state, style={}) == loaded, str(styled_state["style"]))
+check("只給一部分的樣式：缺的補預設", project.normalize_state(dict(state, style={"font_size": 40}))["style"]
+      == dict(exporter.STYLE_DEFAULTS, font_size=40))
+check("樣式不是 dict（含空字串、空清單）：說清楚", "字幕樣式要是 dict" in (error_of(project.normalize_state, dict(state, style="大字")) or "")
+      and "字幕樣式要是 dict" in (error_of(project.normalize_state, dict(state, style=[1])) or "")
+      and "字幕樣式要是 dict" in (error_of(project.normalize_state, dict(state, style="")) or "")
+      and "字幕樣式要是 dict" in (error_of(project.normalize_state, dict(state, style=[])) or ""))
+check("樣式有存不進檔案的值：說清楚", "字幕樣式" in (error_of(project.normalize_state,
+                                                          dict(state, style={"font_size": object()})) or ""))
+check("檔案裡的樣式不是 dict：說清楚", "字幕樣式要是 dict" in (error_of(project.from_document,
+                                                              dict(styled_doc, style="大字"), styled) or ""))
+
+# 真的第 1 版專案檔：用第 1 版的程式存的（絕對路徑換成別台電腦的，照相對路徑找回來）
+v1_dir = os.path.join(tmp, "第一版")
+os.makedirs(os.path.join(v1_dir, "素材"))
+for name in ("訪談.mp4", "訪談.srt", os.path.join("素材", "配樂.wav")):
+    with open(os.path.join(v1_dir, name), "wb") as fh:
+        fh.write(b"x")
+v1_path = os.path.join(v1_dir, "第一版專案.srtproj")
+shutil.copy(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "project_v1.srtproj"), v1_path)
+with open(v1_path, encoding="utf-8") as fh:
+    v1_raw = json.load(fh)
+v1_state, v1_missing = project.load(v1_path)
+check("真的第 1 版檔：檔案本身是第 1 版、沒有樣式", v1_raw["version"] == 1 and "style" not in v1_raw)
+check("真的第 1 版檔：照樣打得開、檔案都找到", v1_missing == [] and v1_state["media"] == os.path.join(v1_dir, "訪談.mp4")
+      and v1_state["tracks"]["music"][0]["path"] == os.path.join(v1_dir, "素材", "配樂.wav"), str(v1_missing))
+check("真的第 1 版檔：字幕、調整、剪點、接縫都在", [c["text"] for c in v1_state["cues"]] == ["第一句", "第二句"]
+      and v1_state["adjust"] == {"brightness": 0.1}
+      and v1_state["cuts"]["overrides"] == {"jumpcut:2.650-5.350": {"enabled": False}}
+      and v1_state["seam"] == {"type": "dissolve", "duration": 0.8})
+check("真的第 1 版檔：樣式是空的（＝沿用目前的，不換成預設）", v1_state["style"] == {})
+resaved = project.save(dict(v1_state, style={"font_size": 30}), v1_path)
+with open(resaved, encoding="utf-8") as fh:
+    resaved_doc = json.load(fh)
+check("第 1 版的專案再存一次：變成第 2 版、記著樣式", resaved_doc["version"] == 2
+      and resaved_doc["style"]["font_size"] == 30 and project.load(resaved)[0]["cues"] == v1_state["cues"])
 
 print()
 if failures:
