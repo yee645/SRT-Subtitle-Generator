@@ -196,7 +196,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install PySide6 and PyInstaller
-        run: pip install pyinstaller PySide6
+        run: pip install pyinstaller PySide6 openai
 
       - name: Build (onedir)
         run: pyinstaller --noconfirm --onedir --windowed --paths . --name SRT-Subtitle-Generator-Qt packaging/qt_entry.py
