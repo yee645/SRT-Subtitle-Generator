@@ -1303,6 +1303,21 @@ class PlayerPanel(QWidget):
             self._after_edit()
         return count, changed, emptied
 
+    def apply_cues(self, new_cues):
+        """
+        整份換成 new_cues（句數一樣、只換內容，例如翻譯完的結果），整批是一步復原。
+        回傳改到幾句；句數不一樣拋 ValueError、什麼都不動。
+        """
+        if len(new_cues) != len(self.cues):
+            raise ValueError("句數對不上，沒有套用")
+        changed = [i for i, (old, new) in enumerate(zip(self.cues, new_cues)) if old != new]
+        if changed:
+            self.history.record_cues(changed, [self.cues[i] for i in changed], [new_cues[i] for i in changed])
+            self.cues = [dict(c) for c in new_cues]
+            self.timeline.set_cues(self.cues, keep_selection=True)
+            self._after_edit()
+        return len(changed)
+
     def undo(self):
         self._step(self.history.undo(self.cues))
 

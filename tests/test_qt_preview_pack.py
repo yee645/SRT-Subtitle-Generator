@@ -201,6 +201,8 @@ def _run_lines(text):
 check("Release 的 Qt 打包與 PR 上驗過的 qt-preview.yml 逐字相同（不會出現兩套）",
       len(_run_lines(qt_job)) == 3 and _run_lines(qt_job) == _run_lines(wf),
       f"{_run_lines(qt_job)} != {_run_lines(wf)}")
+check("Qt 打包有裝 openai（逐句校對的「翻譯字幕」要用；沒裝的話打包版只會叫使用者 pip install）",
+      all("pip install pyinstaller PySide6 openai" in text for text in (qt_job, wf)))
 check("qt_entry 直接進 gui_qt（不經 main.py 的 Tk 預設）",
       "from gui_qt.app import main" in _read("packaging/qt_entry.py")
       and "gui.app" not in _read("packaging/qt_entry.py"))

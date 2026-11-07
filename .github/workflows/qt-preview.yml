@@ -36,7 +36,7 @@ jobs:
 
       - name: Install PySide6 and PyInstaller
         # QtMultimedia 在 PySide6-Addons，要裝完整的 PySide6（第 0 項實測）。
-        run: pip install pyinstaller PySide6
+        run: pip install pyinstaller PySide6 openai
 
       - name: Build (onedir)
         # onedir：啟動 0.3 秒 vs onefile 2.6 秒，zip 後下載量相同（第 0 項實測）。
