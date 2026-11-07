@@ -297,6 +297,61 @@ def _ass_margin_v(position_y: float, play_y: int) -> int:
     return max(int(play_y * (1.0 - position_y)), 10)
 
 
+# 字幕樣式的預設值與範圍（與 config.py 的 _DEFAULT_STYLE、一般版樣式面板的範圍相同；
+# subtitle/ 不讀 config，所以這裡留一份，tests/test_stylecheck.py 釘住兩邊一樣）。
+STYLE_DEFAULTS = {
+    "position_x": 0.5, "position_y": 0.88, "font_family": "Microsoft JhengHei", "font_size": 26,
+    "text_color": "#FFFFFF", "stroke_color": "#000000", "stroke_width": 2,
+    "emphasis_enabled": False, "emphasis_color": "#FFD700", "emphasis_words": "", "dynamic_mode": "off",
+}
+FONT_SIZE_RANGE = (10, 96)
+STROKE_WIDTH_RANGE = (0, 6)
+DYNAMIC_MODES = ("off", "karaoke", "word")
+_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def clean_style(style: Mapping | None) -> dict:
+    """
+    整理一份字幕樣式：缺的補預設、超出範圍的夾回來、看不懂的（顏色不是 #RRGGBB、動態模式不認得…）
+    換回預設。不認得的欄位原樣留著（一般版之後可能多加的設定不會被洗掉）。回傳新 dict。
+    """
+    style = dict(style or {})
+    out = dict(style)
+    out.update(STYLE_DEFAULTS)
+
+    def number(key, low, high, kind):
+        try:
+            value = kind(float(style[key]))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return
+        if value == value:  # 不是 NaN
+            out[key] = max(low, min(value, high))
+
+    number("position_x", 0.0, 1.0, float)
+    number("position_y", 0.0, 1.0, float)
+    number("font_size", *FONT_SIZE_RANGE, int)
+    number("stroke_width", *STROKE_WIDTH_RANGE, int)
+    family = style.get("font_family")
+    if isinstance(family, str) and family.strip():
+        out["font_family"] = family.strip()
+    for key in ("text_color", "stroke_color", "emphasis_color"):
+        value = style.get(key)
+        if isinstance(value, str) and _COLOR.match(value.strip()):
+            out[key] = value.strip().upper()
+    if "emphasis_enabled" in style:
+        out["emphasis_enabled"] = bool(style["emphasis_enabled"])
+    if isinstance(style.get("emphasis_words"), str):
+        out["emphasis_words"] = style["emphasis_words"].strip()
+    if style.get("dynamic_mode") in DYNAMIC_MODES:
+        out["dynamic_mode"] = style["dynamic_mode"]
+    return out
+
+
+def vertical_zone(position_y: float) -> str:
+    """燒錄時字幕會放在哪一段："top"（頂邊對齊）／"middle"（一律正中間）／"bottom"（底邊對齊）。"""
+    return {8: "top", 5: "middle", 2: "bottom"}[_ass_alignment(position_y)]
+
+
 def burn_layout(style: Mapping | None, frame_w: float, frame_h: float) -> dict:
     """
     燒錄時字幕在一個 frame_w×frame_h 的畫面上會長什麼樣、放在哪。
