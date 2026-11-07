@@ -22,6 +22,8 @@
 第三階段：「翻譯字幕…」打開翻譯的小視窗（gui_qt/translate_dialog.py）：送出前說會送什麼、可以中途停止、
 翻完整份是一步復原。
 
+第四階段：「字幕樣式…」打開樣式的小視窗（gui_qt/style_panel.py），改了播放器上立刻看得到。
+
 清單只是看與選；字幕本身只有播放器那一份（`PlayerPanel.cues`），改過就照 `cuesChanged` 重畫。
 """
 from PySide6.QtCore import QEvent, Qt, QTimer
@@ -78,9 +80,12 @@ class CueListPanel(QWidget):
         self.translate_btn = QPushButton("翻譯字幕…")
         self.translate_btn.setToolTip("用 OpenAI 把整份字幕翻成別的語言（送出前會先說送什麼）")
         self.translate_dialog = None
+        self.style_btn = QPushButton("字幕樣式…")
+        self.style_btn.setToolTip("字型、字級、顏色、上下位置、重點字、動態字幕；播放器上立刻看得到")
+        self.style_dialog = None
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
-        for button in (self.add_btn, self.delete_btn, self.find_btn, self.translate_btn):
+        for button in (self.add_btn, self.delete_btn, self.find_btn, self.translate_btn, self.style_btn):
             buttons.addWidget(button)
         buttons.addStretch(1)
 
@@ -150,6 +155,7 @@ class CueListPanel(QWidget):
         self.delete_btn.clicked.connect(self.delete_selected)
         self.find_btn.toggled.connect(self._on_find_toggled)
         self.translate_btn.clicked.connect(self.open_translate)
+        self.style_btn.clicked.connect(self.open_style)
         self.find_next_btn.clicked.connect(self.find_next)
         self.replace_one_btn.clicked.connect(self.replace_current)
         self.replace_all_btn.clicked.connect(self.replace_all)
@@ -284,6 +290,16 @@ class CueListPanel(QWidget):
         self.translate_dialog.refresh()
         self.translate_dialog.open()
         return self.translate_dialog
+
+    def open_style(self):
+        """「字幕樣式…」：開樣式的小視窗（不擋住播放器，可以邊播邊調）。"""
+        if self.style_dialog is None:
+            from gui_qt.style_panel import StyleDialog
+            self.style_dialog = StyleDialog(self.player, self)
+        self.style_dialog.fill(self.style_dialog.current())
+        self.style_dialog.show()
+        self.style_dialog.raise_()
+        return self.style_dialog
 
     def show_find(self):
         """Ctrl+F：展開尋找取代，游標放到「尋找」。"""
