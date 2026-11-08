@@ -26,6 +26,16 @@ import time
 
 from .media import probe_duration
 
+# 轉寫語言（跟一般版「轉寫設定」的選單同一份代碼）→ 給人看的名稱。
+LANGUAGE_LABELS = {
+    "auto": "自動偵測",
+    "zh-TW": "中文（轉成繁體）",
+    "zh": "中文（不轉繁體）",
+    "en": "英文",
+    "ja": "日文",
+    "ko": "韓文",
+}
+
 # 各 Whisper 模型在 CPU 上對「實時音訊長度」的處理時間倍數估算值，
 # 用於時間軸式假進度條（無法直接取得 whisper 內部進度）。
 _MODEL_TIME_FACTOR = {

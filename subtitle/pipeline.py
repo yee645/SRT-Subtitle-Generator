@@ -90,6 +90,61 @@ def _sub_report(report: Optional[ReportCallback], low: float,
     return wrapped
 
 
+def generate_cues(media_path: str, config: dict, mode: str = "transcribe", transcript: str = "",
+                  report: Optional[ReportCallback] = None):
+    """
+    只生成字幕、不匯出：語音轉寫（或文字稿對齊）→ 智慧斷句 → 套用自動修正詞庫。
+
+    一鍵流程與 3.0 的「生成字幕」共用這一段，兩邊生出來的字幕一樣。回傳 (字幕, 自動修正了幾處)；
+    什麼都沒生出來拋 RuntimeError。文字稿對齊時 transcript 不能是空的（找 sidecar 是呼叫端的事）。
+    """
+    if mode == "align":
+        if not transcript.strip():
+            raise ValueError("「文字稿對齊」需要文字稿。")
+        cues = align_transcript(media_path, transcript, config, report)
+    else:
+        words = transcribe(media_path, config, report)
+        if report:
+            report("正在進行智慧斷句...", 0.97)
+        cues = build_cues_from_words(words, config.get("segmentation", {}))
+
+    if not cues:
+        raise RuntimeError("未能產生任何字幕內容。")
+
+    # 套用自動修正詞庫（使用者存過的錯字規則，每次生成自動修）。
+    from .textedit import apply_corrections
+    cues, corrected = apply_corrections(cues, config.get("corrections"))
+    if corrected and report:
+        report(f"已自動修正 {corrected} 處慣性錯字", 1.0)
+    return cues, corrected
+
+
+def generation_plan(config: dict, mode: str = "transcribe") -> dict:
+    """
+    生成字幕前要讓使用者知道的事（照設定判斷，不碰網路）：
+
+    {"api": 是否送到 OpenAI, "has_key": 有沒有金鑰, "model": 本地模型, "language": 語言代碼,
+     "language_label": 語言的中文名稱, "sends": [會送出去的東西]}
+
+    API 模式會送出影片的聲音；文字稿對齊在 API 模式下，文字稿會當提示詞一起送。本地模式什麼都不送。
+    """
+    from .transcriber import LANGUAGE_LABELS  # 用到才載入：舊測試會把 transcriber 換成只有 transcribe 的替身
+
+    cfg = config.get("transcription", {}) or {}
+    api = bool(cfg.get("use_api"))
+    language = str(cfg.get("language") or "auto")
+    sends = []
+    if api:
+        sends.append("影片的聲音")
+        if mode == "align":
+            sends.append("文字稿（當提示詞，幫辨識用對字）")
+        elif str(cfg.get("prompt") or "").strip():
+            sends.append("轉寫設定裡的提示詞")
+    return {"api": api, "has_key": bool(str(cfg.get("api_key") or "").strip()),
+            "model": str(cfg.get("model") or "base"), "language": language,
+            "language_label": LANGUAGE_LABELS.get(language, language), "sends": sends}
+
+
 def run_pipeline(
     media_path: str,
     config: dict,
@@ -121,33 +176,16 @@ def run_pipeline(
     # 進度區間分配：燒錄通常最耗時，有燒錄時生成占前半、燒錄占後半。
     generate_high = 0.5 if burn else 0.93
 
-    if mode == "align":
-        if not transcript.strip():
-            sidecar = find_sidecar_transcript(media_path)
-            if not sidecar:
-                raise ValueError(
-                    f"「文字稿對齊」需要文字稿：請貼上文字稿，或在媒體檔旁放置同名的"
-                    f"「{os.path.splitext(os.path.basename(media_path))[0]}.txt」。")
-            with open(sidecar, "r", encoding="utf-8") as fp:
-                transcript = fp.read()
-        cues = align_transcript(
-            media_path, transcript, config,
-            _sub_report(report, 0.0, generate_high))
-    else:
-        words = transcribe(
-            media_path, config, _sub_report(report, 0.0, generate_high))
-        if report:
-            report("正在進行智慧斷句...", generate_high)
-        cues = build_cues_from_words(words, config.get("segmentation", {}))
-
-    if not cues:
-        raise RuntimeError("未能產生任何字幕內容。")
-
-    # 套用自動修正詞庫（使用者存過的錯字規則，每次生成自動修）。
-    from .textedit import apply_corrections
-    cues, corrected = apply_corrections(cues, config.get("corrections"))
-    if corrected and report:
-        report(f"已自動修正 {corrected} 處慣性錯字", generate_high)
+    if mode == "align" and not transcript.strip():
+        sidecar = find_sidecar_transcript(media_path)
+        if not sidecar:
+            raise ValueError(
+                f"「文字稿對齊」需要文字稿：請貼上文字稿，或在媒體檔旁放置同名的"
+                f"「{os.path.splitext(os.path.basename(media_path))[0]}.txt」。")
+        with open(sidecar, "r", encoding="utf-8") as fp:
+            transcript = fp.read()
+    cues, _corrected = generate_cues(media_path, config, mode, transcript,
+                                     _sub_report(report, 0.0, generate_high))
 
     exports, burned = export_and_burn(
         cues, media_path, config, _sub_report(report, generate_high, 1.0))

@@ -163,6 +163,7 @@ class CueListPanel(QWidget):
         self.find_edit.textChanged.connect(self._update_buttons)
         self.table.itemSelectionChanged.connect(self._on_selection)
         player.cuesChanged.connect(self.refresh)
+        player.cuesGenerated.connect(self.note.setText)
         player.timeline.cueSelected.connect(self._on_timeline_cue)
         self.refresh()
 
