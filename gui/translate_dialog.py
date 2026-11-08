@@ -17,9 +17,9 @@ from tkinter import filedialog, messagebox, ttk
 
 from config import save_config
 from gui.error_dialog import show_friendly_error
-from subtitle.multilang import (build_language_pack, format_pack_report,
-                                pack_path, parse_languages,
-                                resolve_multilang_settings)
+from subtitle.multilang import (format_pack_report, parse_languages,
+                                resolve_multilang_settings,
+                                write_language_pack)
 from subtitle.translator import (LANGUAGE_LABELS, resolve_translate_settings,
                                  translate_cues)
 
@@ -226,28 +226,21 @@ class TranslateDialog(tk.Toplevel):
     def _pack_worker(self, cues, languages, api_key, out_dir, batch_size,
                      dedupe):
         """背景執行緒：逐語言翻譯並各存一個單語 SRT。"""
-        from subtitle.exporter import export
-        pack, paths, failed = {}, {}, {}
         try:
             def report(ratio, message):
                 self.result_queue.put(("status", (message, ratio)))
-            for language in languages:
-                try:
-                    one = build_language_pack(
-                        cues, [language], api_key, batch_size=batch_size,
-                        dedupe=dedupe, progress_cb=report)
-                    pack[language] = one[language]
-                    target = pack_path(
-                        self.media_path or "字幕", language, out_dir)
-                    export(pack[language], target,
-                           self.config_data.get("subtitle_style"))
-                    paths[language] = target
-                except Exception as exc:   # 單一語言失敗不中斷其他語言。
-                    logger.exception("多語字幕包：%s 失敗", language)
-                    failed[language] = str(exc)
+            # 逐語言翻譯、各存一個單語 SRT（跟 CLI、3.0 共用）；單一語言失敗不中斷其他語言。
+            result = write_language_pack(
+                cues, languages, api_key, self.media_path or "字幕", out_dir,
+                batch_size=batch_size, dedupe=dedupe,
+                style=self.config_data.get("subtitle_style"),
+                progress_cb=report)
+            for language, reason in result["failed"].items():
+                logger.error("多語字幕包：%s 失敗：%s", language, reason)
             self.result_queue.put(
-                ("pack_done", format_pack_report(pack, languages, paths,
-                                                 failed)))
+                ("pack_done", format_pack_report(
+                    result["pack"], languages, result["paths"],
+                    result["failed"])))
         except Exception as exc:
             logger.exception("多語字幕包失敗")
             self.result_queue.put(("error", exc))

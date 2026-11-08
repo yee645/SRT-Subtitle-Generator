@@ -142,9 +142,9 @@ from subtitle.clipplan import (format_clip_plan_report, plan_clips,
                                resolve_clipplan_settings)
 from subtitle.beatsync import (analyze_beats, format_beat_report,
                                resolve_beatsync_settings, snap_times)
-from subtitle.multilang import (build_language_pack, format_pack_report,
-                                pack_path, parse_languages,
-                                resolve_multilang_settings)
+from subtitle.multilang import (format_pack_report, parse_languages,
+                                resolve_multilang_settings,
+                                write_language_pack)
 from subtitle.translator import resolve_translate_settings
 from subtitle.shorts import cut_vertical_clip, resolve_shorts_settings
 from subtitle.segmenter import build_cues_from_words
@@ -1145,8 +1145,6 @@ def _export_multilang(media_path: str, cues: list, config: dict,
     翻譯本身呼叫既有的 translator（透過 multilang），本函式只負責
     挑語言、寫檔與回報；某一個語言失敗不會中斷其他語言。
     """
-    from subtitle.exporter import export
-
     settings = resolve_multilang_settings(config)
     source_language = (config.get("transcription", {})
                        .get("language", "") or "").strip()
@@ -1167,22 +1165,14 @@ def _export_multilang(media_path: str, cues: list, config: dict,
             "多語字幕包需要 OpenAI API 金鑰（於「轉寫設定」填入）。")
     batch_size = resolve_translate_settings(config)["batch_size"]
 
-    pack, paths, failed = {}, {}, {}
-    for language in languages:
-        try:
-            report(f"翻譯成 {language}...")
-            one = build_language_pack(
-                cues, [language], api_key, batch_size=batch_size,
-                dedupe=settings["dedupe"])
-            pack[language] = one[language]
-            target = pack_path(media_path, language, out_dir)
-            export(pack[language], target, config.get("subtitle_style"))
-            paths[language] = target
-        except Exception as exc:      # 單一語言失敗不影響其他語言。
-            failed[language] = str(exc)
-
-    print(format_pack_report(pack, languages, paths, failed), flush=True)
-    return list(paths.values())
+    # 逐語言翻譯、各存一個單語 SRT（一般版與 3.0 共用同一段）；某一個語言失敗不影響其他語言。
+    result = write_language_pack(
+        cues, languages, api_key, media_path, out_dir, batch_size=batch_size,
+        dedupe=settings["dedupe"], style=config.get("subtitle_style"),
+        progress_cb=lambda _ratio, message: report(message))
+    print(format_pack_report(result["pack"], languages, result["paths"],
+                             result["failed"]), flush=True)
+    return list(result["paths"].values())
 
 
 def _export_shorts(media_path: str, items: list, words: list,
