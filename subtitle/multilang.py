@@ -241,3 +241,67 @@ def format_pack_report(pack: dict, languages: list, paths: Optional[dict] = None
     if failed:
         lines.append("失敗的語言不影響其他語言的輸出，可單獨重跑。")
     return "\n".join(lines)
+
+
+class PackStopped(Exception):
+    """使用者按了停止：在下一批送出前丟出來（write_language_pack 接住，已存好的語言照樣留著）。"""
+
+
+def pack_summary(cues: list, languages: list, dedupe: bool = True) -> dict:
+    """
+    按下「輸出多語字幕包」會送去翻譯的是什麼：只有字幕文字（不含時間、檔名、影片或聲音）。
+
+    回傳 {"lines": 每個語言送幾句（去重後）, "chars": 每個語言送幾個字（不算換行）,
+    "languages": 幾個語言, "total_chars": 全部加起來幾個字}。介面在送出前寫給使用者看。
+    """
+    texts = [str(cue.get("text") or "") for cue in cues or []]
+    sent = dedupe_texts(texts)[0] if dedupe else texts
+    sent = [t for t in sent if t.strip()]
+    chars = sum(len(t.replace("\n", "")) for t in sent)
+    count = len(languages or [])
+    return {"lines": len(sent), "chars": chars, "languages": count, "total_chars": chars * count}
+
+
+def write_language_pack(cues: list, languages: list, api_key: str, media_path: str, out_dir: str,
+                        batch_size: int = 30, dedupe: bool = True, style: Optional[dict] = None,
+                        progress_cb: Optional[Callable] = None) -> dict:
+    """
+    逐語言翻譯並各存一個單語 SRT（`pack_path` 的檔名），一般版與 3.0 共用。
+
+    回傳 {"pack": {語言: cue 清單}, "paths": {語言: 檔案}, "failed": {語言: 原因},
+    "stopped": 是否中途停止, "skipped": [停止後沒做的語言]}。
+
+    - 某一個語言失敗不中斷其他語言。
+    - progress_cb 丟出 PackStopped（使用者按停止）：正在翻的那個語言不存，後面的不做；
+      已經存好的檔照樣留著，呼叫端照 paths 說清楚存了哪幾個。
+    """
+    from .exporter import export
+
+    result = {"pack": {}, "paths": {}, "failed": {}, "stopped": False, "skipped": []}
+    languages = list(languages or [])
+    total = len(languages)
+    for at, language in enumerate(languages):
+        label = language_label(language)
+
+        def report(ratio, message, _at=at, _label=label):
+            # 整批的進度：第幾個語言＋這個語言翻到哪
+            if callable(progress_cb):
+                progress_cb((_at + max(0.0, min(float(ratio), 1.0))) / max(total, 1),
+                            f"[{_at + 1}/{total}] {_label}：{message}")
+
+        try:
+            report(0.0, "開始翻譯…")
+            cues_out = translate_to_language(cues, language, api_key, batch_size=batch_size,
+                                             dedupe=dedupe, progress_cb=report)
+            target = pack_path(media_path or "字幕", language, out_dir)
+            export(cues_out, target, style)
+            result["pack"][language] = cues_out
+            result["paths"][language] = target
+            report(1.0, f"存好 {os.path.basename(target)}")
+        except PackStopped:
+            result["stopped"] = True
+            result["skipped"] = [lang for lang in languages[at:] if lang not in result["paths"]]
+            break
+        except Exception as exc:  # noqa: BLE001 —— 單一語言失敗不中斷其他語言
+            result["failed"][language] = str(exc)
+    return result

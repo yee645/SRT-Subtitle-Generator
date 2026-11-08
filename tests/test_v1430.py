@@ -215,9 +215,64 @@ check("cli 匯入了 resolve_translate_settings（否則會 NameError）",
 
 src = inspect.getsource(cli._export_multilang)
 check("CLI 沒有金鑰時明確報錯而不是靜靜跳過", "API 金鑰" in src)
-check("CLI 單一語言失敗不中斷其他語言", "failed[language]" in src)
-check("CLI 重用既有的 exporter.export", "export(" in src)
 check("CLI 會把原文語言傳給選語言邏輯", "source_language" in src)
+# 3.0 第 11 項第七階段起 CLI 改呼叫共用的 multilang.write_language_pack：
+# 原本這兩項是看原始碼裡有沒有某段字串，改成真的跑一次 CLI（比原本更嚴）。
+import tempfile  # noqa: E402
+
+from subtitle.importer import load_subtitle_file  # noqa: E402
+
+
+def fake_or_fail(texts, language, api_key, progress_cb=None, batch_size=30):
+    if language == "ja":
+        raise RuntimeError("假的 ja 失敗")
+    return [f"[{language}]{t}" for t in texts]
+
+
+ml.translate_texts = fake_or_fail
+with tempfile.TemporaryDirectory() as out_dir:
+    cli_cfg = {"transcription": {"api_key": "KEY", "language": "zh"},
+               "multilang": {"languages": "en,ja,ko"}}
+    import contextlib  # noqa: E402
+    import io  # noqa: E402
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        written = cli._export_multilang(os.path.join(out_dir, "影片.mp4"), cues, cli_cfg, out_dir,
+                                        None, lambda *a, **k: None)
+    check("CLI 的報告寫出哪個語言失敗、為什麼", "✘ 日文（ja）：假的 ja 失敗" in printed.getvalue()
+          and "✔ 英文（en）" in printed.getvalue() and "共 2/3 個語言完成" in printed.getvalue(), printed.getvalue())
+    names = sorted(os.path.basename(p) for p in written)
+    check("CLI 單一語言失敗不中斷其他語言（ja 失敗，en、ko 照樣存）",
+          names == ["影片.en.srt", "影片.ko.srt"] and not os.path.exists(os.path.join(out_dir, "影片.ja.srt")),
+          str(names))
+    en = load_subtitle_file(os.path.join(out_dir, "影片.en.srt"))["cues"] if names else []
+    check("CLI 用既有的 exporter 存成讀得回來的單語 SRT",
+          [c["text"] for c in en] == [f"[en]{c['text']}" for c in cues]
+          and [c["start"] for c in en] == [c["start"] for c in cues], str(en))
+# 一般版翻譯視窗的多語字幕包（_pack_worker）也改呼叫共用段：不開視窗直接跑一次背景那段
+try:
+    import queue  # noqa: E402
+    from gui import translate_dialog as tk_translate  # noqa: E402
+except ImportError:  # 沒有 tkinter 的環境
+    tk_translate = None
+if tk_translate is None:
+    print("SKIP 沒有 tkinter：略過一般版多語字幕包的背景那段")
+else:
+    worker = tk_translate.TranslateDialog.__new__(tk_translate.TranslateDialog)
+    worker.result_queue = queue.Queue()
+    worker.media_path = "/片/訪談.mp4"
+    worker.config_data = {"subtitle_style": {}}
+    with tempfile.TemporaryDirectory() as tk_out:
+        worker._pack_worker(cues, ["en", "ja"], "KEY", tk_out, 30, True)
+        events = []
+        while not worker.result_queue.empty():
+            events.append(worker.result_queue.get())
+        done = [payload for kind, payload in events if kind == "pack_done"]
+        check("一般版多語字幕包：en 存好、ja 失敗寫進報告、有回報進度",
+              os.path.exists(os.path.join(tk_out, "訪談.en.srt")) and not os.path.exists(os.path.join(tk_out, "訪談.ja.srt"))
+              and done and "✘ 日文（ja）：假的 ja 失敗" in done[0]
+              and any(kind == "status" and "[1/2] 英文" in payload[0] for kind, payload in events), str(events[-1:]))
+ml.translate_texts = real_translate
 
 # ===== 11. 回歸：本模組不重新實作翻譯 =====
 mod_src = inspect.getsource(ml)

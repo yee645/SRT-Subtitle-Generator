@@ -108,7 +108,7 @@ CUE_PANEL_WIDTH = 420
 
 def _subtitle_page_note():
     return QLabel("這一頁有播放器（字幕疊在真的影片畫面上）、生成字幕與逐句校對（改文字、新增刪除、尋找取代、"
-                  "翻譯、字幕樣式）。多語字幕包還在一般版（不加 --qt）。")
+                  "翻譯與多語字幕包、字幕樣式）。一般版②字幕頁的功能都搬過來了。")
 
 
 class MainWindow(QMainWindow):
