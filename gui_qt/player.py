@@ -235,8 +235,8 @@ class PlayerPanel(QWidget):
 
     # 字幕清單換了或改過（載入、拖時間、改文字、復原）：逐句校對的清單照這個重畫
     cuesChanged = Signal()
-    styleApplied = Signal()
-    cuesGenerated = Signal(str)  # 「生成字幕」套用完：一句話說生成了什麼（逐句校對寫在下面）  # 開專案換了字幕樣式（樣式的小視窗開著就跟著換）
+    styleApplied = Signal()  # 開專案換了字幕樣式（樣式的小視窗開著就跟著換）
+    cuesGenerated = Signal(str)  # 「生成字幕」套用完：一句話說生成了什麼（逐句校對寫在下面）
 
     def __init__(self, parent=None, style=None, config=None):
         super().__init__(parent)
