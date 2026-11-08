@@ -176,7 +176,9 @@ else:
           not panel.undo_btn.isEnabled() and times() == [(1.0, 2.0)], str(times()))
     asked = []
     panel._ask_save_path = lambda suggested: asked.append(suggested) or ""
-    check("沒有檔名、問路徑時按取消 → 不存", panel.save() is False and asked == [""], str(asked))
+    # 3.0 第 11 項第六階段起：沒有字幕檔名時，建議跟影片同名（生成的字幕也是這樣）
+    check("沒有檔名、問路徑時按取消 → 不存（建議的檔名照影片）", panel.save() is False
+          and asked == [panel.media_path] and panel.media_path, str(asked))
     target = os.path.join(tmp, "新檔.vtt")
     panel._ask_save_path = lambda suggested: target
     check("沒有檔名、選了路徑 → 存成那個檔（.vtt）", panel.save() is True and os.path.exists(target)

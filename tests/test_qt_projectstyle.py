@@ -199,8 +199,9 @@ else:
 
     # ----- 4. ②字幕頁上方的說明：樣式已經搬過來，不再寫「還在一般版」 -----
     note = qt_app._subtitle_page_note().text()
-    check("②字幕頁說明：逐句校對有字幕樣式、還在一般版的只剩生成字幕與多語字幕包",
-          "翻譯、字幕樣式）" in note and note.endswith("生成字幕、多語字幕包還在一般版（不加 --qt）。"), note)
+    check("②字幕頁說明：逐句校對有字幕樣式、還在一般版的只剩多語字幕包（第六階段生成字幕也搬過來了）",
+          "翻譯、字幕樣式）" in note and "、生成字幕與逐句校對" in note
+          and note.endswith("。多語字幕包還在一般版（不加 --qt）。"), note)
 
     for w, p in ((win, panel), (win2, panel2), (win3, panel3)):
         p._ask_project_discard = lambda: "discard"

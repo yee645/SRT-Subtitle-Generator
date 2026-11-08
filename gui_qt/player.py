@@ -235,7 +235,8 @@ class PlayerPanel(QWidget):
 
     # 字幕清單換了或改過（載入、拖時間、改文字、復原）：逐句校對的清單照這個重畫
     cuesChanged = Signal()
-    styleApplied = Signal()  # 開專案換了字幕樣式（樣式的小視窗開著就跟著換）
+    styleApplied = Signal()
+    cuesGenerated = Signal(str)  # 「生成字幕」套用完：一句話說生成了什麼（逐句校對寫在下面）  # 開專案換了字幕樣式（樣式的小視窗開著就跟著換）
 
     def __init__(self, parent=None, style=None, config=None):
         super().__init__(parent)
@@ -290,6 +291,10 @@ class PlayerPanel(QWidget):
 
         self.open_btn = QPushButton("開啟影片")
         self.subs_btn = QPushButton("載入字幕")
+        self.generate_btn = QPushButton("生成字幕…")
+        self.generate_btn.setToolTip("從這支影片的聲音生成字幕（Whisper 語音轉寫，或照貼上的文字稿對齊時間）")
+        self.generate_btn.setEnabled(False)
+        self.generate_dialog = None
         self.open_project_btn = QPushButton("開專案…")
         self.open_project_btn.setToolTip("打開存過的專案：影片、字幕、畫面調整、素材軌、剪點的微調與接縫轉場"
                                          "都回到存的時候的樣子")
@@ -413,7 +418,8 @@ class PlayerPanel(QWidget):
         self.last_assemble = None  # 上一次多軌輸出成功的結果
 
         controls = QHBoxLayout()
-        for w in (self.open_btn, self.subs_btn, self.open_project_btn, self.save_project_btn, self.play_btn):
+        for w in (self.open_btn, self.subs_btn, self.generate_btn, self.open_project_btn, self.save_project_btn,
+                  self.play_btn):
             controls.addWidget(w)
         controls.addWidget(self.slider, 1)
         controls.addWidget(self.time_label)
@@ -466,6 +472,7 @@ class PlayerPanel(QWidget):
 
         self.open_btn.clicked.connect(self._choose_video)
         self.subs_btn.clicked.connect(self._choose_subtitles)
+        self.generate_btn.clicked.connect(lambda: self.open_generate())
         self.open_project_btn.clicked.connect(lambda: self.open_project())
         self.save_project_btn.clicked.connect(lambda: self.save_project())
         self.play_btn.clicked.connect(self.toggle_play)
@@ -574,6 +581,25 @@ class PlayerPanel(QWidget):
         self._refresh_info()
         self.refresh_cut_marks()
         self.cuesChanged.emit()
+
+    def set_generated_cues(self, cues):
+        """
+        換成剛生成的字幕：還沒有字幕檔（存字幕時問要存到哪，建議跟影片同名），整份都算「新增、還沒存」。
+        """
+        self.set_cues(cues, "")
+        self._saved_cues = []
+        self._refresh_info()
+
+    def open_generate(self):
+        """「生成字幕…」：開生成字幕的小視窗（擋住這個視窗，生成時字幕不能改）。"""
+        if not self.media_path:
+            return None
+        if self.generate_dialog is None:
+            from gui_qt.generate_dialog import GenerateDialog
+            self.generate_dialog = GenerateDialog(self, self.window())
+        self.generate_dialog.prepare()
+        self.generate_dialog.open()
+        return self.generate_dialog
 
     def load_subtitles(self, path):
         data = load_subtitle_file(path)
@@ -1338,7 +1364,7 @@ class PlayerPanel(QWidget):
         """存回載入的字幕檔；沒有檔名（或不是 .srt／.vtt）時先問要存到哪。回傳是否存成功。"""
         path = self._subtitle_path
         if not path or os.path.splitext(path)[1].lower() not in (".srt", ".vtt"):
-            path = self._ask_save_path(path)
+            path = self._ask_save_path(path or self.media_path)  # 生成的字幕還沒有檔名：建議跟影片同名
             if not path:
                 return False
         try:
@@ -1388,6 +1414,7 @@ class PlayerPanel(QWidget):
         self.redo_btn.setEnabled(self.history.can_redo())
         self.save_btn.setEnabled(bool(self.cues))
         self.save_project_btn.setEnabled(bool(self.media_path))
+        self.generate_btn.setEnabled(bool(self.media_path))
 
     def _on_cue_times(self, index, start, end):
         """時間軸上拖了某句的邊：回寫字幕清單，畫面上的那句立刻照新時間顯示。"""
