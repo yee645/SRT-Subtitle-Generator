@@ -1,13 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-③健檢中心（3.0 第 11 項第八階段：先搬影片與字幕的檢查；第九、十階段：「修復此項」）。
+③健檢中心（3.0 第 11 項第八階段：先搬影片與字幕的檢查；第九、十階段：「修復此項」；第十一階段：
+發佈文字與章節）。
 
 檢查與報告跟一般版同一份（`subtitle/healthcheck.py`，原 `gui/health_aggregator.py`）：同樣的項目、同樣
 的門檻、同樣的「一定要修／建議修／通過」與準備度評級。這一頁檢查的對象就是②字幕頁開著的影片與字幕
 （按「開始健檢」時現拿：逐句校對改到一半的會先套用，報告講的是現在的句子）。
 
 這一階段還沒有的（頁面上寫明，請先用一般版）：
-* 發佈文字（標題／說明欄／標籤）、章節、封面圖、系列一致性這四種對象——它們要另外填或選，下一階段搬。
+* 封面圖、系列一致性這兩種對象——之後的階段搬。
+
+發佈文字（標題／說明欄／標籤）與章節在「發佈文字與章節」那塊另外貼（選填，填什麼檢什麼；只放在畫面上、
+不存檔，跟一般版一樣）。「一鍵修正章節」直接改章節框的文字（在章節框按 Ctrl+Z 就還原），改完自動重新
+健檢；健檢之後章節框又改過的話不修。
 
 字幕類的修復（延長過快字幕、修重疊、標點、同步、術語）直接改②的字幕：整批是一步，②字幕頁按「復原」
 （Ctrl+Z）就還原；改完自動重新健檢。健檢之後字幕又改過的話不修（結果講的是舊句子），請先重新健檢。
@@ -36,8 +41,7 @@ from subtitle.errors import describe_exception
 from subtitle.preflight import LEVEL_BAD, LEVEL_GOOD, LEVEL_WARN
 
 # 這一階段搬過來的項目：只看影片與字幕的（要另外填發佈文字、章節或選封面圖的下一階段才搬）
-LATER_KEYS = frozenset(c.key for c in hc.CHECK_DEFS
-                       if c.needs_publish_text or c.needs_images or c.needs_chapters_text)
+LATER_KEYS = frozenset(c.key for c in hc.CHECK_DEFS if c.needs_images)  # 封面圖：之後的階段
 STAGE_CHECKS = tuple(c for c in hc.CHECK_DEFS if c.key not in LATER_KEYS)
 
 LEVEL_LABELS = (("一定要修", LEVEL_BAD), ("建議修", LEVEL_WARN), ("通過", LEVEL_GOOD))
@@ -45,10 +49,14 @@ LEVEL_ICONS = {LEVEL_BAD: "✘", LEVEL_WARN: "⚠", LEVEL_GOOD: "✔"}
 CHECK_COLUMNS = 3
 
 PAGE_NOTE = ("檢查②字幕頁開著的影片與字幕：音訊、畫質、曝光、音量、節奏、字幕（CPS／行數／重疊）、"
-             "廣告友善度、開場、可讀性、標點、語音同步、片尾、工商揭露、術語、檔名，跟一般版同一套門檻。"
-             "可以直接按「修復此項」：字幕類直接改②的字幕，影音類另外輸出一個修復版。發佈文字、章節、"
-             "封面圖、系列一致性的檢查還在一般版（之後的階段搬過來）。")
-NOTHING = "先在②字幕頁開影片或載入字幕，這裡才有東西可以檢查。"
+             "廣告友善度、開場、可讀性、標點、語音同步、片尾、工商揭露、術語、檔名，跟一般版同一套門檻；"
+             "發佈文字與章節在下面另外貼。可以直接按「修復此項」：字幕類直接改②的字幕，影音類另外輸出一個"
+             "修復版，章節直接改章節框。封面圖、系列一致性的檢查還在一般版（之後的階段搬過來）。")
+PUBLISH_CLOSED = "▸ 發佈文字與章節（選填，填什麼檢什麼；點一下展開）"
+PUBLISH_OPEN = "▾ 發佈文字與章節（選填，填什麼檢什麼；點一下收合）"
+PUBLISH_NOTE = ("標籤用逗號分隔，就是 YouTube 後台那一欄的填法。說明欄上限算的是位元組，中文一個字佔 3 個。"
+                "這裡貼的只放在畫面上、不存檔。")
+NOTHING = "先在②字幕頁開影片或載入字幕，或在下面貼發佈文字、章節，這裡才有東西可以檢查。"
 NONE_CHECKED = "請至少勾一項要跑的檢查。"
 DETAIL_EMPTY = "（點上面一筆結果看詳情與建議）"
 FIX_DEFAULT = "修復此項"
@@ -60,6 +68,8 @@ FIX_STALE_MEDIA = "②在健檢之後換過影片了，結果講的是之前那�
 FIX_NO_MEDIA = "②還沒開影片（或檔案找不到了），沒有東西可以修。"
 FIX_NO_FFMPEG = "找不到 ffmpeg，輸出修復版需要它：請先在一般版按「自動安裝 ffmpeg」（兩版共用）。"
 FIX_STALE = "字幕在健檢之後又改過了，結果講的是舊的句子：請先按「開始健檢」重新檢查，再修復。"
+FIX_TEXT_NOTE = "直接改上面的章節文字（在章節框按 Ctrl+Z 就還原），改完自動重新健檢。"
+FIX_STALE_TEXT = "章節文字在健檢之後又改過了，結果講的是舊的：請先按「開始健檢」重新檢查，再修正。"
 FIX_NOTHING = "沒有可修復的內容（可能空檔不足，或已經符合規範）。"
 
 
@@ -75,14 +85,15 @@ class HealthWorker(QObject):
         # 由畫面那邊（主執行緒）收到結果時才放下：在背景放下的話，結果還沒畫上去就「不忙」了
         self.busy = False
 
-    def start(self, media_path, cues, config, keys):
+    def start(self, media_path, cues, config, keys, publish=None):
         self.busy = True
-        threading.Thread(target=self._run, args=(media_path, cues, config, keys), daemon=True).start()
+        threading.Thread(target=self._run, args=(media_path, cues, config, keys, publish), daemon=True).start()
 
-    def _run(self, media_path, cues, config, keys):
+    def _run(self, media_path, cues, config, keys, publish):
         try:
             result = hc.run_health_scan(media_path, cues, config, keys,
-                                        progress_cb=lambda r, m: self.progress.emit(float(r), str(m)))
+                                        progress_cb=lambda r, m: self.progress.emit(float(r), str(m)),
+                                        publish=publish)
         except Exception as exc:  # noqa: BLE001 —— 背景執行緒的例外一律送回畫面上講
             self.failed.emit(exc)
             return
@@ -154,6 +165,7 @@ class HealthPanel(QWidget):
         self.filename_box.setEnabled(False)
         grid.addWidget(self.filename_box, index // CHECK_COLUMNS, index % CHECK_COLUMNS)
         layout.addWidget(box)
+        layout.addWidget(self._build_publish())
 
         row = QHBoxLayout()
         self.run_btn = QPushButton("開始健檢")
@@ -211,9 +223,64 @@ class HealthPanel(QWidget):
         self.fixer.failed.connect(self._on_fix_failed)
         self._pending_media = ""  # 這次健檢的影片
         self._scan_media = ""     # 目前結果是哪支影片的（影音修復前比對）
+        self._pending_publish = self._scan_publish = {}  # 同上，發佈文字與章節（修正章節前比對）
         player.cuesChanged.connect(self.refresh_target)
         self.refresh_target()
         self._update_fix()
+
+    # ----- 發佈文字與章節 -----
+    def _build_publish(self):
+        from PySide6.QtWidgets import QFormLayout, QLineEdit, QToolButton
+        wrap = QWidget()
+        outer = QVBoxLayout(wrap)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.publish_toggle = QToolButton()
+        self.publish_toggle.setText(PUBLISH_CLOSED)
+        self.publish_toggle.setAutoRaise(True)
+        self.publish_toggle.clicked.connect(lambda: self.show_publish(not self.publish_body.isVisible()))
+        outer.addWidget(self.publish_toggle)
+        self.publish_body = QWidget()
+        body = QVBoxLayout(self.publish_body)
+        body.setContentsMargins(0, 0, 0, 0)
+        columns = QHBoxLayout()  # 左：標題、標籤、說明欄；右：章節（並排比疊四列省高度，結果清單才不會太擠）
+        form = QFormLayout()
+        right = QFormLayout()
+        self.publish_title = QLineEdit()
+        self.publish_title.setPlaceholderText("影片標題")
+        self.publish_desc = QPlainTextEdit()
+        self.publish_desc.setPlaceholderText("說明欄（整段貼上）")
+        self.publish_tags = QLineEdit()
+        self.publish_tags.setPlaceholderText("標籤一, 標籤二, 標籤三")
+        self.publish_chapters = QPlainTextEdit()
+        self.publish_chapters.setPlaceholderText("0:00 開場\n1:30 第一段")
+        self.publish_desc.setFixedHeight(64)
+        self.publish_chapters.setFixedHeight(64 + 36)  # 跟左邊「標籤＋說明欄」同高
+        form.addRow("標題", self.publish_title)
+        form.addRow("標籤", self.publish_tags)
+        form.addRow("說明欄", self.publish_desc)
+        right.addRow("章節", self.publish_chapters)
+        columns.addLayout(form, 3)
+        columns.addLayout(right, 2)
+        body.addLayout(columns)
+        note = QLabel(PUBLISH_NOTE)
+        note.setWordWrap(True)
+        body.addWidget(note)
+        self.publish_body.setVisible(False)
+        outer.addWidget(self.publish_body)
+        return wrap
+
+    def show_publish(self, shown=True):
+        self.publish_body.setVisible(shown)
+        self.publish_toggle.setText(PUBLISH_OPEN if shown else PUBLISH_CLOSED)
+
+    def publish_text(self):
+        """{"title","description","tags","chapters_text"}：跟一般版對象區同一個格式。"""
+        return {"title": self.publish_title.text(), "description": self.publish_desc.toPlainText(),
+                "tags": self.publish_tags.text(), "chapters_text": self.publish_chapters.toPlainText()}
+
+    @staticmethod
+    def _has_text(publish):
+        return hc.has_publish_text(publish) or bool((publish.get("chapters_text") or "").strip())
 
     # ----- 對象 -----
     def refresh_target(self):
@@ -222,6 +289,8 @@ class HealthPanel(QWidget):
         parts = [f"影片：{os.path.basename(media)}" if media else "影片：還沒開（需要影片的項目會略過）"]
         count = len(self.player.cues)
         parts.append(f"字幕：{count} 句" if count else "字幕：沒有（字幕類的項目會略過）")
+        if hasattr(self, "publish_title") and self._has_text(self.publish_text()):
+            parts.append("另外貼了發佈文字或章節")
         self.target_label.setText("檢查對象（②字幕頁開著的）：" + "　".join(parts))
 
     def showEvent(self, event):  # noqa: N802 —— 切到這一頁時更新對象（換影片沒有訊號）
@@ -251,7 +320,8 @@ class HealthPanel(QWidget):
             self.before_scan()
         self.refresh_target()
         media, cues = self.player.media_path, [dict(c) for c in self.player.cues]
-        if not media and not cues:
+        publish = self.publish_text()
+        if not media and not cues and not self._has_text(publish):
             self.status_label.setText(NOTHING)
             return False
         keys = self.selected_keys()
@@ -261,8 +331,8 @@ class HealthPanel(QWidget):
         self.remember_selection()
         # 先讓背景開始（算「忙」），再灰掉按鈕：修復鈕看的是「忙不忙」。進度與結果是排隊送回來的，
         # 一定在這幾行之後才處理。
-        self.worker.start(media, cues, dict(self.config), keys)
-        self._pending_media = media
+        self.worker.start(media, cues, dict(self.config), keys, publish)
+        self._pending_media, self._pending_publish = media, publish
         self.progress_bar.setValue(0)
         self._set_busy(True)
         self.status_label.setText(f"{self._fix_note}健檢進行中…")
@@ -290,7 +360,7 @@ class HealthPanel(QWidget):
         self.status_label.setText(f"{self._take_fix_note()}健檢失敗：{describe_exception(exc)}")
 
     def _on_finished(self, result):
-        self._scan_media = self._pending_media
+        self._scan_media, self._scan_publish = self._pending_media, self._pending_publish
         self.show_result(result)
         self.worker.busy = False
         self._set_busy(False)
@@ -360,8 +430,10 @@ class HealthPanel(QWidget):
         """右下的修復鈕：字幕類可以按；影音類寫明還在一般版；沒有修復的灰掉。"""
         key = (self._current_row or {}).get("fix_key")
         self.fix_btn.setText(hc.FIX_LABELS.get(key, FIX_DEFAULT) if key else FIX_DEFAULT)
-        self.fix_btn.setEnabled((key in hc.CUE_FIX_KEYS or key in hc.MEDIA_FIX_KEYS) and not self.busy())
-        note = (FIX_CUE_NOTE if key in hc.CUE_FIX_KEYS else FIX_MEDIA_NOTE if key in hc.MEDIA_FIX_KEYS else "")
+        self.fix_btn.setEnabled((key in hc.CUE_FIX_KEYS or key in hc.MEDIA_FIX_KEYS or key in hc.TEXT_FIX_KEYS)
+                                and not self.busy())
+        note = (FIX_CUE_NOTE if key in hc.CUE_FIX_KEYS else FIX_MEDIA_NOTE if key in hc.MEDIA_FIX_KEYS
+                else FIX_TEXT_NOTE if key in hc.TEXT_FIX_KEYS else "")
         if self._loudness_row():
             note += FIX_LOUD_NOTE
         self.fix_note.setText(note)
@@ -384,6 +456,8 @@ class HealthPanel(QWidget):
             return False
         if key in hc.MEDIA_FIX_KEYS:
             return self._start_media_fix(key)
+        if key in hc.TEXT_FIX_KEYS:
+            return self._apply_text_fix(key)
         if key not in hc.CUE_FIX_KEYS:
             return False
         if callable(self.before_scan):
@@ -408,6 +482,28 @@ class HealthPanel(QWidget):
             return False
         self._fix_note = f"{message}（②字幕頁按「復原」就還原）"
         if not self.start_scan():  # 例如勾選全取消了：修好的照樣留著，講清楚沒重新檢查
+            self.status_label.setText(f"{self._take_fix_note()}沒有重新健檢：{self.status_label.text()}")
+        return True
+
+    def _apply_text_fix(self, key):
+        """一鍵修正章節：新文字寫進章節框（Ctrl+Z 可以還原）、重新健檢。"""
+        if self.publish_chapters.toPlainText() != (self._scan_publish or {}).get("chapters_text", ""):
+            self.status_label.setText(FIX_STALE_TEXT)
+            return False
+        try:
+            text, changes, message = hc.apply_text_fix(key, dict(self.config), self.last_result.get("raw") or {})
+        except hc.FixError as exc:
+            self.status_label.setText(str(exc))
+            return False
+        if not changes:
+            self.status_label.setText(message)
+            return False
+        self.show_publish(True)  # 看得到被改了什麼
+        cursor = self.publish_chapters.textCursor()
+        cursor.select(cursor.SelectionType.Document)
+        cursor.insertText(text)  # 用游標換、不用 setPlainText：這樣章節框的 Ctrl+Z 還原得回來
+        self._fix_note = f"{message}（在章節框按 Ctrl+Z 就還原）"
+        if not self.start_scan():
             self.status_label.setText(f"{self._take_fix_note()}沒有重新健檢：{self.status_label.text()}")
         return True
 
