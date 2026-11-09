@@ -4,13 +4,13 @@
 
 1. 檢查邏輯搬進 subtitle/healthcheck.py：舊的 gui/health_aggregator 拿到的是同一個模組物件；
    新檔不碰 GUI、不 import config；一般版的健檢中心改從新位置 import。
-2. ③頁籤是健檢頁（不是「還沒搬」的說明）：勾選項是影片與字幕的那 14 項＋停用的「檔名」，
-   發佈／封面／章節這三項不在這頁；勾不勾照目前的設定；頁面寫明還在一般版的部分。
+2. ③頁籤是健檢頁（不是「還沒搬」的說明）：勾選項是影片與字幕的 14 項、加上第十一階段搬來的發佈資訊與
+   章節，共 16 項＋停用的「檔名」；封面不在這頁；勾不勾照目前的設定；頁面寫明還在一般版的部分。
 3. 沒開影片也沒字幕、或一項都沒勾：不跑，講原因。
 4. 開影片＋載字幕後跑：結果跟直接呼叫 run_health_scan（同樣的項目）一模一樣；分組、計數、
    準備度、詳情與建議、略過的項目、複製報告（＝format_health_report）。跑的期間按鈕停用、
    再按不會重跑。
-5. 勾選記在這次開啟的設定：取消的項目寫進 preflight／healthcenter 區塊；這頁看不到的三項
+5. 勾選記在這次開啟的設定：取消的項目寫進 preflight／healthcenter 區塊；這頁看不到的封面
    維持原本的值；不寫 config.json。開始前先套用逐句校對改到一半的（before_scan 接的是 commit）。
 6. 背景失敗：講原因、按鈕恢復。
 """
@@ -118,14 +118,16 @@ else:
           and isinstance(page, hp.HealthPanel))
     health = win.health_panel
     expected = [c.key for c in hc.CHECK_DEFS
-                if not c.always_on and c.key not in ("run_publish", "run_thumb", "run_chapter")]
-    check("勾選項：影片與字幕的 14 項、照 CHECK_DEFS 的順序與文字", list(health.check_boxes) == expected
-          and len(expected) == 14 and [cb.text() for cb in health.check_boxes.values()]
+                if not c.always_on and c.key != "run_thumb"]
+    check("勾選項：影片與字幕的 14 項＋發佈資訊與章節（共 16 項）、照 CHECK_DEFS 的順序與文字；封面不在",
+          list(health.check_boxes) == expected and len(expected) == 16
+          and list(health.check_boxes)[-2:] == ["run_publish", "run_chapter"] and [cb.text() for cb in health.check_boxes.values()]
           == [hc._BY_KEY[k].label for k in expected], str(list(health.check_boxes)))
     check("檔名：勾著、停用（一律跟著跑）", health.filename_box.isChecked() and not health.filename_box.isEnabled())
-    check("勾不勾照目前的設定：音訊關、語音同步預設關、其他開",
-          not health.check_boxes["run_audio"].isChecked() and not health.check_boxes["run_subsync"].isChecked()
-          and all(cb.isChecked() for k, cb in health.check_boxes.items() if k not in ("run_audio", "run_subsync")))
+    off = ("run_audio", "run_subsync", "run_publish")
+    check("勾不勾照目前的設定：音訊關、發佈資訊關、語音同步預設關、其他開",
+          not any(health.check_boxes[k].isChecked() for k in off)
+          and all(cb.isChecked() for k, cb in health.check_boxes.items() if k not in off))
     labels = " ".join(w.text() for w in health.findChildren(type(health.status_label)))
     check("頁面寫明發佈文字、章節、封面圖、系列一致性還在一般版，也寫到「修復此項」",
           all(word in labels for word in ("發佈文字", "章節", "封面圖", "系列一致性", "修復此項", "還在一般版")))
@@ -230,7 +232,7 @@ else:
     # ----- 5. 記住勾選 -----
     check("取消的項目記在這次開啟的設定（同一份）", health.config is cfg and cfg["preflight"]["run_color"] is False
           and cfg["preflight"]["run_audio"] is False and cfg["preflight"]["run_video"] is True)
-    check("這頁看不到的三項維持原本的值", cfg["healthcenter"]["run_publish"] is False
+    check("發佈資訊照勾選（沒勾）、這頁看不到的封面維持原本的值、章節照勾選（勾著）", cfg["healthcenter"]["run_publish"] is False
           and cfg["healthcenter"]["run_thumb"] is True and cfg["healthcenter"]["run_chapter"] is True,
           str(cfg["healthcenter"]))
     check("沒寫 config.json", not os.path.exists(config.CONFIG_PATH))

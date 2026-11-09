@@ -98,9 +98,9 @@ else:
     check("還沒點任何一筆：修復鈕灰掉、寫「修復此項」、沒有說明", not health.fix_btn.isEnabled()
           and health.fix_btn.text() == "修復此項" and health.fix_note.text() == "")
     labels = " ".join(w.text() for w in health.findChildren(type(health.status_label)))
-    check("頁面寫明：字幕類直接改②的字幕、影音類另外輸出修復版；發佈文字等還在一般版",
-          "可以直接按「修復此項」：字幕類直接改②的字幕，影音類另外輸出一個修復版" in labels
-          and "發佈文字、章節、封面圖、系列一致性的檢查還在一般版" in labels)
+    check("頁面寫明：字幕類直接改②的字幕、影音類另外輸出修復版、章節直接改章節框；封面圖等還在一般版",
+          "可以直接按「修復此項」：字幕類直接改②的字幕，影音類另外輸出一個修復版，章節直接改章節框" in labels
+          and "封面圖、系列一致性的檢查還在一般版" in labels)
 
     def scan():
         ok = health.start_scan()
