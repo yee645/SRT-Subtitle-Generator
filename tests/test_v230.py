@@ -40,6 +40,10 @@ from subtitle import hotkey, ocrengine, speech  # noqa: E402
 
 doc = _read("docs/WHATS_NEW_2.3.md")
 readme = _read("README.md")
+# README 精簡後，各功能的詳細說明搬到 docs/FEATURES.md、操作說明搬到 docs/USER_GUIDE.md。
+features = _read("docs/FEATURES.md")
+guide = _read("docs/USER_GUIDE.md")
+check("功能詳解有「螢幕畫面翻譯」一節", "\n## 螢幕畫面翻譯" in features)
 changelog = _read("CHANGELOG.md")
 dialog_src = _read("gui/whatsnew_dialog.py")
 panel_src = _read("gui/quicktranslate_panel.py")
@@ -64,7 +68,8 @@ m = re.search(r'APP_VERSION = "(\d+)\.(\d+)\.(\d+)"', _read("updater.py"))
 version = tuple(int(g) for g in m.groups()) if m else (0, 0, 0)
 check("APP_VERSION 已進到 2.3.0 以上", version >= (2, 3, 0), str(version))
 for label, text in (("WHATS_NEW_2.3.md", doc), ("程式內速覽 v2.3 條目", dialog_text),
-                    ("README", readme.split("\n## 螢幕畫面翻譯", 1)[-1].split("\n## ", 1)[0])):
+                    ("README", readme),
+                    ("功能詳解", features.split("\n## 螢幕畫面翻譯", 1)[-1].split("\n## ", 1)[0])):
     check(f"{label} 不再把 v2.3 寫成測試版（2026-09-25 起大功能更新做正式版）",
           "測試版" not in text)
 # 歷史照舊：v2.3.0 那一條是當時以測試版發的，CHANGELOG 不改寫歷史。
@@ -76,14 +81,14 @@ check("CHANGELOG 的 v2.3.0 那一條保留當時的測試版標記（不改寫�
 
 combo = hotkey.DEFAULT_HOTKEY["combo"]
 places = {"WHATS_NEW_2.3.md": doc, "CHANGELOG v2.3.0": section,
-          "README": readme, "速覽 v2.3 條目": dialog_text}
+          "README": readme, "功能詳解": features, "速覽 v2.3 條目": dialog_text}
 for label, text in places.items():
     check(f"{label} 寫的熱鍵就是程式的預設熱鍵（{combo}）", combo in text)
-# 每一處提到的 Ctrl+ 組合鍵都只能是預設那組（README 另有剪貼簿的 Ctrl+C）。
+# 每一處提到的 Ctrl+ 組合鍵都只能是預設那組（README、功能詳解、使用說明另有剪貼簿的 Ctrl+C）。
 # 熱鍵改過一次（Ctrl+Shift+Z 是剪輯軟體的「重做」），舊的寫法一個都不能留。
-for label, text in places.items():
+for label, text in {**places, "使用說明": guide}.items():
     combos = set(re.findall(r"Ctrl\+[A-Za-z0-9]+(?:\+[A-Za-z0-9]+)*", text))
-    allowed = {combo, "Ctrl+C"} if label == "README" else {combo}
+    allowed = {combo, "Ctrl+C"} if label in ("README", "功能詳解", "使用說明") else {combo}
     check(f"{label} 沒有其他（或舊的）熱鍵寫法", combos <= allowed,
           str(combos - allowed))
 
@@ -95,6 +100,8 @@ check("熱鍵勾選的字是『熱鍵 ＋ 預設組合鍵』",
       'return f"熱鍵 {combo}"' in panel_src)
 for name in labels:
     for label, text in places.items():
+        if label == "README":
+            continue  # README 只留一句簡介，按鈕名稱寫在功能詳解
         check(f"{label} 用的按鈕名稱與介面一致（〔{name}〕）", name in text)
 
 limit = speech.DEFAULT_SPEECH["max_chars"]
@@ -103,13 +110,13 @@ check(f"文件寫的朗讀上限就是程式的上限（{limit} 字）", f"{limi
 size = re.search(r'self\.geometry\("(\d+)x(\d+)"\)',
                  panel_src.split("class QuickTranslatePanel", 1)[1])
 w, h = size.groups() if size else ("?", "?")
-check(f"README 寫的面板預設大小就是程式的（{w}×{h}）", f"{w}×{h}" in readme)
+check(f"功能詳解寫的面板預設大小就是程式的（{w}×{h}）", f"{w}×{h}" in features)
 check(f"CHANGELOG 寫的新高度就是程式的（{h}）", f"→ {h}" in section)
 
 names = {"eng": "英", "jpn": "日", "chi_tra": "繁中", "chi_sim": "簡中", "kor": "韓"}
 listed = "、".join(names.get(code, code) for code in ocrengine.AUTO_LANGS)
 for label, text in (("WHATS_NEW_2.3.md", doc), ("CHANGELOG v2.3.0", section),
-                    ("README", readme)):
+                    ("功能詳解", features)):
     # 要整串相符：只比子字串的話，程式少掉後面幾種語言（「英、日、繁中」
     # 是「英、日、繁中、簡中、韓」的子字串）照樣通過——破壞探針抓到的。
     check(f"{label} 列的自動辨識語言與程式一致（{listed}）",

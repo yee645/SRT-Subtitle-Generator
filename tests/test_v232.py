@@ -147,11 +147,13 @@ if app is not None:
 
 # ===== 2. 文件與發佈政策 ================================================
 
-readme = _read("README.md")
-check("README 寫明轉寫設定在語音轉寫與文字稿對齊下都會顯示",
-      "〔語音轉寫〕或〔文字稿對齊〕（「轉寫設定」在這兩個模式下都會顯示）" in readme)
-check("README 不再說轉寫設定只在語音轉寫下顯示",
-      "只在這個模式下顯示" not in readme)
+# README 精簡後，這段操作說明搬到 docs/USER_GUIDE.md；「不能出現」涵蓋 README 與兩份文件。
+guide = _read("docs/USER_GUIDE.md")
+alldocs = "\n".join((_read("README.md"), guide, _read("docs/FEATURES.md")))
+check("使用說明寫明轉寫設定在語音轉寫與文字稿對齊下都會顯示",
+      "〔語音轉寫〕或〔文字稿對齊〕（「轉寫設定」在這兩個模式下都會顯示）" in guide)
+check("README 與文件都不再說轉寫設定只在語音轉寫下顯示",
+      "只在這個模式下顯示" not in alldocs)
 
 promote = _read(".github/promote_releases.txt")
 promoted = set(re.findall(r"^(v\d+\.\d+\.\d+)\s*$", promote, re.M))

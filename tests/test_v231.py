@@ -127,21 +127,25 @@ help_text = " ".join(a.help or "" for a in cli.build_parser()._actions) \
 check("命令列 --mode 說明用新名字",
       f"transcribe＝{names[0]}" in help_text and f"align＝{names[1]}" in help_text)
 
+# README 精簡後，三種模式的說明搬到 docs/USER_GUIDE.md；「不能出現」的檢查涵蓋 README 與兩份文件。
 readme = _read("README.md")
-bad = [ln for ln in readme.splitlines() if OLD_NUMBER.search(ln) and "舊版" not in ln]
-check("README 只剩一行新舊對照提到「模式一／二／三」", not bad, str(bad[:3]))
-mapping = [ln for ln in readme.splitlines() if OLD_NUMBER.search(ln)]
-check("README 新舊對照那一行列的是介面上的三個名字、順序相同",
+guide = _read("docs/USER_GUIDE.md")
+alldocs = "\n".join((readme, guide, _read("docs/FEATURES.md")))
+bad = [ln for ln in alldocs.splitlines() if OLD_NUMBER.search(ln) and "舊版" not in ln]
+check("README 與文件只剩一行新舊對照提到「模式一／二／三」", not bad, str(bad[:3]))
+mapping = [ln for ln in alldocs.splitlines() if OLD_NUMBER.search(ln)]
+check("README 本身不提「模式一／二／三」", not OLD_NUMBER.search(readme))
+check("使用說明新舊對照那一行列的是介面上的三個名字、順序相同",
       len(mapping) == 1 and "".join(f"〔{n}〕" for n in names) in mapping[0],
       str(mapping))
 for n in names:
-    check(f"README 使用說明有「### {n}」一節", f"\n### {n}\n" in readme)
+    check(f"使用說明有「### {n}」一節", f"\n### {n}\n" in guide)
 # 「影片／音訊轉錄為 SRT 字幕」是一般敘述、不是模式名稱，所以 README 只抓
 # 當成名字用的寫法：標題、功能表的欄位、括號引號。
 old_as_name = [p for n in OLD_NAMES + ("音訊轉錄字幕",)
                for p in (f"### {n}\n", f"| {n} |", f"「{n}」", f"〔{n}〕")
-               if p in readme] + [n for n in ("手動字幕模式",) if n in readme]
-check("README 沒有把舊名當名字用", not old_as_name, str(old_as_name))
+               if p in alldocs] + [n for n in ("手動字幕模式",) if n in alldocs]
+check("README 與文件沒有把舊名當名字用", not old_as_name, str(old_as_name))
 
 # ===== 3. 發佈政策 ======================================================
 
