@@ -124,14 +124,17 @@ class MainWindow(QMainWindow):
         self.tabs.setDocumentMode(True)
         self.player_panel = None
         self.cue_panel = None
+        self.health_panel = None
         for name, summary in STAGES:
             if name == "② 字幕":
                 self.tabs.addTab(self._subtitle_page(), name)
+            elif name == "③ 健檢中心":
+                self.tabs.addTab(self._health_page(), name)
             else:
                 self.tabs.addTab(_placeholder_page(summary), name)
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(
-            "3.0 預覽版：目前有外框與②的播放器、逐句校對，其餘功能請先用一般版。")
+            "3.0 預覽版：目前有②字幕頁與③健檢中心的影片、字幕檢查，其餘功能請先用一般版。")
 
     def _subtitle_page(self):
         """② 字幕：播放器面板（第 2 項）＋一行說明其餘功能在哪。"""
@@ -159,6 +162,14 @@ class MainWindow(QMainWindow):
         self.splitter.setSizes([DEFAULT_SIZE[0] - CUE_PANEL_WIDTH, CUE_PANEL_WIDTH])
         layout.addWidget(self.splitter, 1)
         return page
+
+    def _health_page(self):
+        """③ 健檢中心（第 11 項第八階段：先搬影片與字幕的檢查）。對象是②開著的影片與字幕。"""
+        from gui_qt.health_panel import HealthPanel
+
+        # ②先建（STAGES 的順序），這裡拿得到播放器
+        self.health_panel = HealthPanel(self.player_panel, before_scan=self.cue_panel.commit)
+        return self.health_panel
 
     def closeEvent(self, event):  # noqa: N802 —— 專案或字幕改過還沒存：先問（存檔／放棄／取消）
         if self.cue_panel is not None:

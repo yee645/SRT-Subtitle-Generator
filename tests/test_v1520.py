@@ -330,6 +330,10 @@ if old_app_src is not None:
         # 3.0 第 10 項：專案檔（整條時間軸存成可重開的 JSON：驗證、相對／絕對路徑、
         # 升版、原子寫入），零 GUI 依賴（全新檔案）。
         "subtitle/project.py",
+        # 3.0 第 11 項第八階段：健檢中心的檢查與修復邏輯從 gui/health_aggregator.py
+        # 原封搬過來（本來就零 GUI 依賴），讓一般版與 3.0 的③健檢中心共用；
+        # 舊路徑留轉接檔，test_qt_health.py 比對兩個名字是同一個模組。
+        "subtitle/healthcheck.py",
         # 3.0 第 2 項第二階段：burn_layout（預覽照燒錄的位置與大小畫）。
         # 與 cues_to_ass 同檔、共用對齊與邊距的算法；cues_to_ass 只把原本
         # 內嵌的邊距算式換成同一個函式，輸出逐字相同（測試比對）。

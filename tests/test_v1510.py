@@ -68,7 +68,7 @@ publish_src = _read("gui/publishcheck_dialog.py")
 thumb_src = _read("gui/thumbcheck_dialog.py")
 chapter_src = _read("gui/chapter_dialog.py")
 series_src = _read("gui/series_dialog.py")
-aggregator_src = _read("gui/health_aggregator.py")
+aggregator_src = _read("subtitle/healthcheck.py")
 center_src = _read("gui/health_center_panel.py")
 app_src = _read("gui/app.py")
 termcheck_src = _read("subtitle/termcheck.py")
@@ -457,7 +457,7 @@ except tk.TclError as exc:
 # ===== 7. 全站規範：本版新增/改動的檔案全用 ttk 控件 ======================
 
 for path, src in (("gui/health_center_panel.py", center_src),
-                  ("gui/health_aggregator.py", aggregator_src),
+                  ("subtitle/healthcheck.py", aggregator_src),
                   ("gui/app.py", app_src)):
     stripped = src.replace("ttk.Checkbutton(", "").replace(
         "ttk.Radiobutton(", "")

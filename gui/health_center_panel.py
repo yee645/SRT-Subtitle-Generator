@@ -22,7 +22,8 @@ v2.2.0 起它不再是 Toplevel，而是主視窗階段③的頁籤內容（架�
 閉〕鈕；捲動區高度隨視窗按比例配而不是寫死 560px；佇列輪詢只在背景工作
 進行中才排程。
 
-真正的分析與修復邏輯完全在 `gui/health_aggregator.py`（可離線單元測試）
+真正的分析與修復邏輯完全在 `subtitle/healthcheck.py`（可離線單元測試；3.0
+的③健檢中心也用同一份）
 與各 `subtitle/` 模組；本檔案只負責畫面與背景執行緒調度。
 """
 
@@ -34,7 +35,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from config import save_config
-from gui import health_aggregator as ha
+from subtitle import healthcheck as ha
 from gui.error_dialog import show_friendly_error
 from gui.ffmpeg_dialog import FfmpegInstallDialog
 from gui.scrollable import ScrollableFrame

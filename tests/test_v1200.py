@@ -139,7 +139,7 @@ with open(os.path.join(root, "gui", "app.py"), encoding="utf-8") as fp:
 # v2.3.5：清單編輯列的〔字幕健檢〕轉址鈕依架構文件 D-3 移除（v1.50.0 起
 # 它只是切到健檢中心）。這裡改守「字幕健檢這項能力仍然在主視窗裡跑得到」：
 # 健檢中心有這一項、它真的呼叫 subtitlecheck、而且健檢中心是主視窗的頁籤。
-with open(os.path.join(root, "gui", "health_aggregator.py"),
+with open(os.path.join(root, "subtitle", "healthcheck.py"),
           encoding="utf-8") as fp:
     agg_src = fp.read()
 check("字幕健檢仍在主視窗：健檢中心有這一項、呼叫 subtitlecheck、是階段③頁籤",
