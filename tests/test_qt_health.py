@@ -127,7 +127,7 @@ else:
           not health.check_boxes["run_audio"].isChecked() and not health.check_boxes["run_subsync"].isChecked()
           and all(cb.isChecked() for k, cb in health.check_boxes.items() if k not in ("run_audio", "run_subsync")))
     labels = " ".join(w.text() for w in health.findChildren(type(health.status_label)))
-    check("頁面寫明發佈文字、章節、封面圖、系列一致性與修復還在一般版",
+    check("頁面寫明發佈文字、章節、封面圖、系列一致性還在一般版，也寫到「修復此項」",
           all(word in labels for word in ("發佈文字", "章節", "封面圖", "系列一致性", "修復此項", "還在一般版")))
     check("狀態列：有②與③", "③健檢中心" in win.statusBar().currentMessage()
           and "②字幕頁" in win.statusBar().currentMessage(), win.statusBar().currentMessage())

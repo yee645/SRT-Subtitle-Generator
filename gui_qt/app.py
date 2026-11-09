@@ -134,7 +134,7 @@ class MainWindow(QMainWindow):
                 self.tabs.addTab(_placeholder_page(summary), name)
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(
-            "3.0 預覽版：目前有②字幕頁與③健檢中心的影片、字幕檢查，其餘功能請先用一般版。")
+            "3.0 預覽版：目前有②字幕頁與③健檢中心的影片、字幕檢查與修復，其餘功能請先用一般版。")
 
     def _subtitle_page(self):
         """② 字幕：播放器面板（第 2 項）＋一行說明其餘功能在哪。"""
@@ -172,6 +172,10 @@ class MainWindow(QMainWindow):
         return self.health_panel
 
     def closeEvent(self, event):  # noqa: N802 —— 專案或字幕改過還沒存：先問（存檔／放棄／取消）
+        if (self.health_panel is not None and self.health_panel.fixing()
+                and not self.health_panel.ask_close_while_fixing()):  # ③的修復版還在輸出
+            event.ignore()
+            return
         if self.cue_panel is not None:
             self.cue_panel.commit()  # 編輯框裡改到一半的先套用，下面才問得到要不要存
         if self.player_panel is not None and not self.player_panel.maybe_close():

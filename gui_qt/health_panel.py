@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-③健檢中心（3.0 第 11 項第八階段：先搬影片與字幕的檢查；第九階段：字幕類的「修復此項」）。
+③健檢中心（3.0 第 11 項第八階段：先搬影片與字幕的檢查；第九、十階段：「修復此項」）。
 
 檢查與報告跟一般版同一份（`subtitle/healthcheck.py`，原 `gui/health_aggregator.py`）：同樣的項目、同樣
 的門檻、同樣的「一定要修／建議修／通過」與準備度評級。這一頁檢查的對象就是②字幕頁開著的影片與字幕
@@ -8,10 +8,15 @@
 
 這一階段還沒有的（頁面上寫明，請先用一般版）：
 * 發佈文字（標題／說明欄／標籤）、章節、封面圖、系列一致性這四種對象——它們要另外填或選，下一階段搬。
-* 要輸出新影音檔的修復（音訊修復版、修剪頭尾、拉平音量）——下一階段搬。
 
 字幕類的修復（延長過快字幕、修重疊、標點、同步、術語）直接改②的字幕：整批是一步，②字幕頁按「復原」
 （Ctrl+Z）就還原；改完自動重新健檢。健檢之後字幕又改過的話不修（結果講的是舊句子），請先重新健檢。
+
+影音類的修復（音訊修復版、修剪頭尾、拉平音量）在背景用 ffmpeg 另外輸出一個新檔（原檔不動，檔名跟一般版
+一樣，同名就加編號）。做好後問要不要在②換成修復版：換的話跟②「開影片」一樣（專案有沒存的變更先問；素材軌
+與畫面調整會清掉，字幕留著）。修剪版的字幕時間不會跟著往前移，問的時候寫明。輸出到一半不能停（一般版也不
+能），關視窗時先問。健檢之後②換過影片的話不修，請先重新健檢。修「整體響度」那筆時一併做響度正規化（預設
+沒勾，照預設輸出聲音不會變大），只在那一次、不改記著的設定，畫面上寫明。
 
 勾選哪幾項只記在這次開啟的設定裡（跟一般版同一個區塊，切去一般版前不會寫進 config.json：Qt 預覽版不
 寫設定檔）。這一頁看不到的三項（發佈資訊、封面、章節）原本的勾選不動。
@@ -41,14 +46,19 @@ CHECK_COLUMNS = 3
 
 PAGE_NOTE = ("檢查②字幕頁開著的影片與字幕：音訊、畫質、曝光、音量、節奏、字幕（CPS／行數／重疊）、"
              "廣告友善度、開場、可讀性、標點、語音同步、片尾、工商揭露、術語、檔名，跟一般版同一套門檻。"
-             "字幕類的問題可以直接按「修復此項」。要輸出新影音檔的修復（音訊、修剪、音量），以及發佈文字、章節、"
-             "封面圖、系列一致性的檢查，還在一般版（之後的階段搬過來）。")
+             "可以直接按「修復此項」：字幕類直接改②的字幕，影音類另外輸出一個修復版。發佈文字、章節、"
+             "封面圖、系列一致性的檢查還在一般版（之後的階段搬過來）。")
 NOTHING = "先在②字幕頁開影片或載入字幕，這裡才有東西可以檢查。"
 NONE_CHECKED = "請至少勾一項要跑的檢查。"
 DETAIL_EMPTY = "（點上面一筆結果看詳情與建議）"
 FIX_DEFAULT = "修復此項"
 FIX_CUE_NOTE = "直接改②的字幕（整批一步，②字幕頁按「復原」就還原），改完自動重新健檢。"
-FIX_MEDIA_NOTE = "這項要輸出一個新的影音檔，還在一般版（之後的階段搬過來）。"
+FIX_MEDIA_NOTE = "另外輸出一個修復版（原檔不動），做好後問要不要在②換成它。輸出到一半不能停。"
+FIX_LOUD_NOTE = ("這筆是整體響度：這次會一併做響度正規化，聲音才會真的變大（一般版要另外到進階設定勾，"
+                 "預設沒勾）。")
+FIX_STALE_MEDIA = "②在健檢之後換過影片了，結果講的是之前那支：請先按「開始健檢」重新檢查，再修復。"
+FIX_NO_MEDIA = "②還沒開影片（或檔案找不到了），沒有東西可以修。"
+FIX_NO_FFMPEG = "找不到 ffmpeg，輸出修復版需要它：請先在一般版按「自動安裝 ffmpeg」（兩版共用）。"
 FIX_STALE = "字幕在健檢之後又改過了，結果講的是舊的句子：請先按「開始健檢」重新檢查，再修復。"
 FIX_NOTHING = "沒有可修復的內容（可能空檔不足，或已經符合規範）。"
 
@@ -77,6 +87,32 @@ class HealthWorker(QObject):
             self.failed.emit(exc)
             return
         self.finished.emit(result)
+
+
+class MediaFixWorker(QObject):
+    """背景執行緒跑 healthcheck.apply_media_fix（ffmpeg 輸出修復版）。busy 同樣由畫面那邊放下。"""
+
+    progress = Signal(float, str)
+    finished = Signal(str)     # 輸出的檔案
+    failed = Signal(object)    # 例外（FixError＝前置條件不足，訊息可以直接給人看）
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.busy = False
+
+    def start(self, fix_key, media_path, output_path, config, raw):
+        self.busy = True
+        threading.Thread(target=self._run, args=(fix_key, media_path, output_path, config, raw),
+                         daemon=True).start()
+
+    def _run(self, fix_key, media_path, output_path, config, raw):
+        try:
+            path = hc.apply_media_fix(fix_key, media_path, output_path, config, raw,
+                                      progress_cb=lambda r, m: self.progress.emit(float(r), str(m)))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(exc)
+            return
+        self.finished.emit(str(path))
 
 
 class HealthPanel(QWidget):
@@ -155,6 +191,8 @@ class HealthPanel(QWidget):
         right_layout.addWidget(self.fix_btn)
         right_layout.addWidget(self.fix_note)
         self._current_row = None  # 右邊正在看的那一筆結果
+        self._fix_key, self._fix_output = None, ""  # 正在輸出的影音修復與輸出檔
+        self.last_fixed = ""       # 最近一次輸出的修復版
         self._fix_note = ""       # 修完重新健檢時，狀態列前面先講修了什麼
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.tree)
@@ -167,6 +205,12 @@ class HealthPanel(QWidget):
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
+        self.fixer = MediaFixWorker(self)
+        self.fixer.progress.connect(self._on_fix_progress)
+        self.fixer.finished.connect(self._on_fix_finished)
+        self.fixer.failed.connect(self._on_fix_failed)
+        self._pending_media = ""  # 這次健檢的影片
+        self._scan_media = ""     # 目前結果是哪支影片的（影音修復前比對）
         player.cuesChanged.connect(self.refresh_target)
         self.refresh_target()
         self._update_fix()
@@ -195,10 +239,13 @@ class HealthPanel(QWidget):
 
     # ----- 健檢 -----
     def busy(self):
-        return self.worker.busy
+        return self.worker.busy or self.fixer.busy
+
+    def fixing(self):
+        return self.fixer.busy
 
     def start_scan(self):
-        if self.worker.busy:
+        if self.busy():
             return False
         if callable(self.before_scan):
             self.before_scan()
@@ -215,14 +262,15 @@ class HealthPanel(QWidget):
         # 先讓背景開始（算「忙」），再灰掉按鈕：修復鈕看的是「忙不忙」。進度與結果是排隊送回來的，
         # 一定在這幾行之後才處理。
         self.worker.start(media, cues, dict(self.config), keys)
+        self._pending_media = media
         self.progress_bar.setValue(0)
         self._set_busy(True)
         self.status_label.setText(f"{self._fix_note}健檢進行中…")
         return True
 
-    def _set_busy(self, busy):
+    def _set_busy(self, busy, label="健檢中…"):
         self.run_btn.setEnabled(not busy)
-        self.run_btn.setText("健檢中…" if busy else "開始健檢")
+        self.run_btn.setText(label if busy else "開始健檢")
         self.progress_bar.setVisible(busy)
         for cb in self.check_boxes.values():
             cb.setEnabled(not busy)
@@ -242,6 +290,7 @@ class HealthPanel(QWidget):
         self.status_label.setText(f"{self._take_fix_note()}健檢失敗：{describe_exception(exc)}")
 
     def _on_finished(self, result):
+        self._scan_media = self._pending_media
         self.show_result(result)
         self.worker.busy = False
         self._set_busy(False)
@@ -311,14 +360,31 @@ class HealthPanel(QWidget):
         """右下的修復鈕：字幕類可以按；影音類寫明還在一般版；沒有修復的灰掉。"""
         key = (self._current_row or {}).get("fix_key")
         self.fix_btn.setText(hc.FIX_LABELS.get(key, FIX_DEFAULT) if key else FIX_DEFAULT)
-        self.fix_btn.setEnabled(key in hc.CUE_FIX_KEYS and not self.worker.busy)
-        self.fix_note.setText(FIX_CUE_NOTE if key in hc.CUE_FIX_KEYS
-                              else FIX_MEDIA_NOTE if key in hc.MEDIA_FIX_KEYS else "")
+        self.fix_btn.setEnabled((key in hc.CUE_FIX_KEYS or key in hc.MEDIA_FIX_KEYS) and not self.busy())
+        note = (FIX_CUE_NOTE if key in hc.CUE_FIX_KEYS else FIX_MEDIA_NOTE if key in hc.MEDIA_FIX_KEYS else "")
+        if self._loudness_row():
+            note += FIX_LOUD_NOTE
+        self.fix_note.setText(note)
+
+    def _loudness_row(self):
+        """
+        正在看的是「整體響度」那筆嗎。這筆的修復是音訊修復版，但響度正規化預設沒勾，照預設輸出聲音不會變大
+        （一般版的建議寫著要另外勾）。這裡修這筆時就一併做——只在這一次，不改記著的設定。
+        """
+        row = self._current_row or {}
+        return row.get("fix_key") == "audiofix" and row.get("source") == "音訊健檢" and row.get("title") == "整體響度"
 
     def apply_fix(self):
-        """修右邊正在看的那一筆（字幕類）：套用到②的字幕（一步復原）、重新健檢。回傳有沒有改。"""
+        """
+        修右邊正在看的那一筆。字幕類：套用到②的字幕（一步復原）、重新健檢，回傳有沒有改。
+        影音類：開始在背景輸出修復版，回傳有沒有開始。
+        """
         key = (self._current_row or {}).get("fix_key")
-        if self.worker.busy or key not in hc.CUE_FIX_KEYS or self.last_result is None:
+        if self.busy() or self.last_result is None:
+            return False
+        if key in hc.MEDIA_FIX_KEYS:
+            return self._start_media_fix(key)
+        if key not in hc.CUE_FIX_KEYS:
             return False
         if callable(self.before_scan):
             self.before_scan()
@@ -344,6 +410,86 @@ class HealthPanel(QWidget):
         if not self.start_scan():  # 例如勾選全取消了：修好的照樣留著，講清楚沒重新檢查
             self.status_label.setText(f"{self._take_fix_note()}沒有重新健檢：{self.status_label.text()}")
         return True
+
+    def _start_media_fix(self, key):
+        media = self.player.media_path
+        if not media or not os.path.exists(media):
+            self.status_label.setText(FIX_NO_MEDIA)
+            return False
+        if media != self._scan_media:
+            self.status_label.setText(FIX_STALE_MEDIA)
+            return False
+        from subtitle.burner import ffmpeg_available
+        if not ffmpeg_available():
+            self.status_label.setText(FIX_NO_FFMPEG)
+            return False
+        try:
+            output = hc.suggest_fix_output_path(key, media)
+        except hc.FixError as exc:
+            self.status_label.setText(str(exc))
+            return False
+        self._fix_key, self._fix_output = key, output
+        config = dict(self.config)
+        if self._loudness_row():
+            config["audiofix"] = dict(config.get("audiofix") or {}, loudnorm=True)
+        self.fixer.start(key, media, output, config, self.last_result.get("raw") or {})
+        self.progress_bar.setValue(0)
+        self._set_busy(True, "輸出修復版中…")
+        self.status_label.setText(f"正在輸出修復版：{os.path.basename(output)}（原檔不動）")
+        return True
+
+    def _on_fix_progress(self, ratio, message):
+        self.progress_bar.setValue(int(max(0.0, min(ratio, 1.0)) * 1000))
+        if message:
+            self.status_label.setText(f"輸出修復版：{message}")
+
+    def _on_fix_failed(self, exc):
+        self.fixer.busy = False
+        self._set_busy(False)
+        self.copy_btn.setEnabled(self.last_result is not None)
+        if isinstance(exc, hc.FixError):  # 前置條件不足（例如沒有偵測到頭尾廢秒）：一般版同一句
+            self.status_label.setText(str(exc))
+        else:
+            self.status_label.setText(f"修復失敗：{describe_exception(exc)}")
+
+    def _on_fix_finished(self, path):
+        self.fixer.busy = False
+        self._set_busy(False)
+        self.copy_btn.setEnabled(self.last_result is not None)
+        done = f"修復版已輸出：{os.path.basename(path)}（在 {os.path.dirname(path)}）。"
+        self.last_fixed = path
+        self.status_label.setText(done)
+        if not self._ask_adopt(path, self._fix_key):
+            return
+        if not self.player._maybe_drop_project():  # 跟②「開影片」一樣：專案有沒存的變更先問
+            self.status_label.setText(done + "②沒有換（專案的變更還沒處理）。")
+            return
+        self.player.open_video(path)
+        self.refresh_target()
+        self.status_label.setText(done + "②已換成修復版，按「開始健檢」就是修好之後的結果。")
+
+    def adopt_question(self, path, key):
+        """問要不要在②換成修復版的那段話（修剪版另外寫明字幕時間不會跟著移）。"""
+        text = (f"已輸出：{os.path.basename(path)}\n\n要在②換成這個修復版嗎？建議先播放或試聽確認結果。\n"
+                "換的話跟②「開影片」一樣：素材軌與畫面調整會清掉，字幕留著；選「否」只是輸出檔案。")
+        if key == "trim" and self.player.cues:
+            text += "\n\n注意：修剪版剪掉了開頭，②的字幕時間不會跟著往前移，換了之後要自己對時間。"
+        return text
+
+    def _ask_adopt(self, path, key):
+        from PySide6.QtWidgets import QMessageBox
+        answer = QMessageBox.question(self, "修復完成", self.adopt_question(path, key))
+        return answer == QMessageBox.Yes
+
+    def close_question(self):
+        return (f"修復版（{os.path.basename(self._fix_output)}）還在輸出。\n\n現在關掉的話這個檔可能不完整，"
+                "請不要拿它來用（要的話重開之後再修復一次）。還是要關嗎？")
+
+    def ask_close_while_fixing(self):
+        """關視窗時修復版還在輸出：問要不要關。回傳 True＝可以關。"""
+        from PySide6.QtWidgets import QMessageBox
+        answer = QMessageBox.question(self, "修復版還在輸出", self.close_question())
+        return answer == QMessageBox.Yes
 
     def report_text(self):
         return hc.format_health_report(self.last_result) if self.last_result else ""
