@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-③健檢中心（3.0 第 11 項第八階段：先搬影片與字幕的檢查）。
+③健檢中心（3.0 第 11 項第八階段：先搬影片與字幕的檢查；第九階段：字幕類的「修復此項」）。
 
 檢查與報告跟一般版同一份（`subtitle/healthcheck.py`，原 `gui/health_aggregator.py`）：同樣的項目、同樣
 的門檻、同樣的「一定要修／建議修／通過」與準備度評級。這一頁檢查的對象就是②字幕頁開著的影片與字幕
@@ -8,7 +8,10 @@
 
 這一階段還沒有的（頁面上寫明，請先用一般版）：
 * 發佈文字（標題／說明欄／標籤）、章節、封面圖、系列一致性這四種對象——它們要另外填或選，下一階段搬。
-* 「修復此項」一鍵修復——下一階段搬。
+* 要輸出新影音檔的修復（音訊修復版、修剪頭尾、拉平音量）——下一階段搬。
+
+字幕類的修復（延長過快字幕、修重疊、標點、同步、術語）直接改②的字幕：整批是一步，②字幕頁按「復原」
+（Ctrl+Z）就還原；改完自動重新健檢。健檢之後字幕又改過的話不修（結果講的是舊句子），請先重新健檢。
 
 勾選哪幾項只記在這次開啟的設定裡（跟一般版同一個區塊，切去一般版前不會寫進 config.json：Qt 預覽版不
 寫設定檔）。這一頁看不到的三項（發佈資訊、封面、章節）原本的勾選不動。
@@ -38,10 +41,16 @@ CHECK_COLUMNS = 3
 
 PAGE_NOTE = ("檢查②字幕頁開著的影片與字幕：音訊、畫質、曝光、音量、節奏、字幕（CPS／行數／重疊）、"
              "廣告友善度、開場、可讀性、標點、語音同步、片尾、工商揭露、術語、檔名，跟一般版同一套門檻。"
-             "發佈文字、章節、封面圖、系列一致性的檢查與「修復此項」還在一般版（下一階段搬過來）。")
+             "字幕類的問題可以直接按「修復此項」。要輸出新影音檔的修復（音訊、修剪、音量），以及發佈文字、章節、"
+             "封面圖、系列一致性的檢查，還在一般版（之後的階段搬過來）。")
 NOTHING = "先在②字幕頁開影片或載入字幕，這裡才有東西可以檢查。"
 NONE_CHECKED = "請至少勾一項要跑的檢查。"
 DETAIL_EMPTY = "（點上面一筆結果看詳情與建議）"
+FIX_DEFAULT = "修復此項"
+FIX_CUE_NOTE = "直接改②的字幕（整批一步，②字幕頁按「復原」就還原），改完自動重新健檢。"
+FIX_MEDIA_NOTE = "這項要輸出一個新的影音檔，還在一般版（之後的階段搬過來）。"
+FIX_STALE = "字幕在健檢之後又改過了，結果講的是舊的句子：請先按「開始健檢」重新檢查，再修復。"
+FIX_NOTHING = "沒有可修復的內容（可能空檔不足，或已經符合規範）。"
 
 
 class HealthWorker(QObject):
@@ -135,9 +144,21 @@ class HealthPanel(QWidget):
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
         self.detail.setPlaceholderText(DETAIL_EMPTY)
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(self.detail, 1)
+        self.fix_btn = QPushButton(FIX_DEFAULT)
+        self.fix_btn.clicked.connect(self.apply_fix)
+        self.fix_note = QLabel()
+        self.fix_note.setWordWrap(True)
+        right_layout.addWidget(self.fix_btn)
+        right_layout.addWidget(self.fix_note)
+        self._current_row = None  # 右邊正在看的那一筆結果
+        self._fix_note = ""       # 修完重新健檢時，狀態列前面先講修了什麼
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(self.tree)
-        self.splitter.addWidget(self.detail)
+        self.splitter.addWidget(right)
         self.splitter.setStretchFactor(0, 3)
         self.splitter.setStretchFactor(1, 2)
         layout.addWidget(self.splitter, 1)
@@ -148,6 +169,7 @@ class HealthPanel(QWidget):
         self.worker.failed.connect(self._on_failed)
         player.cuesChanged.connect(self.refresh_target)
         self.refresh_target()
+        self._update_fix()
 
     # ----- 對象 -----
     def refresh_target(self):
@@ -190,10 +212,12 @@ class HealthPanel(QWidget):
             self.status_label.setText(NONE_CHECKED)
             return False
         self.remember_selection()
-        self._set_busy(True)
-        self.status_label.setText("健檢進行中…")
-        self.progress_bar.setValue(0)
+        # 先讓背景開始（算「忙」），再灰掉按鈕：修復鈕看的是「忙不忙」。進度與結果是排隊送回來的，
+        # 一定在這幾行之後才處理。
         self.worker.start(media, cues, dict(self.config), keys)
+        self.progress_bar.setValue(0)
+        self._set_busy(True)
+        self.status_label.setText(f"{self._fix_note}健檢進行中…")
         return True
 
     def _set_busy(self, busy):
@@ -204,17 +228,18 @@ class HealthPanel(QWidget):
             cb.setEnabled(not busy)
         if busy:
             self.copy_btn.setEnabled(False)
+        self._update_fix()
 
     def _on_progress(self, ratio, message):
         self.progress_bar.setValue(int(max(0.0, min(ratio, 1.0)) * 1000))
         if message:
-            self.status_label.setText(f"健檢進行中：{message}")
+            self.status_label.setText(f"{self._fix_note}健檢進行中：{message}")
 
     def _on_failed(self, exc):
         self.worker.busy = False
         self._set_busy(False)
         self.copy_btn.setEnabled(self.last_result is not None)
-        self.status_label.setText(f"健檢失敗：{describe_exception(exc)}")
+        self.status_label.setText(f"{self._take_fix_note()}健檢失敗：{describe_exception(exc)}")
 
     def _on_finished(self, result):
         self.show_result(result)
@@ -225,7 +250,7 @@ class HealthPanel(QWidget):
     def show_result(self, result):
         self.last_result = result
         self.tree.clear()
-        self.detail.clear()
+        self._show_row(None)
         self._findings = []
         findings = result.get("findings") or []
         for label, level in LEVEL_LABELS:
@@ -247,13 +272,17 @@ class HealthPanel(QWidget):
         counts = result.get("counts") or {}
         grade = result.get("grade", "?")
         if not findings:
-            self.status_label.setText("健檢完成：沒有可檢查的項目（看「略過的項目」）。")
+            text = "健檢完成：沒有可檢查的項目（看「略過的項目」）。"
         elif result.get("ok"):
-            self.status_label.setText(f"健檢完成，準備度 {grade}：沒有「一定要修」的項目"
-                                      f"（建議修 {counts.get(LEVEL_WARN, 0)} 項）。")
+            text = f"健檢完成，準備度 {grade}：沒有「一定要修」的項目（建議修 {counts.get(LEVEL_WARN, 0)} 項）。"
         else:
-            self.status_label.setText(f"健檢完成，準備度 {grade}：{counts.get(LEVEL_BAD, 0)} 項一定要修、"
-                                      f"{counts.get(LEVEL_WARN, 0)} 項建議修，詳見下方清單。")
+            text = (f"健檢完成，準備度 {grade}：{counts.get(LEVEL_BAD, 0)} 項一定要修、"
+                    f"{counts.get(LEVEL_WARN, 0)} 項建議修，詳見下方清單。")
+        self.status_label.setText(self._take_fix_note() + text)
+
+    def _take_fix_note(self):
+        note, self._fix_note = self._fix_note, ""
+        return note
 
     def finding_items(self):
         """[(清單上的那一列, 那一筆結果)]，照畫面由上而下（測試與之後的修復用）。"""
@@ -261,16 +290,60 @@ class HealthPanel(QWidget):
 
     def _on_current(self, item, _previous=None):
         index = item.data(0, Qt.UserRole) if item is not None else None
-        if index is None:  # 分組標題、略過的項目
+        # 分組標題、略過的項目沒有編號
+        self._show_row(None if index is None else self._findings[index][1])
+
+    def _show_row(self, row):
+        self._current_row = row
+        self._update_fix()
+        if row is None:
             self.detail.clear()
             return
-        row = self._findings[index][1]
         lines = [f"{LEVEL_ICONS.get(row.get('level'), '・')} [{row.get('source', '')}] {row.get('title', '')}"]
         if row.get("detail"):
             lines += ["", row["detail"]]
         if row.get("advice") and row.get("level") != LEVEL_GOOD:
             lines += ["", f"建議：{row['advice']}"]
         self.detail.setPlainText("\n".join(lines))
+
+    # ----- 修復此項 -----
+    def _update_fix(self):
+        """右下的修復鈕：字幕類可以按；影音類寫明還在一般版；沒有修復的灰掉。"""
+        key = (self._current_row or {}).get("fix_key")
+        self.fix_btn.setText(hc.FIX_LABELS.get(key, FIX_DEFAULT) if key else FIX_DEFAULT)
+        self.fix_btn.setEnabled(key in hc.CUE_FIX_KEYS and not self.worker.busy)
+        self.fix_note.setText(FIX_CUE_NOTE if key in hc.CUE_FIX_KEYS
+                              else FIX_MEDIA_NOTE if key in hc.MEDIA_FIX_KEYS else "")
+
+    def apply_fix(self):
+        """修右邊正在看的那一筆（字幕類）：套用到②的字幕（一步復原）、重新健檢。回傳有沒有改。"""
+        key = (self._current_row or {}).get("fix_key")
+        if self.worker.busy or key not in hc.CUE_FIX_KEYS or self.last_result is None:
+            return False
+        if callable(self.before_scan):
+            self.before_scan()
+        cues = [dict(c) for c in self.player.cues]
+        if cues != list(self.last_result.get("cues") or []):
+            self.status_label.setText(FIX_STALE)
+            return False
+        try:
+            new_cues, changed, message = hc.apply_cue_fix(key, cues, dict(self.config),
+                                                          self.last_result.get("raw") or {})
+        except hc.FixError as exc:
+            self.status_label.setText(str(exc))
+            return False
+        if not changed:
+            self.status_label.setText(FIX_NOTHING)
+            return False
+        try:
+            self.player.apply_cues(new_cues)
+        except ValueError:
+            self.status_label.setText("修復後的句數對不上，沒有套用。")
+            return False
+        self._fix_note = f"{message}（②字幕頁按「復原」就還原）"
+        if not self.start_scan():  # 例如勾選全取消了：修好的照樣留著，講清楚沒重新檢查
+            self.status_label.setText(f"{self._take_fix_note()}沒有重新健檢：{self.status_label.text()}")
+        return True
 
     def report_text(self):
         return hc.format_health_report(self.last_result) if self.last_result else ""
