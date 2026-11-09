@@ -55,16 +55,18 @@ check("速覽對照表把舊〔字幕健檢〕寫成清單編輯列（不是工�
       "清單編輯列〔字幕健檢〕" in check_row
       and not re.search(r"工具列〔字幕健檢〕", check_row), check_row)
 
-for rel in ("README.md", "docs/WHATS_NEW_2.0.md", "docs/MIGRATION_1x_TO_2.0.md"):
+for rel in ("README.md", "docs/USER_GUIDE.md", "docs/WHATS_NEW_2.0.md", "docs/MIGRATION_1x_TO_2.0.md"):
     row = next((ln for ln in _read(rel).splitlines()
                 if ln.startswith("| **① 素材與剪輯**")), "")
     check(f"{rel} 的階段表把「匯入既有字幕」列在①", "匯入既有字幕" in row, row)
 
-readme = _read("README.md")
-check("README 不再說〔匯入字幕〕在字幕清單下方（除了講明「之前在」）",
+# README 精簡後，匯入字幕的說明搬到 docs/USER_GUIDE.md；「不能出現」涵蓋 README 與兩份文件。
+guide = _read("docs/USER_GUIDE.md")
+readme = "\n".join((_read("README.md"), guide, _read("docs/FEATURES.md")))
+check("README 與文件不再說〔匯入字幕〕在字幕清單下方（除了講明「之前在」）",
       "字幕清單下方多了「**匯入字幕**」" not in readme
-      and "v2.3.5 起在〔① 素材與剪輯〕的「既有字幕」卡片" in readme)
-check("README 不再叫人按字幕清單下方的「字幕健檢」",
+      and "v2.3.5 起在〔① 素材與剪輯〕的「既有字幕」卡片" in guide)
+check("README 與文件不再叫人按字幕清單下方的「字幕健檢」",
       "字幕清單下方按「**字幕健檢**」" not in readme
       and "編輯列「字幕健檢」按鈕這一版還在" not in readme)
 
