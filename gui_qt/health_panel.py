@@ -1,14 +1,17 @@
 # -*- coding: utf-8 -*-
 """
 ③健檢中心（3.0 第 11 項第八階段：先搬影片與字幕的檢查；第九、十階段：「修復此項」；第十一階段：
-發佈文字與章節）。
+發佈文字與章節；第十二階段：封面圖）。
 
 檢查與報告跟一般版同一份（`subtitle/healthcheck.py`，原 `gui/health_aggregator.py`）：同樣的項目、同樣
 的門檻、同樣的「一定要修／建議修／通過」與準備度評級。這一頁檢查的對象就是②字幕頁開著的影片與字幕
 （按「開始健檢」時現拿：逐句校對改到一半的會先套用，報告講的是現在的句子）。
 
 這一階段還沒有的（頁面上寫明，請先用一般版）：
-* 封面圖、系列一致性這兩種對象——之後的階段搬。
+* 系列一致性（多支影片彼此比對）——之後的階段搬。
+
+封面圖在「封面圖」那塊加入（可多選，依分數排名，跟一般版同一套檢查；只要 ffmpeg，不必開影片）。加入的
+圖只記在畫面上、不存檔，跟一般版一樣。
 
 發佈文字（標題／說明欄／標籤）與章節在「發佈文字與章節」那塊另外貼（選填，填什麼檢什麼；只放在畫面上、
 不存檔，跟一般版一樣）。「一鍵修正章節」直接改章節框的文字（在章節框按 Ctrl+Z 就還原），改完自動重新
@@ -24,7 +27,7 @@
 沒勾，照預設輸出聲音不會變大），只在那一次、不改記著的設定，畫面上寫明。
 
 勾選哪幾項只記在這次開啟的設定裡（跟一般版同一個區塊，切去一般版前不會寫進 config.json：Qt 預覽版不
-寫設定檔）。這一頁看不到的三項（發佈資訊、封面、章節）原本的勾選不動。
+寫設定檔）。
 """
 import os
 import threading
@@ -32,17 +35,18 @@ import threading
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QCheckBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar, QPushButton,
-    QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListWidget,
+    QListWidgetItem, QPlainTextEdit, QProgressBar, QPushButton, QSplitter, QTreeWidget, QTreeWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from subtitle import healthcheck as hc
 from subtitle.errors import describe_exception
 from subtitle.preflight import LEVEL_BAD, LEVEL_GOOD, LEVEL_WARN
 
-# 這一階段搬過來的項目：只看影片與字幕的（要另外填發佈文字、章節或選封面圖的下一階段才搬）
-LATER_KEYS = frozenset(c.key for c in hc.CHECK_DEFS if c.needs_images)  # 封面圖：之後的階段
-STAGE_CHECKS = tuple(c for c in hc.CHECK_DEFS if c.key not in LATER_KEYS)
+# 一般版健檢中心的項目全部搬過來了（第十二階段補上封面）；系列一致性是另一個工具，不在這份清單裡
+STAGE_CHECKS = tuple(hc.CHECK_DEFS)
+IMAGE_FILTER = "圖片檔 (*.png *.jpg *.jpeg *.webp *.bmp);;所有檔案 (*)"  # 跟一般版的選檔一樣
 
 LEVEL_LABELS = (("一定要修", LEVEL_BAD), ("建議修", LEVEL_WARN), ("通過", LEVEL_GOOD))
 LEVEL_ICONS = {LEVEL_BAD: "✘", LEVEL_WARN: "⚠", LEVEL_GOOD: "✔"}
@@ -51,12 +55,16 @@ CHECK_COLUMNS = 3
 PAGE_NOTE = ("檢查②字幕頁開著的影片與字幕：音訊、畫質、曝光、音量、節奏、字幕（CPS／行數／重疊）、"
              "廣告友善度、開場、可讀性、標點、語音同步、片尾、工商揭露、術語、檔名，跟一般版同一套門檻；"
              "發佈文字與章節在下面另外貼。可以直接按「修復此項」：字幕類直接改②的字幕，影音類另外輸出一個"
-             "修復版，章節直接改章節框。封面圖、系列一致性的檢查還在一般版（之後的階段搬過來）。")
+             "修復版，章節直接改章節框。封面圖在下面加入（可多選、依分數排名）。系列一致性的檢查還在一般版"
+             "（之後的階段搬過來）。")
 PUBLISH_CLOSED = "▸ 發佈文字與章節（選填，填什麼檢什麼；點一下展開）"
 PUBLISH_OPEN = "▾ 發佈文字與章節（選填，填什麼檢什麼；點一下收合）"
 PUBLISH_NOTE = ("標籤用逗號分隔，就是 YouTube 後台那一欄的填法。說明欄上限算的是位元組，中文一個字佔 3 個。"
                 "這裡貼的只放在畫面上、不存檔。")
-NOTHING = "先在②字幕頁開影片或載入字幕，或在下面貼發佈文字、章節，這裡才有東西可以檢查。"
+THUMB_CLOSED = "▸ 封面圖（可多選，會依分數排名；點一下展開）"
+THUMB_OPEN = "▾ 封面圖（可多選，會依分數排名；點一下收合）"
+THUMB_NOTE = "只要 ffmpeg、不必開影片。加入的圖只記在畫面上、不存檔；圖片本身不會被改。"
+NOTHING = "先在②字幕頁開影片或載入字幕，或在下面貼發佈文字、章節、加入封面圖，這裡才有東西可以檢查。"
 NONE_CHECKED = "請至少勾一項要跑的檢查。"
 DETAIL_EMPTY = "（點上面一筆結果看詳情與建議）"
 FIX_DEFAULT = "修復此項"
@@ -85,15 +93,16 @@ class HealthWorker(QObject):
         # 由畫面那邊（主執行緒）收到結果時才放下：在背景放下的話，結果還沒畫上去就「不忙」了
         self.busy = False
 
-    def start(self, media_path, cues, config, keys, publish=None):
+    def start(self, media_path, cues, config, keys, publish=None, image_paths=None):
         self.busy = True
-        threading.Thread(target=self._run, args=(media_path, cues, config, keys, publish), daemon=True).start()
+        threading.Thread(target=self._run, args=(media_path, cues, config, keys, publish, list(image_paths or [])),
+                         daemon=True).start()
 
-    def _run(self, media_path, cues, config, keys, publish):
+    def _run(self, media_path, cues, config, keys, publish, image_paths):
         try:
             result = hc.run_health_scan(media_path, cues, config, keys,
                                         progress_cb=lambda r, m: self.progress.emit(float(r), str(m)),
-                                        publish=publish)
+                                        publish=publish, image_paths=image_paths)
         except Exception as exc:  # noqa: BLE001 —— 背景執行緒的例外一律送回畫面上講
             self.failed.emit(exc)
             return
@@ -166,6 +175,7 @@ class HealthPanel(QWidget):
         grid.addWidget(self.filename_box, index // CHECK_COLUMNS, index % CHECK_COLUMNS)
         layout.addWidget(box)
         layout.addWidget(self._build_publish())
+        layout.addWidget(self._build_thumbs())
 
         row = QHBoxLayout()
         self.run_btn = QPushButton("開始健檢")
@@ -278,6 +288,90 @@ class HealthPanel(QWidget):
         return {"title": self.publish_title.text(), "description": self.publish_desc.toPlainText(),
                 "tags": self.publish_tags.text(), "chapters_text": self.publish_chapters.toPlainText()}
 
+    # ----- 封面圖 -----
+    def _build_thumbs(self):
+        from PySide6.QtWidgets import QToolButton
+        wrap = QWidget()
+        outer = QVBoxLayout(wrap)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.thumb_toggle = QToolButton()
+        self.thumb_toggle.setText(THUMB_CLOSED)
+        self.thumb_toggle.setAutoRaise(True)
+        self.thumb_toggle.clicked.connect(lambda: self.show_thumbs(not self.thumb_body.isVisible()))
+        outer.addWidget(self.thumb_toggle)
+        self.thumb_body = QWidget()
+        body = QHBoxLayout(self.thumb_body)  # 左：清單；右：三顆鈕與說明（並排省高度）
+        body.setContentsMargins(0, 0, 0, 0)
+        self.thumb_list = QListWidget()
+        self.thumb_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.thumb_list.setFixedHeight(76)
+        body.addWidget(self.thumb_list, 3)
+        side = QVBoxLayout()
+        buttons = QHBoxLayout()
+        self.thumb_add_btn = QPushButton("加入圖片…")
+        self.thumb_add_btn.clicked.connect(lambda: self.add_thumbs())
+        self.thumb_remove_btn = QPushButton("移除選取")
+        self.thumb_remove_btn.clicked.connect(self.remove_selected_thumbs)
+        self.thumb_clear_btn = QPushButton("全部清除")
+        self.thumb_clear_btn.clicked.connect(self.clear_thumbs)
+        for btn in (self.thumb_add_btn, self.thumb_remove_btn, self.thumb_clear_btn):
+            buttons.addWidget(btn)
+        buttons.addStretch(1)
+        side.addLayout(buttons)
+        note = QLabel(THUMB_NOTE)
+        note.setWordWrap(True)
+        side.addWidget(note)
+        side.addStretch(1)
+        body.addLayout(side, 2)
+        self.thumb_body.setVisible(False)
+        outer.addWidget(self.thumb_body)
+        self._update_thumb_buttons()
+        return wrap
+
+    def show_thumbs(self, shown=True):
+        self.thumb_body.setVisible(shown)
+        self.thumb_toggle.setText(THUMB_OPEN if shown else THUMB_CLOSED)
+
+    def thumb_paths(self):
+        """加入的封面圖（完整路徑，照加入的順序）。"""
+        return [self.thumb_list.item(i).data(Qt.UserRole) for i in range(self.thumb_list.count())]
+
+    def add_thumbs(self, paths=None):
+        """加入圖片（沒給路徑就開選檔視窗，可多選）；同一張不重複加。回傳這次真的加進去的張數。"""
+        self.show_thumbs(True)
+        if paths is None:
+            paths, _ = QFileDialog.getOpenFileNames(self, "選擇封面圖片", "", IMAGE_FILTER)
+        have = set(self.thumb_paths())
+        added = 0
+        for path in paths or []:
+            if path and path not in have:
+                item = QListWidgetItem(os.path.basename(path))
+                item.setData(Qt.UserRole, path)
+                item.setToolTip(path)
+                self.thumb_list.addItem(item)
+                have.add(path)
+                added += 1
+        self._thumbs_changed()
+        return added
+
+    def remove_selected_thumbs(self):
+        for item in self.thumb_list.selectedItems():
+            self.thumb_list.takeItem(self.thumb_list.row(item))
+        self._thumbs_changed()
+
+    def clear_thumbs(self):
+        self.thumb_list.clear()
+        self._thumbs_changed()
+
+    def _thumbs_changed(self):
+        self._update_thumb_buttons()
+        self.refresh_target()
+
+    def _update_thumb_buttons(self):
+        has = self.thumb_list.count() > 0
+        self.thumb_remove_btn.setEnabled(has)
+        self.thumb_clear_btn.setEnabled(has)
+
     @staticmethod
     def _has_text(publish):
         return hc.has_publish_text(publish) or bool((publish.get("chapters_text") or "").strip())
@@ -291,6 +385,9 @@ class HealthPanel(QWidget):
         parts.append(f"字幕：{count} 句" if count else "字幕：沒有（字幕類的項目會略過）")
         if hasattr(self, "publish_title") and self._has_text(self.publish_text()):
             parts.append("另外貼了發佈文字或章節")
+        thumbs = len(self.thumb_paths()) if hasattr(self, "thumb_list") else 0
+        if thumbs:
+            parts.append(f"封面圖 {thumbs} 張")
         self.target_label.setText("檢查對象（②字幕頁開著的）：" + "　".join(parts))
 
     def showEvent(self, event):  # noqa: N802 —— 切到這一頁時更新對象（換影片沒有訊號）
@@ -302,9 +399,8 @@ class HealthPanel(QWidget):
         return {key for key, cb in self.check_boxes.items() if cb.isChecked()}
 
     def remember_selection(self):
-        """記在這次開啟的設定裡；這頁看不到的項目（發佈、封面、章節）維持原本的勾選。"""
-        keep = hc.default_selected_keys(self.config) & LATER_KEYS
-        hc.save_selected_keys(self.config, self.selected_keys() | keep)
+        """記在這次開啟的設定裡（所有項目都在這頁，照勾選記）。"""
+        hc.save_selected_keys(self.config, self.selected_keys())
 
     # ----- 健檢 -----
     def busy(self):
@@ -321,7 +417,8 @@ class HealthPanel(QWidget):
         self.refresh_target()
         media, cues = self.player.media_path, [dict(c) for c in self.player.cues]
         publish = self.publish_text()
-        if not media and not cues and not self._has_text(publish):
+        images = self.thumb_paths()
+        if not media and not cues and not self._has_text(publish) and not images:
             self.status_label.setText(NOTHING)
             return False
         keys = self.selected_keys()
@@ -331,7 +428,7 @@ class HealthPanel(QWidget):
         self.remember_selection()
         # 先讓背景開始（算「忙」），再灰掉按鈕：修復鈕看的是「忙不忙」。進度與結果是排隊送回來的，
         # 一定在這幾行之後才處理。
-        self.worker.start(media, cues, dict(self.config), keys, publish)
+        self.worker.start(media, cues, dict(self.config), keys, publish, images)
         self._pending_media, self._pending_publish = media, publish
         self.progress_bar.setValue(0)
         self._set_busy(True)
