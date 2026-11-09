@@ -60,7 +60,7 @@ def _read(rel):
 audiocheck_src = _read("gui/audiocheck_dialog.py")
 subcheck_src = _read("gui/subtitle_check_dialog.py")
 preflight_src = _read("gui/preflight_dialog.py")
-aggregator_src = _read("gui/health_aggregator.py")
+aggregator_src = _read("subtitle/healthcheck.py")
 center_src = _read("gui/health_center_panel.py")
 app_src = _read("gui/app.py")
 
@@ -346,7 +346,7 @@ else:
 # ===== 7. 全站規範：進階設定視窗全用 ttk 控件（無 classic Checkbutton/Radiobutton）==
 
 for path, src in (("gui/health_center_panel.py", center_src),
-                  ("gui/health_aggregator.py", aggregator_src)):
+                  ("subtitle/healthcheck.py", aggregator_src)):
     # "ttk.Checkbutton(" 本身以子字串包含 "tk.Checkbutton("，比對前先拿掉
     # ttk. 開頭的合法用法，沿用 tests/test_v1240.py 既有的比對手法。
     stripped = src.replace("ttk.Checkbutton(", "").replace(

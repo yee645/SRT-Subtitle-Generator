@@ -710,7 +710,8 @@ class SrtApp(tk.Tk):
           視窗數不再增加。
 
         面板本身（`gui/health_center_panel.py`）與 `subtitle/`、
-        `gui/health_aggregator.py` 的檢查與修復邏輯一項未動。
+        `subtitle/healthcheck.py`（原 `gui/health_aggregator.py`）的檢查與
+        修復邏輯一項未動。
         """
         def on_fixed(new_cues):
             self.cues = new_cues
