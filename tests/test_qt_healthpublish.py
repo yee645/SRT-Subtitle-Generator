@@ -12,7 +12,7 @@
 5. 修正：章節框＝apply_text_fix 的結果、自動展開、自動重新健檢；狀態列先講修了什麼；新結果沒有首章時間的
    問題；章節框按 Ctrl+Z 回到修之前。
 6. 沒東西可修：講一般版那句、章節框不動。
-7. 勾選：發佈資訊與章節照勾選記；封面維持原本的值；貼的文字不寫進設定；不寫 config.json。
+7. 勾選：發佈資訊、章節、封面都照勾選記；貼的文字不寫進設定；不寫 config.json。
 """
 import os
 import shutil
@@ -154,7 +154,7 @@ else:
     # ----- 7. 勾選與設定 -----
     health.check_boxes["run_publish"].setChecked(False)
     check("取消發佈資訊後再跑", health.start_scan() and wait_until(lambda: not health.busy()))
-    check("發佈資訊照勾選記（沒勾）、章節勾著、封面維持原本的值（沒勾）",
+    check("發佈資訊照勾選記（沒勾）、章節勾著、封面照勾選記（設定裡原本沒勾、畫面上也沒勾）",
           cfg["healthcenter"]["run_publish"] is False and cfg["healthcenter"]["run_chapter"] is True
           and cfg["healthcenter"]["run_thumb"] is False, str(cfg["healthcenter"]))
     check("沒勾發佈資訊：結果裡沒有發佈健檢", all(r["source"] != "發佈健檢" for _i, r in health.finding_items()))
