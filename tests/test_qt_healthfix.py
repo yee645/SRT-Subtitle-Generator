@@ -6,7 +6,8 @@
 
 1. 還沒點任何一筆：修復鈕灰掉、寫「修復此項」。
 2. 點字幕類的（重疊、太快、術語）：鈕上寫一般版的那句（例如「一鍵修復重疊」）、可以按、下面寫會直接改②
-   的字幕、可以復原。點影音類的（整體響度）：鈕上寫「輸出音訊修復版」但灰掉、寫明還在一般版；硬叫也不動。
+   的字幕、可以復原。點影音類的（整體響度）：鈕上寫「輸出音訊修復版」（第十階段起可以按，輸出流程在
+   test_qt_healthmedia.py）。
    點通過的：灰掉、沒有說明。
 3. 健檢之後字幕又改過：不修、講原因（結果講的是舊句子）。
 4. 修重疊：②的字幕＝apply_cue_fix 對健檢時那份字幕的結果；整批一步，②按復原就整個還原；改完自動重新健檢，
@@ -97,9 +98,9 @@ else:
     check("還沒點任何一筆：修復鈕灰掉、寫「修復此項」、沒有說明", not health.fix_btn.isEnabled()
           and health.fix_btn.text() == "修復此項" and health.fix_note.text() == "")
     labels = " ".join(w.text() for w in health.findChildren(type(health.status_label)))
-    check("頁面寫明：字幕類可以直接修；音訊、修剪、音量的修復還在一般版",
-          "字幕類的問題可以直接按「修復此項」" in labels and "要輸出新影音檔的修復（音訊、修剪、音量）" in labels
-          and "還在一般版" in labels)
+    check("頁面寫明：字幕類直接改②的字幕、影音類另外輸出修復版；發佈文字等還在一般版",
+          "可以直接按「修復此項」：字幕類直接改②的字幕，影音類另外輸出一個修復版" in labels
+          and "發佈文字、章節、封面圖、系列一致性的檢查還在一般版" in labels)
 
     def scan():
         ok = health.start_scan()
@@ -126,11 +127,9 @@ else:
     check("抓到整體響度（影音類）", loud is not None)
     health.tree.setCurrentItem(loud)
     before = [dict(c) for c in panel.cues]
-    check("點影音類：鈕上寫「輸出音訊修復版」但灰掉、寫明還在一般版", not health.fix_btn.isEnabled()
-          and health.fix_btn.text() == "輸出音訊修復版" and health.fix_note.text() == hp.FIX_MEDIA_NOTE)
-    status_before = health.status_label.text()
-    check("影音類硬叫也不動（字幕、狀態列都不變）", health.apply_fix() is False and panel.cues == before
-          and not health.busy() and health.status_label.text() == status_before, health.status_label.text())
+    check("點影音類：鈕上寫「輸出音訊修復版」、可以按、說明寫另外輸出（第十階段起）", health.fix_btn.isEnabled()
+          and health.fix_btn.text() == "輸出音訊修復版" and health.fix_note.text() == hp.FIX_MEDIA_NOTE + hp.FIX_LOUD_NOTE
+          and "另外輸出" in hp.FIX_MEDIA_NOTE and panel.cues == before)
 
     good, _ = find(level=hc.LEVEL_GOOD)
     health.tree.setCurrentItem(good)
