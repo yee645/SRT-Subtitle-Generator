@@ -125,16 +125,19 @@ class MainWindow(QMainWindow):
         self.player_panel = None
         self.cue_panel = None
         self.health_panel = None
+        self.output_panel = None
         for name, summary in STAGES:
             if name == "② 字幕":
                 self.tabs.addTab(self._subtitle_page(), name)
             elif name == "③ 健檢中心":
                 self.tabs.addTab(self._health_page(), name)
+            elif name == "④ 輸出與發佈":
+                self.tabs.addTab(self._output_page(), name)
             else:
                 self.tabs.addTab(_placeholder_page(summary), name)
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(
-            "3.0 預覽版：目前有②字幕頁與③健檢中心的影片、字幕檢查與修復，其餘功能請先用一般版。")
+            "3.0 預覽版：目前有②字幕頁、③健檢中心的影片、字幕檢查與修復、④的匯出與燒錄，其餘功能請先用一般版。")
 
     def _subtitle_page(self):
         """② 字幕：播放器面板（第 2 項）＋一行說明其餘功能在哪。"""
@@ -171,9 +174,20 @@ class MainWindow(QMainWindow):
         self.health_panel = HealthPanel(self.player_panel, before_scan=self.cue_panel.commit)
         return self.health_panel
 
+    def _output_page(self):
+        """④ 輸出與發佈（第 11 項第十三階段：輸出設定、完成輸出、逐格式匯出）。對象是②開著的影片與字幕。"""
+        from gui_qt.output_panel import OutputPanel
+
+        self.output_panel = OutputPanel(self.player_panel, before_output=self.cue_panel.commit)
+        return self.output_panel
+
     def closeEvent(self, event):  # noqa: N802 —— 專案或字幕改過還沒存：先問（存檔／放棄／取消）
         if (self.health_panel is not None and self.health_panel.fixing()
                 and not self.health_panel.ask_close_while_fixing()):  # ③的修復版還在輸出
+            event.ignore()
+            return
+        if (self.output_panel is not None and self.output_panel.burning()
+                and not self.output_panel.ask_close_while_burning()):  # ④的硬字幕影片還在燒錄
             event.ignore()
             return
         if self.cue_panel is not None:
