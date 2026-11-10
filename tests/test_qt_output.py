@@ -100,8 +100,8 @@ else:
     labels = " ".join(w.text() for w in out.findChildren(type(out.status_label)))
     check("頁面寫明：燒在原始影片上（剪點、素材軌不算）、不問存哪裡不覆蓋、單獨匯出會問、哪些還在一般版",
           all(w in labels for w in ("原始影片", "剪點、素材軌、轉場、畫面調整不會算進去", "同名就加編號、不覆蓋",
-                                    "會另外問你要存到哪裡", "配樂助手、品牌套版、發佈資料還在一般版")))
-    check("狀態列提到④的匯出與燒錄", "④的匯出與燒錄" in win.statusBar().currentMessage())
+                                    "會另外問你要存到哪裡", "配樂助手、發佈資料還在一般版")))
+    check("狀態列提到④的匯出、燒錄與品牌套版", "④的匯出、燒錄與品牌套版" in win.statusBar().currentMessage())
     check("開始前先套用逐句校對改到一半的", out.before_output == win.cue_panel.commit)
     check("還沒字幕：單獨匯出的鈕灰掉", not any(b.isEnabled() for b in out.export_btns.values()))
 
@@ -210,11 +210,13 @@ else:
           and all(os.path.exists(p) for p in out.last_outputs)
           and not os.path.exists(os.path.join(out_dir, "訪談 final.txt")), str(out.last_outputs))
     check("舊檔沒被覆蓋", open(existing, encoding="utf-8").read() == "舊檔")
+    check("燒錄完：下面品牌套版的來源換成剛燒好的那一支", out.branding.source_edit.text() == burned
+          and out.branding.source_path() == burned)
     check("SRT 內容＝exporter（含剛套用的那句）", open(new_srt, encoding="utf-8").read() == exporter.cues_to_srt(final_cues)
           and "改過的第一句" in open(new_srt, encoding="utf-8").read())
     check("ASS 內容＝exporter（帶目前的字幕樣式）",
           open(ass, encoding="utf-8").read() == exporter.cues_to_ass(final_cues, cfg["subtitle_style"]))
-    check("狀態列與清單：講產生幾個檔、逐一列出", out.status_label.text() == "完成輸出：訪談 final.mp4 共產生 3 個檔案。"
+    check("狀態列與清單：講產生幾個檔、逐一列出", out.status_label.text() == "完成輸出：訪談 final.mp4 共產生 3 個檔案。下面品牌套版的來源已換成剛燒好的這一支。"
           and out.result_box.toPlainText() == "\n".join(f"→ {p}" for p in out.last_outputs))
     check("跑完：按鈕恢復、進度條收起來", out.finish_btn.isEnabled() and out.finish_btn.text() == "完成輸出（依輸出設定）"
           and not out.progress_bar.isVisible() and out.burn_box.isEnabled())
