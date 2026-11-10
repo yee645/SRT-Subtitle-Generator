@@ -83,7 +83,7 @@ else:
 
     cfg = {"automation": {"export_srt": True, "export_vtt": False, "export_ass": False, "export_txt": False,
                           "burn_video": False, "loudnorm": False, "loudnorm_target": -14.0, "output_dir": ""},
-           "subtitle_style": config.load_config().get("subtitle_style")}
+           "subtitle_style": dict(config.load_config().get("subtitle_style") or {}, text_color="#FFEE00")}  # 不是預設值
     win = qt_app.MainWindow(cfg)
     win.resize(1280, 800)
     win.show()
@@ -235,7 +235,10 @@ else:
     # ----- 5. 背景失敗 -----
     real_run = pipeline.export_and_burn
 
+    got = []
+
     def boom(*a, **k):
+        got.append(a)
         raise OSError("磁碟滿了")
 
     pipeline.export_and_burn = boom
@@ -247,6 +250,12 @@ else:
               and out.finish_btn.isEnabled() and not out.progress_bar.isVisible(), out.status_label.text())
     finally:
         pipeline.export_and_burn = real_run
+    sent = got[0][2] if got else {}
+    check("交給背景的設定是副本（跑到一半畫面上再改不影響這次）、內容一樣", bool(got)
+          and sent.get("automation") == cfg["automation"] and sent["automation"] is not cfg["automation"]
+          and sent.get("subtitle_style") == cfg["subtitle_style"] and sent["subtitle_style"] is not cfg["subtitle_style"])
+    check("帶樣式的 ASS 跟不帶樣式的不一樣（測試用的不是預設樣式）",
+          exporter.cues_to_ass(final_cues, cfg["subtitle_style"]) != exporter.cues_to_ass(final_cues))
 
     # ----- 6b. 單獨匯出 -----
     check("開了影片：預設檔名跟著影片", out.default_export_name("ass") == os.path.join(work, "訪談 final.ass"))
