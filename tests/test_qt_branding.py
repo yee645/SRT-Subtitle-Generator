@@ -145,6 +145,8 @@ else:
               and cfg["branding"]["watermark_path"] == logo and "*.png" in asked[-1][3] and "*.mp4" not in asked[-1][3])
     finally:
         QFileDialog.getOpenFileName = real_open
+    box.position_combo.setCurrentIndex(box.position_combo.findData("top_left"))
+    check("只改位置：立刻寫進設定", cfg["branding"]["watermark_position"] == "top_left")
     box.position_combo.setCurrentIndex(box.position_combo.findData("bottom_right"))
     box.scale_spin.setValue(25)
     box.opacity_spin.setValue(1.0)
