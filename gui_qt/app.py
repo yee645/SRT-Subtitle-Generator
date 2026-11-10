@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
                 self.tabs.addTab(_placeholder_page(summary), name)
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(
-            "3.0 預覽版：目前有②字幕頁、③健檢中心的影片、字幕檢查與修復、④的匯出與燒錄，其餘功能請先用一般版。")
+            "3.0 預覽版：目前有②字幕頁、③健檢中心的影片、字幕檢查與修復、④的匯出、燒錄與品牌套版，其餘功能請先用一般版。")
 
     def _subtitle_page(self):
         """② 字幕：播放器面板（第 2 項）＋一行說明其餘功能在哪。"""

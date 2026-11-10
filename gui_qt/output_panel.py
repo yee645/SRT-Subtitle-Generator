@@ -18,7 +18,10 @@
 
 設定只記在這次開啟的設定裡（Qt 預覽版不寫 config.json）。
 
-這一階段還沒有的（頁面上寫明）：燒錄版一鍵設為目前影片、配樂助手、品牌套版、發佈資料。
+「輸出」框下面是「成品加工：品牌套版」（第十四階段，`gui_qt/branding_box.py`）。燒錄完，套版的來源自動換成
+剛燒好的那一支。一次只跑一件：燒錄與套版不同時跑。
+
+還沒有的（頁面上寫明）：配樂助手、發佈資料。
 """
 import os
 import threading
@@ -37,7 +40,7 @@ from subtitle.errors import describe_exception
 FORMATS = tuple(ext.lstrip(".") for ext in pipeline.EXPORT_FORMATS)  # srt、vtt、ass、txt
 PAGE_NOTE = ("把②字幕頁開著的字幕輸出成檔案，跟一般版的「輸出」同一套設定與做法。燒錄硬字幕是燒在②開著的"
              "原始影片上：剪點、素材軌、轉場、畫面調整不會算進去（那些請用②的「照剪點輸出…」「輸出多軌…」）。"
-             "燒錄版一鍵換成目前影片、配樂助手、品牌套版、發佈資料還在一般版（之後的階段搬過來）。")
+             "下面可以接著做品牌套版（片頭／片尾／浮水印）。配樂助手、發佈資料還在一般版（之後的階段搬過來）。")
 FINISH_NOTE = "不會問存到哪裡：檔名跟著影片，同名就加編號、不覆蓋舊檔。"
 SINGLE_NOTE = "這一列一次只匯出一種格式，會另外問你要存到哪裡；不看上面的勾選，也不必開影片。"
 LUFS_NOTE = "LUFS（YouTube 標準 -14；音量偏小的素材建議勾選）"
@@ -45,6 +48,8 @@ NO_CUES = "②字幕頁還沒有字幕：請先在②生成字幕或載入字幕
 NO_MEDIA = "②字幕頁還沒開影片（或檔案找不到了）：〔完成輸出〕的檔名與位置跟著影片走，請先開影片；只要字幕檔可以用下面的單獨匯出。"
 NO_FFMPEG = "找不到 ffmpeg，燒錄硬字幕需要它：請先在一般版按「自動安裝 ffmpeg」（兩版共用），或取消勾選「燒錄硬字幕影片」。"
 CLOSE_QUESTION = "硬字幕影片還在燒錄，現在關掉會留下不完整的檔案。\n\n要等它做完嗎？"
+CLOSE_QUESTION_BRANDING = "套版影片還在輸出，現在關掉會留下不完整的檔案。\n\n要等它做完嗎？"
+BRANDING_BUSY = "下面的品牌套版還在跑，等它做完再輸出。"
 EXPORT_FILTERS = {"srt": "SRT 字幕 (*.srt)", "vtt": "WebVTT 字幕 (*.vtt)", "ass": "ASS 字幕 (*.ass)",
                   "txt": "純文字 (*.txt)"}
 
@@ -168,6 +173,9 @@ class OutputPanel(QWidget):
         row.addStretch(1)
         inner.addLayout(row)
         layout.addWidget(box)
+        from gui_qt.branding_box import BrandingBox
+        self.branding = BrandingBox(player, other_busy=self.busy)
+        layout.addWidget(self.branding)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1000)
@@ -247,12 +255,15 @@ class OutputPanel(QWidget):
         return self.worker.busy
 
     def burning(self):
-        return self.worker.busy and self.worker.burning
+        """有沒有還在輸出的影片（燒錄或套版）：關視窗前要問。"""
+        return (self.worker.busy and self.worker.burning) or self.branding.busy()
 
     # ----- 完成輸出 -----
     def finish_output(self):
         if self.busy():
             return False
+        if self.branding.busy():
+            return self._refuse(BRANDING_BUSY)
         if callable(self.before_output):
             self.before_output()
         self.collect_settings()
@@ -309,8 +320,11 @@ class OutputPanel(QWidget):
         self.last_outputs = outputs
         self.result_box.setPlainText("\n".join(f"→ {path}" for path in outputs))
         self._done()
-        self.status_label.setText(
-            f"完成輸出：{os.path.basename(self._pending_media)} 共產生 {len(outputs)} 個檔案。")
+        text = f"完成輸出：{os.path.basename(self._pending_media)} 共產生 {len(outputs)} 個檔案。"
+        if burned:
+            self.branding.set_source(burned)  # 建議順序：燒錄→套版
+            text += "下面品牌套版的來源已換成剛燒好的這一支。"
+        self.status_label.setText(text)
 
     # ----- 只匯出一種格式 -----
     def default_export_name(self, name):
@@ -346,6 +360,7 @@ class OutputPanel(QWidget):
     # ----- 關視窗 -----
     def ask_close_while_burning(self):
         """燒錄中關視窗：先問。回傳 True＝照樣關。"""
-        answer = QMessageBox.question(self, "還在燒錄", CLOSE_QUESTION, QMessageBox.Yes | QMessageBox.No,
+        question = CLOSE_QUESTION if self.worker.busy and self.worker.burning else CLOSE_QUESTION_BRANDING
+        answer = QMessageBox.question(self, "還在輸出", question, QMessageBox.Yes | QMessageBox.No,
                                       QMessageBox.Yes)
         return answer == QMessageBox.No
