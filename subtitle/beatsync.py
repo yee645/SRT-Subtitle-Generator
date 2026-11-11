@@ -286,6 +286,32 @@ def analyze_beats(audio_path: str, config: Optional[dict] = None,
             "beats": beats, "duration": duration}
 
 
+def beats_on_timeline(beats: list, at: float, start: float, end: Optional[float],
+                      total: float, loop: bool = False) -> list:
+    """
+    音樂放上影片時間軸之後，拍子落在影片的哪些時間。
+
+    beats 是音樂檔自己的拍點（秒）；這段音樂取 start～end（end 沒給＝到最後一拍為止都算），
+    從影片的 at 秒開始放；loop 時那一段重複到片尾（total）。超出片尾的不算。
+    3.0 的音樂軌用：一般版的配樂助手假設音樂從影片 0 秒整首放，這裡照實際擺的位置算。
+    """
+    at, start, total = float(at), max(float(start), 0.0), float(total)
+    inside = sorted(float(b) for b in beats or []
+                    if float(b) >= start - 1e-9 and (end is None or float(b) < float(end) - 1e-9))
+    if not inside or total <= at:
+        return []
+    period = (float(end) - start) if end is not None else 0.0
+    result, lap = [], 0
+    while True:
+        offset = at + lap * period - start
+        row = [round(b + offset, 3) for b in inside if b + offset < total - 1e-9]
+        result.extend(row)
+        lap += 1
+        if not loop or period <= 0.0 or len(row) < len(inside) or at + lap * period >= total:
+            break
+    return [t for t in result if t >= 0.0]
+
+
 def snap_times(times: list, beats: list,
                max_shift: float = 0.25) -> list:
     """
