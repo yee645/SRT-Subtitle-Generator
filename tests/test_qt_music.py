@@ -148,6 +148,7 @@ else:
     check("自動關著：手動靈敏度可以改", dialog.sensitivity_spin.isEnabled())
     check("說明講整支影片共用", "整支影片共用" in md.DUCK_NOTE and "強度" in md.DUCK_NOTE)
     dialog.strength_spin.setValue(5.5)
+    check("只改強度：當下就寫進設定", cfg["ducking"]["duck_strength"] == 5.5, str(cfg["ducking"]))
     dialog.sensitivity_spin.setValue(0.2)
     check("改強度、靈敏度：寫進這次開啟的設定", cfg["ducking"]["duck_strength"] == 5.5
           and cfg["ducking"]["duck_sensitivity"] == 0.2 and cfg["ducking"]["auto_sensitivity"] is False,
@@ -189,9 +190,12 @@ else:
         cuts = detect_scene_changes(main, resolve_pacing_settings(cfg))
         return result, placed, cuts, beatsync.snap_times(cuts, placed, 0.25)
 
+    again = []
+
     def analyze():
         QTest.mouseClick(dialog.beat_btn, Qt.LeftButton)
         started = dialog.busy() and not dialog.beat_btn.isEnabled()
+        again.append(dialog.start_beats())
         done = wait_until(lambda: not dialog.busy())
         return started, done
 
@@ -203,6 +207,7 @@ else:
     item = dict(panel.tracks["music"][0])
     result, placed, cuts, snapped = expected(item)
     payload = dialog.last_payload
+    check("跑的期間再叫一次：不重跑", again == [False], str(again))
     check("速度是 120 BPM", abs(payload["result"]["bpm"] - 120.0) < 1.0, str(payload["result"]["bpm"]))
     check("影片的剪接點抓到三個（2.0、4.1、6.9 秒附近）", len(cuts) == 3
           and all(abs(a - b) < 0.1 for a, b in zip(cuts, (2.0, 4.1, 6.9))), str(cuts))
