@@ -92,6 +92,7 @@ from gui_qt import timeline as timeline_mod
 from gui_qt import picture_preview
 from gui_qt.overlay_preview import OverlayPreview
 from gui_qt.picture_panel import PictureDialog
+from gui_qt.music_dialog import MusicDialog
 from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
 from subtitle import assemble as assemble_mod
 from subtitle import cueedit, cutmarks, picture
@@ -403,7 +404,11 @@ class PlayerPanel(QWidget):
         self.loop_box = QCheckBox("循環到片尾")
         self.loop_box.setToolTip("音樂放完從頭再放，一路到片尾（勾了之後只能修頭）")
         self.duck_box = QCheckBox("講話時壓低")
-        self.duck_box.setToolTip("有人講話時自動把音樂壓低（照一般版的閃避設定）")
+        self.duck_box.setToolTip("有人講話時自動把音樂壓低（壓多低、多靈敏在「配樂設定…」裡調）")
+        self.music_settings_btn = QPushButton("配樂設定…")
+        self.music_settings_btn.setToolTip("講話時壓低的強度與靈敏度（整支影片共用），以及分析這段音樂的節拍、"
+                                           "看影片的剪接點離拍子多遠")
+        self.music_dialog = None
         self.position_combo = QComboBox()
         for key, label, _rect in assemble_mod.OVERLAY_POSITIONS:
             self.position_combo.addItem(label, key)
@@ -413,7 +418,7 @@ class PlayerPanel(QWidget):
         self.overlay_picture_btn = QPushButton("調畫面…")
         self.overlay_picture_btn.setToolTip("調這段素材的亮度、對比、飽和度，或轉正、翻轉（跟主片的「畫面調整…」"
                                             "同一個小視窗）")
-        self._prop_widgets = {"music": (self.volume_spin, self.loop_box, self.duck_box),
+        self._prop_widgets = {"music": (self.volume_spin, self.loop_box, self.duck_box, self.music_settings_btn),
                               "overlays": (self.position_combo, self.overlay_audio_box, self.overlay_picture_btn)}
         self.last_assemble = None  # 上一次多軌輸出成功的結果
 
@@ -512,6 +517,7 @@ class PlayerPanel(QWidget):
         self.assemble_btn.clicked.connect(lambda: self.export_tracks())
         self.picture_btn.clicked.connect(lambda: self.show_picture_dialog())
         self.overlay_picture_btn.clicked.connect(lambda: self.show_picture_dialog("overlay"))
+        self.music_settings_btn.clicked.connect(lambda: self.show_music_dialog())
         self.track_exporter.progress.connect(self._on_assemble_progress)
         self.track_exporter.finished.connect(self._on_assemble_done)
         self.track_exporter.failed.connect(self._on_assemble_failed)
@@ -844,6 +850,8 @@ class PlayerPanel(QWidget):
         if (kind == "overlays" and self._picture_dialog_open() and self.picture_dialog.target != "main"
                 and self.picture_dialog.target[1] != selected[1]):
             self._set_picture_target(("overlays", selected[1]))  # 小視窗開著時改選別段：跟著改調那一段
+        if self.music_dialog is not None:  # 配樂設定開過：對象跟著選取走（沒選音樂就是 None）
+            self.music_dialog.set_target(selected[1] if kind == "music" else None)
         if not item:
             return
         for widgets in self._prop_widgets.values():
@@ -1722,6 +1730,20 @@ class PlayerPanel(QWidget):
         self.picture_dialog.set_target(target, f"疊加第 {index + 1} 段：{os.path.basename(item['path'])}",
                                        lambda adjust, i=index: self.set_overlay_adjust(i, adjust),
                                        item.get("adjust"))
+
+    def show_music_dialog(self):
+        """
+        開「配樂設定」小視窗（不擋住播放器）：閃避強度／靈敏度、分析選取那段音樂的節拍。
+        沒選取音樂也能開（閃避設定是整支影片共用的），只是節拍那一塊要先選一段。
+        """
+        if self.music_dialog is None:
+            self.music_dialog = MusicDialog(self)
+        selected = self.timeline.track_selected
+        self.music_dialog.set_target(selected[1] if selected and selected[0] == "music"
+                                     and selected[1] < len(self.tracks["music"]) else None)
+        self.music_dialog.show()
+        self.music_dialog.raise_()
+        return self.music_dialog
 
     def _picture_dialog_open(self):
         return self.picture_dialog is not None and not self.picture_dialog.isHidden()
