@@ -126,6 +126,7 @@ class MainWindow(QMainWindow):
         self.cue_panel = None
         self.health_panel = None
         self.output_panel = None
+        self.review_panel = None
         for name, summary in STAGES:
             if name == "② 字幕":
                 self.tabs.addTab(self._subtitle_page(), name)
@@ -135,9 +136,14 @@ class MainWindow(QMainWindow):
                 self.tabs.addTab(self._output_page(), name)
             else:
                 self.tabs.addTab(_placeholder_page(summary), name)
+        # ①審片助手要拿②的播放器與字幕：②建好之後再把①的說明頁換成它（頁籤順序與名稱不變）
+        self.tabs.removeTab(0)
+        self.tabs.insertTab(0, self._review_page(), STAGES[0][0])
+        self.tabs.setCurrentIndex(0)
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(
-            "3.0 預覽版：目前有②字幕頁、③健檢中心的影片、字幕檢查與修復、④的匯出、燒錄與品牌套版，其餘功能請先用一般版。")
+            "3.0 預覽版：目前有①的審片助手（分析與段落清單）、②字幕頁、③健檢中心的影片、字幕檢查與修復、"
+            "④的匯出、燒錄與品牌套版，其餘功能請先用一般版。")
 
     def _subtitle_page(self):
         """② 字幕：播放器面板（第 2 項）＋一行說明其餘功能在哪。"""
@@ -165,6 +171,13 @@ class MainWindow(QMainWindow):
         self.splitter.setSizes([DEFAULT_SIZE[0] - CUE_PANEL_WIDTH, CUE_PANEL_WIDTH])
         layout.addWidget(self.splitter, 1)
         return page
+
+    def _review_page(self):
+        """① 素材與剪輯：審片助手（第 11 項第十六階段：分析與段落清單）。分析的是②開著的字幕。"""
+        from gui_qt.review_panel import ReviewPanel
+
+        self.review_panel = ReviewPanel(self.player_panel, before_analyze=self.cue_panel.commit)
+        return self.review_panel
 
     def _health_page(self):
         """③ 健檢中心（第 11 項第八階段：先搬影片與字幕的檢查）。對象是②開著的影片與字幕。"""
