@@ -183,6 +183,7 @@ class ReviewPanel(QWidget):
             spin.setDecimals(decimals)
             spin.setSuffix(suffix)
             spin.setValue(settings[key])
+            spin.setMaximumWidth(110)
             grid.addWidget(QLabel(label), 0, col * 2)
             grid.addWidget(spin, 0, col * 2 + 1)
             self.spins[key] = spin
@@ -210,11 +211,11 @@ class ReviewPanel(QWidget):
         weights.addSpacing(12)
         weights.addWidget(self.voice_band_box)
         weights.addStretch(1)
-        grid.addLayout(weights, 2, 0, 1, 8)
+        grid.addLayout(weights, 2, 0, 1, 9)
         hint = QLabel(SETTINGS_HINT)
         hint.setWordWrap(True)
-        grid.addWidget(hint, 3, 0, 1, 8)
-        grid.setColumnStretch(3, 1)
+        grid.addWidget(hint, 3, 0, 1, 9)
+        grid.setColumnStretch(8, 1)  # 多的寬度留在最右邊，欄位不被拉寬
         layout.addWidget(box)
 
         row = QHBoxLayout()
