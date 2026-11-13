@@ -216,7 +216,9 @@ else:
     check("分析完：清單的鈕亮了", all(b.isEnabled() for b in list_buttons))
     check("捨棄的列字是淡的、冷場的列有底色", panel.tree.topLevelItem(2).foreground(5).color()
           != panel.tree.topLevelItem(0).foreground(5).color()
-          and panel.tree.topLevelItem(2).background(5).color().alpha() > 0
+          and panel.tree.topLevelItem(2).background(5).style() != Qt.NoBrush
+          and panel.tree.topLevelItem(2).background(5).color().alpha() == 55
+          and panel.tree.topLevelItem(2).background(5).color().name() == review.CATEGORY_COLORS["silence"]
           and panel.tree.topLevelItem(0).background(5).color().alpha() in (0, 255)
           and panel.tree.topLevelItem(0).background(5).style() == Qt.NoBrush)
 
