@@ -134,7 +134,8 @@ else:
         state = {"busy": panel.busy(), "cutting": panel.cutting(), "buttons": [b.isEnabled() for b in all_buttons],
                  "analyze": panel.analyze_btn.isEnabled(), "again": panel.start_cut(kind),
                  "analysis": panel.start_analysis(), "export": panel.export("csv"),
-                 "progress": panel.progress_bar.isVisibleTo(panel), "status": panel.status_label.text()}
+                 "progress": panel.progress_bar.isVisibleTo(panel), "status": panel.status_label.text(),
+                 "fillers": panel.fillers_box.isEnabled()}
         wait_until(lambda: not panel.busy())
         return state, (panel.last_cut if panel.last_cut is not before else None)
 
@@ -218,6 +219,7 @@ else:
           and state["export"] == "")
     check("跑的期間狀態列寫檔名、原檔不動、不能停", "素材_粗剪.mp4" in state["status"] and "原檔不動" in state["status"]
           and "不能停" in state["status"], state["status"])
+    check("跑的期間「剪除口頭禪字」也灰掉（做完亮回來）", state["fillers"] is False and panel.fillers_box.isEnabled())
     rough = os.path.join(work, "素材_粗剪.mp4")
     check("做完：檔名加「_粗剪」、放在影片旁邊", result is not None and result["kind"] == "roughcut"
           and result["output"] == rough and os.path.exists(rough), str(result))
@@ -237,6 +239,7 @@ else:
     check("原檔不動", (os.path.getsize(main), os.path.getmtime(main)) == original)
     check("狀態列：輸出到哪、旁邊有字幕", "粗剪已輸出：素材_粗剪.mp4" in panel.status_label.text()
           and "素材_粗剪.srt" in panel.status_label.text(), panel.status_label.text())
+    check("沒有整句被剪掉：狀態列不提", "整句被剪掉" not in panel.status_label.text())
 
     # ----- 4. 問要不要換、再輸出一次 -----
     check("做好後問要不要在②換成它（選否：②不變）", len(asked) == 1 and asked[0]["output"] == rough
@@ -255,6 +258,7 @@ else:
           and color_at(second["output"], seconds(second["output"]) - 0.5) == "綠"
           and len(load_subtitle_file(second["subtitles"])["cues"]) == 2 and second["dropped"] == 1,
           f"{seconds(second['output'])} {second}")
+    check("狀態列寫有幾句整句被剪掉", "（1 句整句被剪掉）" in panel.status_label.text(), panel.status_label.text())
 
     # ----- 5. 精彩合輯 -----
     panel.select_segment(speech[1])
