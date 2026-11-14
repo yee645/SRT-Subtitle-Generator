@@ -49,7 +49,7 @@ TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
          "test_stylecheck.py", "test_qt_style.py", "test_qt_projectstyle.py", "test_generate.py",
          "test_qt_generate.py", "test_multilangpack.py", "test_qt_multilang.py",
          "test_qt_health.py", "test_qt_healthfix.py", "test_qt_healthmedia.py",
-         "test_qt_healthpublish.py", "test_qt_healththumb.py", "test_qt_output.py", "test_qt_branding.py", "test_qt_music.py", "test_qt_review.py"]
+         "test_qt_healthpublish.py", "test_qt_healththumb.py", "test_qt_output.py", "test_qt_branding.py", "test_qt_music.py", "test_qt_review.py", "test_qt_review_output.py"]
 
 
 def main() -> int:
