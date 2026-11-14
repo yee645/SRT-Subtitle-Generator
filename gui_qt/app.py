@@ -142,7 +142,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(
-            "3.0 預覽版：目前有①的審片助手（分析與段落清單）、②字幕頁、③健檢中心的影片、字幕檢查與修復、"
+            "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出）、②字幕頁、③健檢中心的影片、字幕檢查與修復、"
             "④的匯出、燒錄與品牌套版，其餘功能請先用一般版。")
 
     def _subtitle_page(self):
@@ -173,7 +173,7 @@ class MainWindow(QMainWindow):
         return page
 
     def _review_page(self):
-        """① 素材與剪輯：審片助手（第 11 項第十六階段：分析與段落清單）。分析的是②開著的字幕。"""
+        """① 素材與剪輯：審片助手（第 11 項第十六、十七階段：分析、段落清單、粗剪與匯出）。分析的是②開著的字幕。"""
         from gui_qt.review_panel import ReviewPanel
 
         self.review_panel = ReviewPanel(self.player_panel, before_analyze=self.cue_panel.commit)
@@ -197,6 +197,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):  # noqa: N802 —— 專案或字幕改過還沒存：先問（存檔／放棄／取消）
         if (self.health_panel is not None and self.health_panel.fixing()
                 and not self.health_panel.ask_close_while_fixing()):  # ③的修復版還在輸出
+            event.ignore()
+            return
+        if (self.review_panel is not None and self.review_panel.cutting()
+                and not self.review_panel.ask_close_while_cutting()):  # ①的粗剪／精彩合輯還在輸出
             event.ignore()
             return
         if (self.output_panel is not None and self.output_panel.burning()

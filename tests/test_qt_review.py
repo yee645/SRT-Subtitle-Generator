@@ -116,9 +116,9 @@ else:
           == ["① 素材與剪輯", "② 字幕", "③ 健檢中心", "④ 輸出與發佈"])
     check("開起來停在①", win.tabs.currentIndex() == 0)
     check("頁面寫明不重新轉錄、不送出去", "不重新轉錄" in rp.PAGE_NOTE and "不送任何東西出去" in rp.PAGE_NOTE)
-    check("頁面寫明哪些還在一般版", all(w in rp.PAGE_NOTE for w in ("粗剪影片", "精彩合輯", "EDL", "章節", "封面候選",
-                                                             "直式短片", "還在一般版")))
-    check("狀態列提到①的審片助手", "①的審片助手" in win.statusBar().currentMessage())
+    # 第十七階段起粗剪與匯出搬過來了：「還在一般版」的只剩章節、發佈包、廣告插入點、封面候選、直式短片
+    check("頁面寫明哪些還在一般版", "章節與發佈包、廣告插入點、封面候選、直式短片還在一般版" in rp.PAGE_NOTE)
+    check("狀態列提到①的審片助手", "①的審片助手（" in win.statusBar().currentMessage())
 
     # ----- 2. 偵測設定 -----
     check("偵測設定照設定填", panel.spins["silence_gap"].value() == 3.0
