@@ -31,12 +31,12 @@ import threading
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPalette
 from PySide6.QtWidgets import (
-    QAbstractItemView, QButtonGroup, QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QProgressBar, QPushButton, QRadioButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-    QWidget,
+    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout,
+    QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QRadioButton, QSpinBox, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from subtitle import cutmarks, exporter, review
+from subtitle import adbreaks, chaptercheck, cutmarks, exporter, publisher, review
 from subtitle.burner import ffmpeg_available
 from subtitle.errors import describe_exception
 from subtitle.pipeline import resolve_output_dir, unique_path
@@ -44,8 +44,8 @@ from subtitle.pipeline import resolve_output_dir, unique_path
 PAGE_NOTE = ("審片助手：讀文字快速找可用片段。分析②字幕頁現在的字幕（不重新轉錄、不送任何東西出去），自動標出"
              "冷場、重複拍攝、口頭禪多與精彩；冷場與重複拍攝預設捨棄。點一段，②的播放器跳到那裡。"
              "看完清單，下面「輸出」照保留的段落輸出粗剪影片、精彩合輯，或匯出 EDL／審片標記字幕／CSV／HTML 報告。"
-             "章節與發佈包、廣告插入點、封面候選、直式短片還在一般版（之後的階段搬過來）；剪停頓、剪重複、"
-             "審片建議的剪點在②的時間軸上。")
+             "同一框的「發佈」產章節草稿、發佈包與廣告插入點，章節與發佈文字會帶進③健檢中心。"
+             "封面候選、直式短片還在一般版（之後的階段搬過來）；剪停頓、剪重複、審片建議的剪點在②的時間軸上。")
 SETTINGS_HINT = ("敏感度 >1 更容易標記精彩、<1 更嚴格；情緒詞以逗號或空白分隔，附加於內建詞庫；口頭禪字連寫"
                  "（逐字比對）；權重 0＝停用該訊號、1＝預設。")
 NO_CUES = "②字幕頁還沒有字幕：請先到②按「生成字幕…」或「載入字幕」，再回來分析。"
@@ -59,6 +59,16 @@ NO_HIGHLIGHT = "這支素材沒有偵測到精彩片段：可以在清單手動�
 NO_BASE = "不知道要存到哪裡：請先到②開影片或載入字幕（輸出檔放在它旁邊，或「輸出設定」指定的資料夾）。"
 OUTPUT_NOTE = ("粗剪＝保留的段落接起來；精彩合輯＝只接標了「精彩」的段落。輸出成新檔（原檔不動），②有字幕時旁邊放一份"
                "對齊到剪後時間的字幕；輸出到一半不能停。")
+PUBLISH_NOTE = ("章節草稿與發佈包（建議標題、說明欄草稿、標籤）照保留的段落算，除了複製／存檔，也會帶進③健檢中心的"
+                "「發佈文字與章節」（那裡原本填的會被換掉，在該格按 Ctrl+Z 還原）。廣告插入點挑自然停頓處，"
+                "YouTube 8 分鐘以上的影片才適用。都在本機算，不送任何東西出去。")
+NO_CHAPTERS = "目前沒有保留中的講話段落，產不出章節。"
+AD_TOO_SHORT = "素材不足 8 分鐘：YouTube 只允許 8 分鐘以上的影片放 mid-roll 廣告，沒有插入點可以建議。"
+AD_NO_PAUSE = ("在頭尾保留區之外找不到夠長的自然停頓：可以調低「最小間隔」再試"
+               "（停頓要多長才算，是設定檔的 adbreaks.min_pause）。")
+SENT_TO_HEALTH = "並帶進③健檢中心的「發佈文字與章節」（到③按「開始健檢」就能檢查）"
+# (鍵, 按鈕文字)：跟一般版同名
+PUBLISH_BUTTONS = (("chapters", "複製 YouTube 章節"), ("pack", "匯出發佈包"), ("adbreaks", "複製廣告插入點"))
 CUT_KINDS = {"roughcut": ("粗剪", "_粗剪"), "highlight": ("精彩合輯", "_精彩合輯")}
 # (鍵, 按鈕文字, 檔名後綴, 副檔名)：跟一般版的匯出同名
 EXPORTS = (("edl", "匯出 EDL（進剪輯軟體）", "_粗剪", ".edl"), ("srt", "匯出審片標記字幕", "_審片標記", ".srt"),
@@ -208,11 +218,12 @@ class SegmentStrip(QWidget):
 
 
 class ReviewPanel(QWidget):
-    def __init__(self, player, before_analyze=None, parent=None):
+    def __init__(self, player, before_analyze=None, on_publish=None, parent=None):
         super().__init__(parent)
         self.player = player
         self.config = player._config
         self.before_analyze = before_analyze
+        self.on_publish = on_publish  # 章節／發佈包 → ③健檢中心的「發佈文字與章節」；回傳帶進去了哪幾格
         self.items, self.duration = [], 0.0
         self.visible = []  # 清單第幾列 → items 第幾段
         self.filter = "all"
@@ -368,7 +379,50 @@ class ReviewPanel(QWidget):
             row.addWidget(button)
         row.addStretch(1)
         out_layout.addLayout(row)
+
+        ad = adbreaks.resolve_adbreak_settings(self.config)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("發佈"))
+        row.addWidget(QLabel("章節最短"))
+        self.chapter_spin = QSpinBox()
+        self.chapter_spin.setRange(10, 600)
+        self.chapter_spin.setSingleStep(10)
+        self.chapter_spin.setSuffix(" 秒")
+        self.chapter_spin.setValue(int(round(settings["chapter_min_seconds"])))
+        row.addWidget(self.chapter_spin)
+        self.publish_buttons = {}
+        for key, label in PUBLISH_BUTTONS:
+            button = QPushButton(label)
+            self.publish_buttons[key] = button
+        row.addWidget(self.publish_buttons["chapters"])
+        row.addWidget(self.publish_buttons["pack"])
+        row.addSpacing(14)
+        row.addWidget(QLabel("廣告插入點：最小間隔"))
+        self.ad_spacing_spin = QDoubleSpinBox()
+        self.ad_spacing_spin.setRange(*adbreaks._SPACING_RANGE)
+        self.ad_spacing_spin.setSingleStep(0.5)
+        self.ad_spacing_spin.setDecimals(1)
+        self.ad_spacing_spin.setSuffix(" 分")
+        self.ad_spacing_spin.setValue(ad["min_spacing_minutes"])
+        row.addWidget(self.ad_spacing_spin)
+        row.addWidget(QLabel("最多"))
+        self.ad_max_spin = QSpinBox()
+        self.ad_max_spin.setRange(*adbreaks._MAX_BREAKS_RANGE)
+        self.ad_max_spin.setSuffix(" 個")
+        self.ad_max_spin.setValue(ad["max_breaks"])
+        row.addWidget(self.ad_max_spin)
+        row.addWidget(self.publish_buttons["adbreaks"])
+        row.addStretch(1)
+        out_layout.addLayout(row)
+        publish_note = QLabel(PUBLISH_NOTE)
+        publish_note.setWordWrap(True)
+        out_layout.addWidget(publish_note)
         layout.addWidget(out)
+        self.last_publish = None  # 上一次帶去③的 {"title","description","tags","chapters"}（有給的才有）
+        self.publish_buttons["chapters"].clicked.connect(lambda _c=False: self.copy_chapters())
+        self.publish_buttons["pack"].clicked.connect(lambda _c=False: self.export_publish_pack())
+        self.publish_buttons["adbreaks"].clicked.connect(lambda _c=False: self.copy_ad_breaks())
+        self.chapter_spin.valueChanged.connect(self._on_chapter_min_changed)
         self.last_cut = None      # 上一次輸出成功的 {"kind", "output", "subtitles", "dropped"}
         self.last_export = ""     # 上一次匯出的檔
         self._cut_output = ""
@@ -601,7 +655,8 @@ class ReviewPanel(QWidget):
         self.analyze_btn.setText("分析中…" if self.worker.busy else "開始分析")
         self.progress_bar.setVisible(not idle)
         for w in (self.toggle_btn, self.suggest_btn, self.keep_all_btn, self.search_btn, self.search_edit,
-                  *self.filter_buttons.values(), *self.cut_buttons.values(), *self.export_buttons.values()):
+                  *self.filter_buttons.values(), *self.cut_buttons.values(), *self.export_buttons.values(),
+                  *self.publish_buttons.values()):
             w.setEnabled(has and idle)
         self.fillers_box.setEnabled(idle)
 
@@ -736,11 +791,8 @@ class ReviewPanel(QWidget):
             elif key == "csv":
                 review.export_csv(self.items, path)
             else:
-                settings = review.resolve_settings(self.config)
-                chapters = review.build_chapters(self.items, min_chapter_seconds=settings["chapter_min_seconds"],
-                                                 break_gap=settings["silence_gap"])
                 review.export_html_report(self.items, path, source_name=name, media_duration=self.duration,
-                                          chapters=chapters)
+                                          chapters=self.chapters())
         except (OSError, ValueError) as exc:
             self.status_label.setText(f"匯出失敗：{exc}")
             return ""
@@ -749,4 +801,127 @@ class ReviewPanel(QWidget):
                 "srt": "審片標記字幕（跟原始素材一起載入剪輯軟體，拉時間軸就看得到【精彩】【冷場】等標記）",
                 "csv": "CSV 片段清單", "html": "HTML 審片報告（用瀏覽器開，可以直接傳給剪輯師）"}[key]
         self.status_label.setText(f"已匯出{what}：{path}")
+        return path
+
+    # ----- 發佈：章節、發佈包、廣告插入點 -----
+    def _on_chapter_min_changed(self, value):
+        """「章節最短」寫進這次開啟的設定（review.chapter_min_seconds，跟一般版同一項）。"""
+        current = dict(self.config.get("review") or {})
+        current["chapter_min_seconds"] = float(value)
+        self.config["review"] = current
+
+    def chapters(self):
+        """照保留的段落切章節（一般版同一個函式、同兩項設定）。"""
+        settings = review.resolve_settings(self.config)
+        return review.build_chapters(self.items, min_chapter_seconds=settings["chapter_min_seconds"],
+                                     break_gap=settings["silence_gap"])
+
+    def _send_publish(self, **fields):
+        """帶進③健檢中心的「發佈文字與章節」。回傳有沒有真的帶進去。"""
+        if not callable(self.on_publish):
+            return False
+        sent = bool(self.on_publish(**fields))
+        if sent:
+            self.last_publish = {k: v for k, v in fields.items() if v}
+        return sent
+
+    def chapter_fix_question(self, problems, changes):
+        return ("這份草稿貼到說明欄後 YouTube 不會顯示章節：\n\n" + "\n".join(f"・{p}" for p in problems)
+                + "\n\n可以自動修正成符合規則的版本：\n" + "\n".join(f"・{c}" for c in changes)
+                + "\n\n要用修正後的版本嗎？（選「否」則用原始草稿）")
+
+    def _ask_fix_chapters(self, problems, changes):
+        return QMessageBox.question(self, "章節不符 YouTube 規則",
+                                    self.chapter_fix_question(problems, changes)) == QMessageBox.Yes
+
+    def copy_chapters(self):
+        """
+        章節草稿：複製到剪貼簿，並帶進③的章節框。不符 YouTube 規則（貼上去不會顯示）時先講：修得好就問要不要
+        用修正後的；修不好（段落本來就不夠）照樣複製，狀態列講原因。回傳複製的文字；沒複製回傳空字串。
+        """
+        if self.busy() or not self.items:
+            return ""
+        chapters = self.chapters()
+        if not chapters:
+            self.status_label.setText(NO_CHAPTERS)
+            return ""
+        check = chaptercheck.resolve_chaptercheck_settings(self.config)
+        result = chaptercheck.validate_chapters(chapters, self.duration, check)
+        note = ""
+        if not result["ok"]:
+            problems = [f"{f['title']}：{f['detail']}" for f in result["findings"]
+                        if f["level"] == chaptercheck.LEVEL_BAD]
+            fixed, changes = chaptercheck.fix_chapters(chapters, self.duration, check)
+            if chaptercheck.validate_chapters(fixed, self.duration, check)["ok"]:
+                if self._ask_fix_chapters(problems, changes):
+                    chapters = fixed
+                    note = "（已修正成符合 YouTube 規則的版本）"
+                else:
+                    note = "（這份不符 YouTube 規則，貼上去不會顯示章節：" + "；".join(problems) + "）"
+            else:
+                note = ("（這份不符 YouTube 規則，貼上去不會顯示章節：" + "；".join(problems)
+                        + "。這不是格式問題、沒辦法自動修正：請調高「冷場門檻」或調低「章節最短」讓素材切出更多段，"
+                          "或這支影片就不用章節）")
+        text = "\n".join(f"{chaptercheck.format_timestamp(c['start'])} {c['title']}" for c in chapters)
+        QApplication.clipboard().setText(text)
+        if self._send_publish(chapters=text):
+            self.status_label.setText(f"章節草稿（{len(chapters)} 章）已複製到剪貼簿，{SENT_TO_HEALTH}。{note}")
+        else:
+            self.status_label.setText(f"章節草稿（{len(chapters)} 章）已複製到剪貼簿，可以直接貼到說明欄。{note}")
+        return text
+
+    def ad_settings(self):
+        """畫面上的廣告插入點參數寫進這次開啟的設定（adbreaks，跟一般版同一個區塊；別的項目留著）。"""
+        current = dict(self.config.get("adbreaks") or {})
+        current.update({"min_spacing_minutes": round(self.ad_spacing_spin.value(), 1),
+                        "max_breaks": self.ad_max_spin.value()})
+        self.config["adbreaks"] = current
+        return adbreaks.resolve_adbreak_settings(self.config)
+
+    def ad_breaks(self):
+        return adbreaks.suggest_ad_breaks(self.items, self.duration, settings=self.ad_settings())
+
+    def copy_ad_breaks(self):
+        """廣告插入點建議（自然停頓處）複製到剪貼簿。回傳複製的文字；沒有可建議的回傳空字串並講原因。"""
+        if self.busy() or not self.items:
+            return ""
+        breaks = self.ad_breaks()
+        if not breaks:
+            self.status_label.setText(AD_TOO_SHORT if self.duration < adbreaks.MIDROLL_MIN_SECONDS else AD_NO_PAUSE)
+            return ""
+        text = adbreaks.format_ad_breaks(breaks)
+        QApplication.clipboard().setText(text)
+        self.status_label.setText(f"已複製 {len(breaks)} 個廣告插入點建議，可以貼到記事本對照 YouTube Studio 手動放置。")
+        return text
+
+    def export_publish_pack(self):
+        """
+        發佈包（建議標題＋說明欄草稿＋標籤＋章節＋廣告插入點）存成 `_發佈包.txt`，同一份算出來的標題、說明欄、
+        標籤、章節帶進③。回傳存到哪；沒存回傳空字串。
+        """
+        if self.busy() or not self.items:
+            return ""
+        path = self.default_path("_發佈包", ".txt")
+        if not path:
+            self.status_label.setText(NO_BASE)
+            return ""
+        settings = review.resolve_settings(self.config)
+        publish = publisher.resolve_publish_settings(self.config)
+        chapters = self.chapters()
+        name = os.path.basename(self.player.media_path or self.player._subtitle_path)
+        pack = publisher.build_publish_pack(self.items, settings=publish, chapters=chapters, source_name=name,
+                                            extra_words=settings["extra_excite_words"], ad_breaks=self.ad_breaks())
+        try:
+            with open(path, "w", encoding="utf-8") as fp:
+                fp.write(pack)
+        except OSError as exc:
+            self.status_label.setText(f"匯出失敗：{exc}")
+            return ""
+        self.last_export = path
+        fields = publisher.build_publish_fields(self.items, settings=publish, chapters=chapters,
+                                                extra_words=settings["extra_excite_words"])
+        sent = self._send_publish(title=fields["title"], description=fields["description"], tags=fields["tags"],
+                                  chapters=fields["chapters"])
+        extra = f"；建議標題、說明欄、標籤與章節{SENT_TO_HEALTH}" if sent else ""
+        self.status_label.setText(f"已匯出發佈包（建議標題、說明欄草稿、標籤，上傳時自行潤飾）：{path}{extra}。")
         return path

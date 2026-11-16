@@ -283,6 +283,28 @@ class HealthPanel(QWidget):
         self.publish_body.setVisible(shown)
         self.publish_toggle.setText(PUBLISH_OPEN if shown else PUBLISH_CLOSED)
 
+    def adopt_publish(self, **fields):
+        """
+        ①審片助手產的章節／發佈包帶進這一塊：可以給 title／description／tags／chapters，只換有給值的那幾格
+        （用「選取全部再打字」換，所以在那一格按 Ctrl+Z 還原得回來）；順手展開這一塊——填進去了卻收著，
+        跟沒填一樣。不自動健檢。回傳換了哪幾格。
+        """
+        changed = []
+        for key, edit in (("title", self.publish_title), ("tags", self.publish_tags)):
+            if fields.get(key):
+                edit.selectAll()
+                edit.insert(str(fields[key]))
+                changed.append(key)
+        for key, edit in (("description", self.publish_desc), ("chapters", self.publish_chapters)):
+            if fields.get(key):
+                cursor = edit.textCursor()
+                cursor.select(cursor.SelectionType.Document)
+                cursor.insertText(str(fields[key]))
+                changed.append(key)
+        if changed:
+            self.show_publish(True)
+        return changed
+
     def publish_text(self):
         """{"title","description","tags","chapters_text"}：跟一般版對象區同一個格式。"""
         return {"title": self.publish_title.text(), "description": self.publish_desc.toPlainText(),

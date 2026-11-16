@@ -74,7 +74,7 @@ import copy
 import os
 import threading
 
-from PySide6.QtCore import QObject, QPointF, QRectF, QSizeF, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, QSizeF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QBrush, QColor, QFont, QFontMetricsF, QKeySequence, QPainter, QPainterPath, QPen,
     QShortcut, QTransform,
@@ -1557,6 +1557,14 @@ class PlayerPanel(QWidget):
                 self.player.play()
             return
         if self.player.playbackState() == QMediaPlayer.PlaybackState.StoppedState:
+            # 不在這個訊號裡直接暫停：換開另一支影片時，訊號是 setSource 還沒返回就送出來的，這時候叫
+            # pause() 偶爾會讓 Qt 卡死不回來（實測：開過一支再開一支 10 分鐘的，約五次有一次）。
+            # 等 setSource 返回、回到事件迴圈再暫停。
+            QTimer.singleShot(0, self._pause_when_loaded)
+
+    def _pause_when_loaded(self):
+        if (self.player.mediaStatus() == QMediaPlayer.MediaStatus.LoadedMedia
+                and self.player.playbackState() == QMediaPlayer.PlaybackState.StoppedState):
             self.player.pause()
 
     def _on_error(self, _err, message):

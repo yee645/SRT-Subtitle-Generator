@@ -147,8 +147,8 @@ else:
     check("說明寫原檔不動、不能停、會放對齊的字幕", all(w in rp.OUTPUT_NOTE for w in ("原檔不動", "不能停", "對齊到剪後時間的字幕")))
     check("頁面說明：粗剪與匯出在這頁，章節、封面候選、直式短片還在一般版",
           "下面「輸出」照保留的段落輸出粗剪影片、精彩合輯" in rp.PAGE_NOTE
-          and "章節與發佈包、廣告插入點、封面候選、直式短片還在一般版" in rp.PAGE_NOTE)
-    check("狀態列提到粗剪與匯出", "①的審片助手（分析、段落清單、粗剪與匯出）" in win.statusBar().currentMessage())
+          and "封面候選、直式短片還在一般版" in rp.PAGE_NOTE)
+    check("狀態列提到粗剪與匯出", "①的審片助手（分析、段落清單、粗剪與匯出" in win.statusBar().currentMessage())
     check("「剪除口頭禪字」照設定勾", panel.fillers_box.isChecked() and panel.fillers_box.isEnabled())
     refreshed = []
     real_refresh = player.refresh_cut_marks
