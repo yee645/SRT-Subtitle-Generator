@@ -258,9 +258,9 @@ else:
     # ----- 6. 輸出影片的期間 -----
     QTest.mouseClick(panel.cut_buttons["roughcut"], Qt.LeftButton)
     state = (panel.cutting(), [b.isEnabled() for b in buttons.values()], panel.copy_chapters(),
-             panel.export_publish_pack(), panel.copy_ad_breaks())
+             panel.export_publish_pack(), panel.copy_ad_breaks(), panel.status_label.text() != rp.AD_TOO_SHORT)
     wait_until(lambda: not panel.busy())
-    check("輸出影片的期間：三顆鈕灰掉、按了不做事；做完亮回來", state == (True, [False] * 3, "", "", "")
+    check("輸出影片的期間：三顆鈕灰掉、按了不做事（狀態列也不動）；做完亮回來", state == (True, [False] * 3, "", "", "", True)
           and all(b.isEnabled() for b in buttons.values()), str(state))
 
     # ----- 5（續）. 10 分鐘的素材 -----
