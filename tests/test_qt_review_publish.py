@@ -18,6 +18,7 @@ test_chaptercheck*.py；這裡驗介面與接線，結果跟直接呼叫核心�
 5. 廣告插入點：不足 8 分鐘講原因、不動剪貼簿；10 分鐘的素材複製出來的跟核心一樣；「最多」「最小間隔」
    寫進這次開啟的設定（別的項目留著）並照著算；找不到停頓講原因。發佈包裡有廣告插入點那一段。
 6. 輸出影片的期間三顆鈕灰掉、按了不做事。全程不寫 config.json。
+7. 換開另一支影片不會卡住：播放器不在開檔的當下暫停（回到事件迴圈才暫停）。
 """
 import os
 import shutil
@@ -117,8 +118,18 @@ else:
         assert panel.start_analysis() is True
         assert wait_until(lambda: not panel.busy())
 
+    opening = {"now": False, "paused_inside": 0}
+    real_pause = player.player.pause
+
+    def spy_pause():
+        opening["paused_inside"] += opening["now"]
+        real_pause()
+    player.player.pause = spy_pause
+
     def open_with(video, name):
+        opening["now"] = True
         player.open_video(video)
+        opening["now"] = False
         wait_until(lambda: player.player.duration() > 0, 20000)
         wait(100)
         player.load_subtitles(os.path.join(work, name))
@@ -265,6 +276,10 @@ else:
 
     # ----- 5（續）. 10 分鐘的素材 -----
     open_with(long, "長片.srt")
+    from PySide6.QtMultimedia import QMediaPlayer  # noqa: E402
+    # 開過一支再開一支：載入完成的訊號可能在 setSource 還沒返回時就送出來，那時候直接暫停偶爾會讓 Qt 卡死
+    check("換開另一支影片：不在開檔的當下暫停，回到事件迴圈才暫停（第一格照樣出來）", opening["paused_inside"] == 0
+          and player.player.playbackState() == QMediaPlayer.PlaybackState.PausedState, str(opening))
     check("長片：10 分鐘、八段講話", abs(panel.duration - 600) < 2
           and sum(1 for i in panel.items if i["kind"] == "speech") == 8, f"{panel.duration}")
     QTest.mouseClick(buttons["adbreaks"], Qt.LeftButton)
