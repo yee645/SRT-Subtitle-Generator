@@ -142,7 +142,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(
-            "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出、章節與發佈包）、②字幕頁、③健檢中心的影片、字幕檢查與修復、"
+            "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出、章節與發佈包、封面候選）、②字幕頁、③健檢中心的影片、字幕檢查與修復、"
             "④的匯出、燒錄與品牌套版，其餘功能請先用一般版。")
 
     def _subtitle_page(self):
@@ -174,14 +174,15 @@ class MainWindow(QMainWindow):
 
     def _review_page(self):
         """
-        ① 素材與剪輯：審片助手（第 11 項第十六～十八階段：分析、段落清單、粗剪與匯出、章節與發佈包）。
-        分析的是②開著的字幕；章節與發佈文字帶進③健檢中心。
+        ① 素材與剪輯：審片助手（第 11 項第十六～十九階段：分析、段落清單、粗剪與匯出、章節與發佈包、封面候選）。
+        分析的是②開著的字幕；章節、發佈文字與封面候選帶進③健檢中心。
         """
         from gui_qt.review_panel import ReviewPanel
 
         self.review_panel = ReviewPanel(
             self.player_panel, before_analyze=self.cue_panel.commit,
-            on_publish=lambda **fields: self.health_panel.adopt_publish(**fields) if self.health_panel else [])
+            on_publish=lambda **fields: self.health_panel.adopt_publish(**fields) if self.health_panel else [],
+            on_thumbnails=lambda paths: self.health_panel.add_thumbs(list(paths)) if self.health_panel else 0)
         return self.review_panel
 
     def _health_page(self):
