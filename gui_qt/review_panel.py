@@ -28,24 +28,25 @@
 import os
 import threading
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPalette
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout,
-    QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QRadioButton, QSpinBox, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton,
+    QRadioButton, QSpinBox, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from subtitle import adbreaks, chaptercheck, cutmarks, exporter, publisher, review
+from subtitle import adbreaks, chaptercheck, cutmarks, exporter, publisher, review, thumbnails
 from subtitle.burner import ffmpeg_available
 from subtitle.errors import describe_exception
 from subtitle.pipeline import resolve_output_dir, unique_path
 
 PAGE_NOTE = ("審片助手：讀文字快速找可用片段。分析②字幕頁現在的字幕（不重新轉錄、不送任何東西出去），自動標出"
              "冷場、重複拍攝、口頭禪多與精彩；冷場與重複拍攝預設捨棄。點一段，②的播放器跳到那裡。"
-             "看完清單，下面「輸出」照保留的段落輸出粗剪影片、精彩合輯，或匯出 EDL／審片標記字幕／CSV／HTML 報告。"
-             "同一框的「發佈」產章節草稿、發佈包與廣告插入點，章節與發佈文字會帶進③健檢中心。"
-             "封面候選、直式短片還在一般版（之後的階段搬過來）；剪停頓、剪重複、審片建議的剪點在②的時間軸上。")
+             "看完清單，下面「輸出」分三頁：「影片與匯出」照保留的段落輸出粗剪影片、精彩合輯，或匯出 EDL／審片標記"
+             "字幕／CSV／HTML 報告；「發佈」產章節草稿、發佈包與廣告插入點，章節與發佈文字會帶進③健檢中心；"
+             "「封面候選」挑清晰、有內容的畫面輸出 PNG，帶進③的「封面圖」。直式短片還在一般版（之後的階段搬過來）；"
+             "剪停頓、剪重複、審片建議的剪點在②的時間軸上。")
 SETTINGS_HINT = ("敏感度 >1 更容易標記精彩、<1 更嚴格；情緒詞以逗號或空白分隔，附加於內建詞庫；口頭禪字連寫"
                  "（逐字比對）；權重 0＝停用該訊號、1＝預設。")
 NO_CUES = "②字幕頁還沒有字幕：請先到②按「生成字幕…」或「載入字幕」，再回來分析。"
@@ -67,6 +68,13 @@ AD_TOO_SHORT = "素材不足 8 分鐘：YouTube 只允許 8 分鐘以上的影�
 AD_NO_PAUSE = ("在頭尾保留區之外找不到夠長的自然停頓：可以調低「最小間隔」再試"
                "（停頓要多長才算，是設定檔的 adbreaks.min_pause）。")
 SENT_TO_HEALTH = "並帶進③健檢中心的「發佈文字與章節」（到③按「開始健檢」就能檢查）"
+THUMB_NOTE = ("從精彩與保留的段落取樣（不夠就整支平均取），照畫面清晰度排名，輸出 1280 寬的 PNG（檔名加「_封面01」…，"
+              "放在影片旁邊，不覆蓋）。輸出好的會加進③健檢中心的「封面圖」，到③按「開始健檢」看手機上讀不讀得清楚。"
+              "點一張，②的播放器跳到那一格。都在本機做，不送任何東西出去。")
+NO_FFMPEG_THUMBS = "找不到 ffmpeg，擷取封面候選需要它：請先在一般版按「自動安裝 ffmpeg」（兩版共用）。"
+SENT_THUMBS = "已加進③健檢中心的「封面圖」（到③按「開始健檢」看手機上讀不讀得清楚）"
+# 「輸出」框的三頁：(鍵, 頁籤名)
+OUT_TABS = (("video", "影片與匯出"), ("publish", "發佈"), ("thumbs", "封面候選"))
 # (鍵, 按鈕文字)：跟一般版同名
 PUBLISH_BUTTONS = (("chapters", "複製 YouTube 章節"), ("pack", "匯出發佈包"), ("adbreaks", "複製廣告插入點"))
 CUT_KINDS = {"roughcut": ("粗剪", "_粗剪"), "highlight": ("精彩合輯", "_精彩合輯")}
@@ -169,6 +177,34 @@ class CutWorker(QObject):
         self.finished.emit({"kind": kind, "output": output, "subtitles": subtitles, "dropped": dropped})
 
 
+class ThumbWorker(QObject):
+    """背景執行緒：挑封面候選、輸出 PNG（一般版同一個 `thumbnails.generate_thumbnails`）。busy 由畫面那邊放下。"""
+
+    progress = Signal(float, str)
+    finished = Signal(object)  # [{"path", "time", "score"}, ...]（分數高的在前）
+    failed = Signal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.busy = False
+
+    def start(self, media_path, items, duration, folder, base, settings):
+        self.busy = True
+        threading.Thread(target=self._run, args=(media_path, [dict(i) for i in items], float(duration or 0.0),
+                                                 folder, base, dict(settings)), daemon=True).start()
+
+    def _run(self, media_path, items, duration, folder, base, settings):
+        try:
+            results = thumbnails.generate_thumbnails(
+                media_path, items, duration,
+                output_paths=lambda rank: unique_path(os.path.join(folder, f"{base}_封面{rank:02d}.png")),
+                settings=settings, progress_cb=lambda r, m: self.progress.emit(float(r), str(m)))
+        except Exception as exc:  # noqa: BLE001 —— 背景執行緒的例外一律送回畫面上講
+            self.failed.emit(exc)
+            return
+        self.finished.emit(results)
+
+
 class SegmentStrip(QWidget):
     """整支素材的彩色條：一段一塊，顏色照分類；捨棄的畫淡。點一塊送出是第幾段。"""
 
@@ -218,12 +254,13 @@ class SegmentStrip(QWidget):
 
 
 class ReviewPanel(QWidget):
-    def __init__(self, player, before_analyze=None, on_publish=None, parent=None):
+    def __init__(self, player, before_analyze=None, on_publish=None, on_thumbnails=None, parent=None):
         super().__init__(parent)
         self.player = player
         self.config = player._config
         self.before_analyze = before_analyze
         self.on_publish = on_publish  # 章節／發佈包 → ③健檢中心的「發佈文字與章節」；回傳帶進去了哪幾格
+        self.on_thumbnails = on_thumbnails  # 封面候選 → ③健檢中心的「封面圖」；回傳加進去幾張
         self.items, self.duration = [], 0.0
         self.visible = []  # 清單第幾列 → items 第幾段
         self.filter = "all"
@@ -355,7 +392,17 @@ class ReviewPanel(QWidget):
         layout.addLayout(ops)
 
         out = QGroupBox("輸出")
-        out_layout = QVBoxLayout(out)
+        out_box = QVBoxLayout(out)
+        out_box.setContentsMargins(6, 4, 6, 6)
+        self.out_tabs = QTabWidget()
+        self.out_pages = {}
+        for key, label in OUT_TABS:
+            page = QWidget()
+            QVBoxLayout(page).setContentsMargins(6, 6, 6, 4)
+            self.out_pages[key] = page
+            self.out_tabs.addTab(page, label)
+        out_box.addWidget(self.out_tabs)
+        out_layout = self.out_pages["video"].layout()
         out_note = QLabel(OUTPUT_NOTE)
         out_note.setWordWrap(True)
         out_layout.addWidget(out_note)
@@ -379,10 +426,11 @@ class ReviewPanel(QWidget):
             row.addWidget(button)
         row.addStretch(1)
         out_layout.addLayout(row)
+        out_layout.addStretch(1)
 
+        out_layout = self.out_pages["publish"].layout()
         ad = adbreaks.resolve_adbreak_settings(self.config)
         row = QHBoxLayout()
-        row.addWidget(QLabel("發佈"))
         row.addWidget(QLabel("章節最短"))
         self.chapter_spin = QSpinBox()
         self.chapter_spin.setRange(10, 600)
@@ -417,7 +465,59 @@ class ReviewPanel(QWidget):
         publish_note = QLabel(PUBLISH_NOTE)
         publish_note.setWordWrap(True)
         out_layout.addWidget(publish_note)
+        out_layout.addStretch(1)
+
+        page = self.out_pages["thumbs"].layout()
+        thumbs_cfg = thumbnails.resolve_thumbnail_settings(self.config)
+        cols = QHBoxLayout()
+        left = QVBoxLayout()
+        row = QHBoxLayout()
+        row.addWidget(QLabel("張數"))
+        self.thumb_count_spin = QSpinBox()
+        self.thumb_count_spin.setRange(*thumbnails._COUNT_RANGE)
+        self.thumb_count_spin.setSuffix(" 張")
+        self.thumb_count_spin.setValue(thumbs_cfg["count"])
+        row.addWidget(self.thumb_count_spin)
+        row.addWidget(QLabel("最小間隔"))
+        self.thumb_spacing_spin = QDoubleSpinBox()
+        self.thumb_spacing_spin.setRange(*thumbnails._SPACING_RANGE)
+        self.thumb_spacing_spin.setSingleStep(1.0)
+        self.thumb_spacing_spin.setDecimals(0)
+        self.thumb_spacing_spin.setSuffix(" 秒")
+        self.thumb_spacing_spin.setValue(thumbs_cfg["min_spacing"])
+        row.addWidget(self.thumb_spacing_spin)
+        self.thumb_highlight_box = QCheckBox("優先取精彩段落")
+        self.thumb_highlight_box.setChecked(thumbs_cfg["prefer_highlights"])
+        row.addWidget(self.thumb_highlight_box)
+        self.thumb_btn = QPushButton("擷取封面候選圖")
+        row.addWidget(self.thumb_btn)
+        row.addStretch(1)
+        left.addLayout(row)
+        thumb_note = QLabel(THUMB_NOTE)
+        thumb_note.setWordWrap(True)
+        left.addWidget(thumb_note)
+        left.addStretch(1)
+        cols.addLayout(left, 3)
+        self.thumb_strip = QListWidget()
+        self.thumb_strip.setViewMode(QListView.IconMode)
+        self.thumb_strip.setFlow(QListView.LeftToRight)
+        self.thumb_strip.setWrapping(False)
+        self.thumb_strip.setMovement(QListView.Static)
+        self.thumb_strip.setIconSize(QSize(96, 54))
+        self.thumb_strip.setFixedHeight(96)
+        self.thumb_strip.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.thumb_strip.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.thumb_strip.setToolTip("擷取的封面候選（照清晰度排名）；點一張，②的播放器跳到那一格")
+        cols.addWidget(self.thumb_strip, 2)
+        page.addLayout(cols)
         layout.addWidget(out)
+        self.last_thumbs = []  # 上一次輸出的 [{"path", "time", "score"}, ...]
+        self.thumber = ThumbWorker(self)
+        self.thumber.progress.connect(self._on_progress)
+        self.thumber.finished.connect(self._on_thumbs_finished)
+        self.thumber.failed.connect(self._on_thumbs_failed)
+        self.thumb_btn.clicked.connect(lambda _c=False: self.start_thumbnails())
+        self.thumb_strip.itemClicked.connect(self._on_thumb_clicked)
         self.last_publish = None  # 上一次帶去③的 {"title","description","tags","chapters"}（有給的才有）
         self.publish_buttons["chapters"].clicked.connect(lambda _c=False: self.copy_chapters())
         self.publish_buttons["pack"].clicked.connect(lambda _c=False: self.export_publish_pack())
@@ -463,7 +563,7 @@ class ReviewPanel(QWidget):
 
     # ----- 分析 -----
     def busy(self):
-        return self.worker.busy or self.cutter.busy
+        return self.worker.busy or self.cutter.busy or self.thumber.busy
 
     def start_analysis(self):
         if self.busy():
@@ -656,7 +756,7 @@ class ReviewPanel(QWidget):
         self.progress_bar.setVisible(not idle)
         for w in (self.toggle_btn, self.suggest_btn, self.keep_all_btn, self.search_btn, self.search_edit,
                   *self.filter_buttons.values(), *self.cut_buttons.values(), *self.export_buttons.values(),
-                  *self.publish_buttons.values()):
+                  *self.publish_buttons.values(), self.thumb_btn):
             w.setEnabled(has and idle)
         self.fillers_box.setEnabled(idle)
 
@@ -673,13 +773,16 @@ class ReviewPanel(QWidget):
         輸出檔放哪：②開著的影片旁邊（沒開影片就放字幕檔旁邊），「輸出設定」指定了資料夾就放那裡；
         檔名＝來源檔名＋後綴，同名加編號。沒有影片也沒有字幕檔：回傳空字串。
         """
-        source = self.player.media_path or self.player._subtitle_path
+        folder, base = self._output_base(self.player.media_path or self.player._subtitle_path)
+        return unique_path(os.path.join(folder, f"{base}{suffix}{ext}")) if folder else ""
+
+    def _output_base(self, source):
+        """(資料夾, 不含副檔名的來源檔名)：放在來源旁邊，「輸出設定」指定了資料夾就放那裡。沒有來源：("", "")。"""
         if not source:
-            return ""
+            return "", ""
         folder = resolve_output_dir(source, self.config.get("automation") or {})
         os.makedirs(folder, exist_ok=True)
-        base = os.path.splitext(os.path.basename(source))[0]
-        return unique_path(os.path.join(folder, f"{base}{suffix}{ext}"))
+        return folder, os.path.splitext(os.path.basename(source))[0]
 
     def cut_items(self, kind):
         """這次要剪的段落：粗剪照清單的保留／捨棄；精彩合輯只留標了精彩的（不管它現在是不是保留）。"""
@@ -761,9 +864,13 @@ class ReviewPanel(QWidget):
                                     self.adopt_question(result)) == QMessageBox.Yes
 
     def cutting(self):
-        return self.cutter.busy
+        """粗剪／精彩合輯或封面候選還在輸出（關視窗要先問）。"""
+        return self.cutter.busy or self.thumber.busy
 
     def close_question(self):
+        if self.thumber.busy and not self.cutter.busy:
+            return ("封面候選圖還在輸出。\n\n現在關掉的話正在寫的那一張可能不完整，請不要拿它來用"
+                    "（要的話重開之後再擷取一次）。還是要關嗎？")
         return (f"影片（{os.path.basename(self._cut_output)}）還在輸出。\n\n現在關掉的話這個檔可能不完整，"
                 "請不要拿它來用（要的話重開之後再輸出一次）。還是要關嗎？")
 
@@ -925,3 +1032,63 @@ class ReviewPanel(QWidget):
         extra = f"；建議標題、說明欄、標籤與章節{SENT_TO_HEALTH}" if sent else ""
         self.status_label.setText(f"已匯出發佈包（建議標題、說明欄草稿、標籤，上傳時自行潤飾）：{path}{extra}。")
         return path
+
+    # ----- 封面候選 -----
+    def thumb_settings(self):
+        """畫面上的封面候選參數寫進這次開啟的設定（thumbnails，跟一般版同一個區塊；別的項目——例如寬度——留著）。"""
+        current = dict(self.config.get("thumbnails") or {})
+        current.update({"count": self.thumb_count_spin.value(), "min_spacing": float(self.thumb_spacing_spin.value()),
+                        "prefer_highlights": self.thumb_highlight_box.isChecked()})
+        self.config["thumbnails"] = current
+        return thumbnails.resolve_thumbnail_settings(self.config)
+
+    def start_thumbnails(self):
+        """擷取封面候選圖（背景跑）。回傳有沒有開始。"""
+        if self.busy() or not self.items:
+            return False
+        media = self.player.media_path
+        if not media or not os.path.exists(media):
+            return self._refuse(NO_MEDIA)
+        if not ffmpeg_available():
+            return self._refuse(NO_FFMPEG_THUMBS)
+        settings = self.thumb_settings()
+        folder, base = self._output_base(media)
+        duration = self.duration or self.player.media_duration()
+        self.thumber.start(media, self.items, duration, folder, base, settings)
+        self.progress_bar.setValue(0)
+        self.status_label.setText(f"正在擷取封面候選（{settings['count']} 張）…")
+        self._update_buttons()
+        return True
+
+    def _on_thumbs_failed(self, exc):
+        self.thumber.busy = False
+        err = describe_exception(exc)
+        detail = f"（{err.details}）" if err.details and err.details != str(err) else ""
+        self.status_label.setText(f"擷取封面候選失敗：{err}{detail}")
+        self._update_buttons()
+
+    def _on_thumbs_finished(self, results):
+        self.thumber.busy = False
+        self.last_thumbs = list(results)
+        self.thumb_strip.clear()
+        for rank, item in enumerate(results, start=1):
+            entry = QListWidgetItem(QIcon(QPixmap(item["path"])), f"#{rank} {clock(item['time'])}")
+            entry.setData(Qt.UserRole, item["time"])
+            entry.setToolTip(f"{item['path']}\n{clock(item['time'])} 處，清晰度分數 {item['score']:.1f}")
+            self.thumb_strip.addItem(entry)
+        self._update_buttons()
+        if not results:
+            self.status_label.setText("沒有擷取到封面候選。")
+            return
+        folder = os.path.dirname(results[0]["path"])
+        done = (f"封面候選輸出完成，共 {len(results)} 張（照畫面清晰度排名，在 {folder}）："
+                + "、".join(f"{os.path.basename(i['path'])}（{clock(i['time'])} 處）" for i in results))
+        if callable(self.on_thumbnails):
+            added = self.on_thumbnails([i["path"] for i in results])
+            done += f"；{SENT_THUMBS}" if added else "；③的「封面圖」已經有這幾張了"
+        self.status_label.setText(done + "。")
+
+    def _on_thumb_clicked(self, entry):
+        """點一張候選：②的播放器跳到那一格。"""
+        if self.player.media_path and entry is not None:
+            self.player.player.setPosition(int(round(float(entry.data(Qt.UserRole)) * 1000)))
