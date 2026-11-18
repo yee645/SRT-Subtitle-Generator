@@ -254,6 +254,15 @@ else:
           and all(os.path.dirname(r["path"]) == out_dir and os.path.exists(r["path"]) for r in panel.last_thumbs),
           str(panel.last_thumbs))
     cfg.pop("automation")
+    other = os.path.join(tmp, "別處")
+    os.makedirs(other)
+    elsewhere = os.path.join(other, "另一份字幕.srt")
+    exporter.export(CUES, elsewhere)
+    player.load_subtitles(elsewhere)
+    check("字幕檔放在別處、名字不同：封面照樣跟著影片取名、放在影片旁邊",
+          panel.start_thumbnails() is True and wait_until(lambda: not panel.busy())
+          and all(os.path.dirname(r["path"]) == work and os.path.basename(r["path"]).startswith("素材_封面")
+                  for r in panel.last_thumbs) and os.listdir(other) == ["另一份字幕.srt"], str(panel.last_thumbs))
 
     # ----- 7. 背景失敗、關視窗、沒接③ -----
     real_generate = thumbnails.generate_thumbnails
@@ -288,8 +297,11 @@ else:
     before = health.thumb_paths()
     panel.start_thumbnails()
     wait_until(lambda: not panel.busy())
-    check("沒接③：只輸出，③不動、狀態列不提③", panel.last_thumbs and health.thumb_paths() == before
-          and rp.SENT_THUMBS not in panel.status_label.text() and "封面候選輸出完成" in panel.status_label.text())
+    last = panel.last_thumbs
+    check("沒接③：只輸出，③不動、狀態列講完輸出就結束（不提③）", last and health.thumb_paths() == before
+          and panel.status_label.text() == f"封面候選輸出完成，共 {len(last)} 張（照畫面清晰度排名，在 {work}）："
+          + "、".join(f"{os.path.basename(r['path'])}（{rp.clock(r['time'])} 處）" for r in last) + "。",
+          panel.status_label.text())
     panel.on_thumbnails = real_hook
 
     check("全程沒寫 config.json", not os.path.exists(config.CONFIG_PATH))
