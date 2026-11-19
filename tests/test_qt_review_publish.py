@@ -156,7 +156,7 @@ else:
     check("說明寫會帶進③、可以 Ctrl+Z、8 分鐘、不送出去", rp.PUBLISH_NOTE in labels and all(
         w in rp.PUBLISH_NOTE for w in ("③健檢中心", "Ctrl+Z", "8 分鐘", "不送任何東西出去")))
     check("頁面說明：章節、發佈包、廣告插入點在「輸出」的「發佈」那一頁",
-          "「發佈」產章節草稿、發佈包與廣告插入點" in rp.PAGE_NOTE and "直式短片還在一般版" in rp.PAGE_NOTE)
+          "「發佈」產章節草稿、發佈包與廣告插入點" in rp.PAGE_NOTE)
     check("狀態列提到章節與發佈包", "粗剪與匯出、章節與發佈包、" in win.statusBar().currentMessage())
     check("還沒分析：按了不做事", panel.copy_chapters() == "" and panel.export_publish_pack() == ""
           and panel.copy_ad_breaks() == "")

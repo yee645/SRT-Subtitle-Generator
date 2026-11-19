@@ -23,7 +23,8 @@
 請重新分析。偵測設定只記在這次開啟的設定裡（Qt 預覽版不寫 config.json）；時間軸的「審片建議」剪點讀同
 一份，按「開始分析」時跟著重算。
 
-還沒有的（頁面上寫明，請先用一般版）：章節、發佈包、廣告插入點、封面候選、直式短片。
+第十八～二十階段補上「輸出」框的其餘三頁：發佈（章節、發佈包、廣告插入點，帶進③）、封面候選（帶進③的
+封面圖）、直式短片（燒的是②現在的字幕與樣式）。一般版審片助手的功能到這裡都搬過來了。
 """
 import os
 import threading
@@ -31,22 +32,23 @@ import threading
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout,
+    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton,
     QRadioButton, QSpinBox, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from subtitle import adbreaks, chaptercheck, cutmarks, exporter, publisher, review, thumbnails
+from subtitle import adbreaks, chaptercheck, clipplan, cutmarks, exporter, publisher, review, shorts, thumbnails
+from subtitle.audio import DEFAULT_TARGET_LUFS
 from subtitle.burner import ffmpeg_available
 from subtitle.errors import describe_exception
 from subtitle.pipeline import resolve_output_dir, unique_path
 
 PAGE_NOTE = ("審片助手：讀文字快速找可用片段。分析②字幕頁現在的字幕（不重新轉錄、不送任何東西出去），自動標出"
              "冷場、重複拍攝、口頭禪多與精彩；冷場與重複拍攝預設捨棄。點一段，②的播放器跳到那裡。"
-             "看完清單，下面「輸出」分三頁：「影片與匯出」照保留的段落輸出粗剪影片、精彩合輯，或匯出 EDL／審片標記"
+             "看完清單，下面「輸出」分四頁：「影片與匯出」照保留的段落輸出粗剪影片、精彩合輯，或匯出 EDL／審片標記"
              "字幕／CSV／HTML 報告；「發佈」產章節草稿、發佈包與廣告插入點，章節與發佈文字會帶進③健檢中心；"
-             "「封面候選」挑清晰、有內容的畫面輸出 PNG，帶進③的「封面圖」。直式短片還在一般版（之後的階段搬過來）；"
-             "剪停頓、剪重複、審片建議的剪點在②的時間軸上。")
+             "「封面候選」挑清晰、有內容的畫面輸出 PNG，帶進③的「封面圖」；「直式短片」把選取的段落（或自動選段）"
+             "輸出成 9:16 短片。剪停頓、剪重複、審片建議的剪點在②的時間軸上。")
 SETTINGS_HINT = ("敏感度 >1 更容易標記精彩、<1 更嚴格；情緒詞以逗號或空白分隔，附加於內建詞庫；口頭禪字連寫"
                  "（逐字比對）；權重 0＝停用該訊號、1＝預設。")
 NO_CUES = "②字幕頁還沒有字幕：請先到②按「生成字幕…」或「載入字幕」，再回來分析。"
@@ -73,8 +75,15 @@ THUMB_NOTE = ("從精彩與保留的段落取樣（不夠就整支平均取）�
               "點一張，②的播放器跳到那一格。都在本機做，不送任何東西出去。")
 NO_FFMPEG_THUMBS = "找不到 ffmpeg，擷取封面候選需要它：請先在一般版按「自動安裝 ffmpeg」（兩版共用）。"
 SENT_THUMBS = "已加進③健檢中心的「封面圖」（到③按「開始健檢」看手機上讀不讀得清楚）"
-# 「輸出」框的三頁：(鍵, 頁籤名)
-OUT_TABS = (("video", "影片與匯出"), ("publish", "發佈"), ("thumbs", "封面候選"))
+SHORTS_NOTE = ("「選取段落」：清單上選了幾段就各輸出一支（沒選就用標了精彩的段落）；「自動選段」：從精彩段落往前後"
+               "講話的邊界擴成適合平台的長度，先列出規劃再問要不要輸出。1080×1920，檔名加「_短片01」…，放在影片旁邊、"
+               "不覆蓋。燒錄的是②現在的字幕與樣式（安全區把字幕挪離平台介面會擋到的上下緣）。原檔不動，輸出到一半"
+               "不能停，都在本機做。")
+NO_SHORTS = "沒有可輸出的段落：請先在清單選取要輸出的講話段落（可多選），或讓系統偵測到精彩片段。"
+NO_FFMPEG_SHORTS = "找不到 ffmpeg，輸出直式短片需要它：請先在一般版按「自動安裝 ffmpeg」（兩版共用）。"
+SHORTS_MODES = (("crop", "裁切"), ("blur", "模糊背景"))
+# 「輸出」框的四頁：(鍵, 頁籤名)
+OUT_TABS = (("video", "影片與匯出"), ("publish", "發佈"), ("thumbs", "封面候選"), ("shorts", "直式短片"))
 # (鍵, 按鈕文字)：跟一般版同名
 PUBLISH_BUTTONS = (("chapters", "複製 YouTube 章節"), ("pack", "匯出發佈包"), ("adbreaks", "複製廣告插入點"))
 CUT_KINDS = {"roughcut": ("粗剪", "_粗剪"), "highlight": ("精彩合輯", "_精彩合輯")}
@@ -203,6 +212,48 @@ class ThumbWorker(QObject):
             self.failed.emit(exc)
             return
         self.finished.emit(results)
+
+
+class ShortsWorker(QObject):
+    """背景執行緒：逐支輸出直式短片（一般版同一個 `shorts.cut_vertical_clip`）。busy 由畫面那邊放下。"""
+
+    progress = Signal(float, str)
+    finished = Signal(object)  # [輸出的檔, ...]
+    failed = Signal(object, object)  # (例外, 失敗前已經輸出的檔)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.busy = False
+
+    def start(self, media_path, jobs, folder, base, settings, style, cues):
+        self.busy = True
+        threading.Thread(target=self._run, args=(media_path, [dict(j) for j in jobs], folder, base, dict(settings),
+                                                 dict(style or {}), [dict(c) for c in cues]), daemon=True).start()
+
+    def _run(self, media_path, jobs, folder, base, settings, style, cues):
+        outputs = []
+        try:
+            total = len(jobs)
+            for index, job in enumerate(jobs, start=1):
+                output = unique_path(os.path.join(folder, f"{base}_短片{index:02d}.mp4"))
+
+                def report(ratio, message, _i=index):
+                    overall = ((_i - 1) + max(0.0, min(float(ratio), 1.0))) / total
+                    self.progress.emit(overall, f"[{_i}/{total}] {message}")
+
+                shorts.cut_vertical_clip(
+                    media_path, job["start"], job["end"], output, mode=settings["mode"],
+                    focus_x=settings["focus_x"], style=style or None,
+                    cues=cues if settings["burn_subtitles"] else None,
+                    loudnorm_target=DEFAULT_TARGET_LUFS if settings["loudnorm"] else None,
+                    safe_zone_enabled=settings["safe_zone_enabled"], safe_zone_top=settings["safe_zone_top"],
+                    safe_zone_bottom=settings["safe_zone_bottom"], safe_zone_side=settings["safe_zone_side"],
+                    progress_cb=report)
+                outputs.append(output)
+        except Exception as exc:  # noqa: BLE001 —— 背景執行緒的例外一律送回畫面上講
+            self.failed.emit(exc, outputs)
+            return
+        self.finished.emit(outputs)
 
 
 class SegmentStrip(QWidget):
@@ -510,7 +561,70 @@ class ReviewPanel(QWidget):
         self.thumb_strip.setToolTip("擷取的封面候選（照清晰度排名）；點一張，②的播放器跳到那一格")
         cols.addWidget(self.thumb_strip, 2)
         page.addLayout(cols)
+        page = self.out_pages["shorts"].layout()
+        shorts_cfg = shorts.resolve_shorts_settings(self.config)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("版式"))
+        self.shorts_mode_box = QComboBox()
+        for key, label in SHORTS_MODES:
+            self.shorts_mode_box.addItem(label, key)
+        self.shorts_mode_box.setCurrentIndex([k for k, _l in SHORTS_MODES].index(shorts_cfg["mode"]))
+        row.addWidget(self.shorts_mode_box)
+        row.addWidget(QLabel("焦點"))
+        self.shorts_focus_spin = QDoubleSpinBox()
+        self.shorts_focus_spin.setRange(0.0, 1.0)
+        self.shorts_focus_spin.setSingleStep(0.05)
+        self.shorts_focus_spin.setDecimals(2)
+        self.shorts_focus_spin.setValue(shorts_cfg["focus_x"])
+        self.shorts_focus_spin.setToolTip("裁切時取畫面的哪一段：0 最左、0.5 置中、1 最右（模糊背景不用）")
+        row.addWidget(self.shorts_focus_spin)
+        self.shorts_subs_box = QCheckBox("燒錄字幕")
+        self.shorts_subs_box.setChecked(shorts_cfg["burn_subtitles"])
+        self.shorts_loudnorm_box = QCheckBox("響度正規化")
+        self.shorts_loudnorm_box.setChecked(shorts_cfg["loudnorm"])
+        row.addWidget(self.shorts_subs_box)
+        row.addWidget(self.shorts_loudnorm_box)
+        row.addSpacing(10)
+        self.shorts_buttons = {"selected": QPushButton("輸出直式短片（選取段落）"), "auto": QPushButton("自動選段輸出")}
+        for button in self.shorts_buttons.values():
+            row.addWidget(button)
+        row.addStretch(1)
+        page.addLayout(row)
+        row = QHBoxLayout()
+        self.shorts_safe_box = QCheckBox("字幕安全區（避開帳號／文案／按鈕列）")
+        self.shorts_safe_box.setChecked(shorts_cfg["safe_zone_enabled"])
+        row.addWidget(self.shorts_safe_box)
+        self.shorts_safe_spins = {}
+        for key, label, (low, high) in (("safe_zone_top", "頂端保留", shorts._SAFE_ZONE_TOP_RANGE),
+                                        ("safe_zone_bottom", "底部保留", shorts._SAFE_ZONE_BOTTOM_RANGE),
+                                        ("safe_zone_side", "左右保留", shorts._SAFE_ZONE_SIDE_RANGE)):
+            row.addWidget(QLabel(label))
+            spin = QDoubleSpinBox()
+            spin.setRange(low * 100, high * 100)
+            spin.setSingleStep(1.0)
+            spin.setDecimals(1)
+            spin.setSuffix(" %")
+            spin.setValue(round(shorts_cfg[key] * 100, 1))
+            self.shorts_safe_spins[key] = spin
+            row.addWidget(spin)
+        row.addStretch(1)
+        page.addLayout(row)
+        shorts_note = QLabel(SHORTS_NOTE)
+        shorts_note.setWordWrap(True)
+        page.addWidget(shorts_note)
+        page.addStretch(1)
         layout.addWidget(out)
+        self.last_shorts = []  # 上一次輸出的直式短片
+        self._shorts_count = 0
+        self.shorter = ShortsWorker(self)
+        self.shorter.progress.connect(self._on_progress)
+        self.shorter.finished.connect(self._on_shorts_finished)
+        self.shorter.failed.connect(self._on_shorts_failed)
+        self.shorts_buttons["selected"].clicked.connect(lambda _c=False: self.start_shorts("selected"))
+        self.shorts_buttons["auto"].clicked.connect(lambda _c=False: self.start_shorts("auto"))
+        self.shorts_mode_box.currentIndexChanged.connect(lambda _i: self._sync_shorts_widgets())
+        self.shorts_safe_box.toggled.connect(lambda _on: self._sync_shorts_widgets())
+        self._sync_shorts_widgets()
         self.last_thumbs = []  # 上一次輸出的 [{"path", "time", "score"}, ...]
         self.thumber = ThumbWorker(self)
         self.thumber.progress.connect(self._on_progress)
@@ -563,7 +677,7 @@ class ReviewPanel(QWidget):
 
     # ----- 分析 -----
     def busy(self):
-        return self.worker.busy or self.cutter.busy or self.thumber.busy
+        return self.worker.busy or self.cutter.busy or self.thumber.busy or self.shorter.busy
 
     def start_analysis(self):
         if self.busy():
@@ -756,7 +870,8 @@ class ReviewPanel(QWidget):
         self.progress_bar.setVisible(not idle)
         for w in (self.toggle_btn, self.suggest_btn, self.keep_all_btn, self.search_btn, self.search_edit,
                   *self.filter_buttons.values(), *self.cut_buttons.values(), *self.export_buttons.values(),
-                  *self.publish_buttons.values(), self.thumb_btn):
+                  *self.publish_buttons.values(), self.thumb_btn,
+                  *self.shorts_buttons.values()):
             w.setEnabled(has and idle)
         self.fillers_box.setEnabled(idle)
 
@@ -864,10 +979,13 @@ class ReviewPanel(QWidget):
                                     self.adopt_question(result)) == QMessageBox.Yes
 
     def cutting(self):
-        """粗剪／精彩合輯或封面候選還在輸出（關視窗要先問）。"""
-        return self.cutter.busy or self.thumber.busy
+        """粗剪／精彩合輯、封面候選或直式短片還在輸出（關視窗要先問）。"""
+        return self.cutter.busy or self.thumber.busy or self.shorter.busy
 
     def close_question(self):
+        if self.shorter.busy:
+            return ("直式短片還在輸出。\n\n現在關掉的話正在輸出的那一支可能不完整，請不要拿它來用"
+                    "（要的話重開之後再輸出一次）。還是要關嗎？")
         if self.thumber.busy and not self.cutter.busy:
             return ("封面候選圖還在輸出。\n\n現在關掉的話正在寫的那一張可能不完整，請不要拿它來用"
                     "（要的話重開之後再擷取一次）。還是要關嗎？")
@@ -1092,3 +1210,85 @@ class ReviewPanel(QWidget):
         """點一張候選：②的播放器跳到那一格。"""
         if self.player.media_path and entry is not None:
             self.player.player.setPosition(int(round(float(entry.data(Qt.UserRole)) * 1000)))
+
+    # ----- 直式短片 -----
+    def _sync_shorts_widgets(self):
+        """焦點只有裁切用得到；安全區沒勾，三格比例灰掉。"""
+        self.shorts_focus_spin.setEnabled(self.shorts_mode_box.currentData() == "crop")
+        for spin in self.shorts_safe_spins.values():
+            spin.setEnabled(self.shorts_safe_box.isChecked())
+
+    def shorts_settings(self):
+        """畫面上的直式短片設定寫進這次開啟的設定（shorts，跟一般版同一個區塊；別的項目留著）。"""
+        current = dict(self.config.get("shorts") or {})
+        current.update({"mode": self.shorts_mode_box.currentData(), "focus_x": round(self.shorts_focus_spin.value(), 2),
+                        "burn_subtitles": self.shorts_subs_box.isChecked(),
+                        "loudnorm": self.shorts_loudnorm_box.isChecked(),
+                        "safe_zone_enabled": self.shorts_safe_box.isChecked()})
+        current.update({key: round(spin.value() / 100.0, 4) for key, spin in self.shorts_safe_spins.items()})
+        self.config["shorts"] = current
+        return shorts.resolve_shorts_settings(self.config)
+
+    def shorts_jobs(self, how):
+        """要輸出哪幾段：選取的講話段落（沒選就用精彩段落）；auto＝照 clipplan 規劃。回傳 [{"start","end"}, ...]。"""
+        if how == "auto":
+            plan = clipplan.plan_clips(self.items, clipplan.resolve_clipplan_settings(self.config),
+                                       media_duration=self.duration)
+            return [{"start": c["start"], "end": c["end"]} for c in plan]
+        picked = [self.items[n] for n in self.selected_segments()]
+        if not picked:
+            picked = [i for i in self.items if review.TAG_HIGHLIGHT in i["tags"]]
+        return [{"start": i["start"], "end": i["end"]} for i in picked if i["kind"] == "speech"]
+
+    def plan_report(self):
+        """自動選段的規劃（一般版同一份報告文字）。"""
+        settings = clipplan.resolve_clipplan_settings(self.config)
+        return clipplan.format_clip_plan_report(
+            clipplan.plan_clips(self.items, settings, media_duration=self.duration), settings)
+
+    def _ask_plan(self, report):
+        return QMessageBox.question(self, "自動選段結果", report + "\n\n要照這個規劃輸出嗎？") == QMessageBox.Yes
+
+    def start_shorts(self, how):
+        """輸出直式短片（how：selected＝選取段落、auto＝自動選段）。回傳有沒有開始。"""
+        if how not in self.shorts_buttons:
+            raise ValueError(f"不認得的輸出：{how!r}")
+        if self.busy() or not self.items:
+            return False
+        media = self.player.media_path
+        if not media or not os.path.exists(media):
+            return self._refuse(NO_MEDIA)
+        if not ffmpeg_available():
+            return self._refuse(NO_FFMPEG_SHORTS)
+        jobs = self.shorts_jobs(how)
+        if not jobs:
+            return self._refuse(self.plan_report() if how == "auto" else NO_SHORTS)
+        if how == "auto" and not self._ask_plan(self.plan_report()):
+            self.status_label.setText("沒有輸出（自動選段的規劃沒有採用）。")
+            return False
+        settings = self.shorts_settings()
+        folder, base = self._output_base(media)
+        cues = [c for c in self.player.cues if str(c.get("text", "")).strip()]
+        self._shorts_count = len(jobs)
+        self.shorter.start(media, jobs, folder, base, settings, self.config.get("subtitle_style"), cues)
+        self.progress_bar.setValue(0)
+        self.status_label.setText(f"正在輸出直式短片（{len(jobs)} 支，原檔不動，輸出到一半不能停）…")
+        self._update_buttons()
+        return True
+
+    def _on_shorts_failed(self, exc, outputs):
+        self.shorter.busy = False
+        self.last_shorts = list(outputs)
+        err = describe_exception(exc)
+        detail = f"（{err.details}）" if err.details and err.details != str(err) else ""
+        done = f"；失敗前已經輸出 {len(outputs)} 支：" + "、".join(os.path.basename(p) for p in outputs) if outputs else ""
+        self.status_label.setText(f"直式短片輸出失敗：{err}{detail}{done}")
+        self._update_buttons()
+
+    def _on_shorts_finished(self, outputs):
+        self.shorter.busy = False
+        self.last_shorts = list(outputs)
+        self._update_buttons()
+        folder = os.path.dirname(outputs[0]) if outputs else ""
+        self.status_label.setText(f"直式短片輸出完成，共 {len(outputs)} 支（在 {folder}）："
+                                  + "、".join(os.path.basename(p) for p in outputs) + "。")
