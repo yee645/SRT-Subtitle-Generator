@@ -116,9 +116,7 @@ else:
           == ["① 素材與剪輯", "② 字幕", "③ 健檢中心", "④ 輸出與發佈"])
     check("開起來停在①", win.tabs.currentIndex() == 0)
     check("頁面寫明不重新轉錄、不送出去", "不重新轉錄" in rp.PAGE_NOTE and "不送任何東西出去" in rp.PAGE_NOTE)
-    # 第十九階段起封面候選也搬過來了：「還在一般版」的只剩直式短片
-    check("頁面寫明哪些還在一般版", "直式短片還在一般版" in rp.PAGE_NOTE
-          and "封面候選、直式短片還在一般版" not in rp.PAGE_NOTE)
+    check("頁面不再寫「還在一般版」（第二十階段起一般版審片助手的功能都搬過來了）", "還在一般版" not in rp.PAGE_NOTE)
     check("狀態列提到①的審片助手", "①的審片助手（" in win.statusBar().currentMessage())
 
     # ----- 2. 偵測設定 -----

@@ -145,9 +145,8 @@ else:
                                               "匯出審片標記字幕", "匯出 CSV 清單", "匯出 HTML 審片報告"])
     check("還沒分析：輸出與匯出的鈕都灰著", not any(b.isEnabled() for b in all_buttons))
     check("說明寫原檔不動、不能停、會放對齊的字幕", all(w in rp.OUTPUT_NOTE for w in ("原檔不動", "不能停", "對齊到剪後時間的字幕")))
-    check("頁面說明：粗剪與匯出在「輸出」的「影片與匯出」那一頁，直式短片還在一般版",
-          "下面「輸出」分三頁：「影片與匯出」照保留的段落輸出粗剪影片、精彩合輯" in rp.PAGE_NOTE
-          and "直式短片還在一般版" in rp.PAGE_NOTE)
+    check("頁面說明：粗剪與匯出在「輸出」的「影片與匯出」那一頁",
+          "下面「輸出」分四頁：「影片與匯出」照保留的段落輸出粗剪影片、精彩合輯" in rp.PAGE_NOTE)
     check("狀態列提到粗剪與匯出", "①的審片助手（分析、段落清單、粗剪與匯出" in win.statusBar().currentMessage())
     check("「剪除口頭禪字」照設定勾", panel.fillers_box.isChecked() and panel.fillers_box.isEnabled())
     refreshed = []

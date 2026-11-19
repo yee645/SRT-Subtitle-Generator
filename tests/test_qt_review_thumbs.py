@@ -6,7 +6,7 @@
 測試影片用 ffmpeg 產生（40 秒、960 寬：前 20 秒一片灰、後 20 秒是有細節的測試畫面）；字幕四句，第三句又大聲又有
 情緒詞（精彩）。
 
-1. 「輸出」框分三頁：影片與匯出、發佈、封面候選；各顆鈕在對的那一頁；一開始停在「影片與匯出」。
+1. 「輸出」框分頁：影片與匯出、發佈、封面候選（第二十階段起再加直式短片）；各顆鈕在對的那一頁；一開始停在「影片與匯出」。
 2. 封面候選那一頁：張數、最小間隔、優先取精彩段落照目前的設定、範圍跟一般版一樣；說明寫會加進③、不送出去；
    還沒分析時鈕灰著、按了不做事。
 3. 不擷取的情況講原因：沒開影片、沒有 ffmpeg。
@@ -128,10 +128,10 @@ else:
     def summary(results):
         return [(round(r["time"], 3), round(r["score"], 3)) for r in results]
 
-    # ----- 1. 「輸出」框分三頁 -----
+    # ----- 1. 「輸出」框分頁 -----
     tabs = panel.out_tabs
-    check("「輸出」框分三頁：影片與匯出、發佈、封面候選", [tabs.tabText(i) for i in range(tabs.count())]
-          == ["影片與匯出", "發佈", "封面候選"])
+    check("「輸出」框分頁：影片與匯出、發佈、封面候選、直式短片", [tabs.tabText(i) for i in range(tabs.count())]
+          == ["影片與匯出", "發佈", "封面候選", "直式短片"])
     check("一開始停在「影片與匯出」", tabs.currentIndex() == 0)
     pages = panel.out_pages
     check("各顆鈕在對的那一頁", all(pages["video"].isAncestorOf(b) for b in
@@ -140,10 +140,9 @@ else:
                                                             panel.ad_spacing_spin, panel.ad_max_spin))
           and all(pages["thumbs"].isAncestorOf(w) for w in (btn, panel.thumb_count_spin, panel.thumb_spacing_spin,
                                                            panel.thumb_highlight_box, panel.thumb_strip)))
-    check("頁面說明：封面候選在「輸出」的「封面候選」那一頁，只剩直式短片還在一般版",
-          "「封面候選」挑清晰、有內容的畫面輸出 PNG，帶進③的「封面圖」" in rp.PAGE_NOTE
-          and "直式短片還在一般版" in rp.PAGE_NOTE and "封面候選、直式短片還在一般版" not in rp.PAGE_NOTE)
-    check("狀態列提到封面候選", "章節與發佈包、封面候選）" in win.statusBar().currentMessage())
+    check("頁面說明：封面候選在「輸出」的「封面候選」那一頁",
+          "「封面候選」挑清晰、有內容的畫面輸出 PNG，帶進③的「封面圖」" in rp.PAGE_NOTE)
+    check("狀態列提到封面候選", "章節與發佈包、封面候選、" in win.statusBar().currentMessage())
 
     # ----- 2. 封面候選那一頁 -----
     check("鈕的文字跟一般版一樣", btn.text() == "擷取封面候選圖")
