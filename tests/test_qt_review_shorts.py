@@ -137,9 +137,13 @@ else:
         assert panel.start_analysis() is True
         assert wait_until(lambda: not panel.busy())
 
-    def run(how):
+    def run(how, click=False):
         before = list(panel.last_shorts)
-        ok = panel.start_shorts(how)
+        if click:
+            QTest.mouseClick(buttons[how], Qt.LeftButton)
+            ok = panel.shorter.busy
+        else:
+            ok = panel.start_shorts(how)
         wait_until(lambda: not panel.busy())
         return ok, (panel.last_shorts if panel.last_shorts != before else [])
 
@@ -156,6 +160,19 @@ else:
           and panel.shorts_subs_box.isChecked() and not panel.shorts_loudnorm_box.isChecked()
           and panel.shorts_safe_box.isChecked()
           and [spins[k].value() for k in ("safe_zone_top", "safe_zone_bottom", "safe_zone_side")] == [5.0, 25.0, 4.0])
+    shorts_cfg = cfg["shorts"]
+    cfg["shorts"] = {"mode": "blur", "focus_x": 0.3, "burn_subtitles": False, "loudnorm": True,
+                     "safe_zone_enabled": False, "safe_zone_top": 0.1, "safe_zone_bottom": 0.2, "safe_zone_side": 0.08}
+    other = rp.ReviewPanel(player)
+    check("另一份設定（模糊背景、不燒字幕、響度、安全區關）：初值也照設定",
+          other.shorts_mode_box.currentData() == "blur" and other.shorts_focus_spin.value() == 0.3
+          and not other.shorts_subs_box.isChecked() and other.shorts_loudnorm_box.isChecked()
+          and not other.shorts_safe_box.isChecked() and not other.shorts_focus_spin.isEnabled()
+          and [other.shorts_safe_spins[k].value() for k in ("safe_zone_top", "safe_zone_bottom", "safe_zone_side")]
+          == [10.0, 20.0, 8.0])
+    other.deleteLater()
+    cfg["shorts"] = shorts_cfg
+    wait(50)
     check("範圍跟一般版一樣", (panel.shorts_focus_spin.minimum(), panel.shorts_focus_spin.maximum()) == (0.0, 1.0)
           and [(spins[k].minimum(), spins[k].maximum()) for k in ("safe_zone_top", "safe_zone_bottom", "safe_zone_side")]
           == [(0.0, 20.0), (10.0, 35.0), (0.0, 15.0)])
@@ -214,6 +231,11 @@ else:
           and panel.status_label.text() == report and "沒有規劃出" in report)
     for i, tags in zip(items, saved):
         i["tags"] = tags
+    gaps = [n for n, i in enumerate(items) if i["kind"] != "speech"]
+    panel.select_segment(gaps[0])
+    check("只選了不是講話的段落：不輸出、講原因（只取講話段落）", gaps and panel.selected_segments() == [gaps[0]]
+          and panel.start_shorts("selected") is False and panel.status_label.text() == rp.NO_SHORTS)
+    panel.tree.clearSelection()
     check("到這裡什麼都沒輸出", sorted(os.listdir(work)) == ["素材.mp4", "素材.srt"] and calls == [])
 
     # ----- 3. 選取段落 -----
@@ -261,7 +283,11 @@ else:
     # ----- 4. 沒選：用精彩段落 -----
     panel.tree.clearSelection()
     calls.clear()
+    player.cues.append({"start": 38.0, "end": 39.0, "text": "   "})
     ok, hl = run("selected")
+    player.cues.pop()
+    check("空白字幕不燒（核心收到的字幕不含只有空白的那一句）", calls
+          and [x["text"] for x in calls[0]["cues"]] == [x["text"] for x in player.cues], str(calls)[:300])
     check("沒選：用精彩那一段、不覆蓋（檔名加編號）", ok and [os.path.basename(p) for p in hl] == ["素材_短片01 (1).mp4"]
           and [(c["start"], c["end"]) for c in calls] == [(items[speech[2]]["start"], items[speech[2]]["end"])]
           and all(os.path.exists(p) for p in first), str(hl))
@@ -299,8 +325,8 @@ else:
           == clipplan.format_clip_plan_report(plan, clipplan.resolve_clipplan_settings(cfg))
           and all(c["duration"] >= 6.0 for c in plan), asked[0])
     answer["ok"] = True
-    ok, auto = run("auto")
-    check("選是：照規劃輸出（支數、片長跟規劃一樣）", ok and len(auto) == len(plan)
+    ok, auto = run("auto", click=True)
+    check("選是（按〔自動選段輸出〕）：照規劃輸出（支數、片長跟規劃一樣）", ok and len(asked) == 2 and len(auto) == len(plan)
           and [(round(c["start"], 2), round(c["end"], 2)) for c in calls]
           == [(round(c["start"], 2), round(c["end"], 2)) for c in plan]
           and all(abs(seconds(p) - c["duration"]) < 0.4 for p, c in zip(auto, plan)),
