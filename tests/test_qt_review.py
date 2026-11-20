@@ -110,8 +110,8 @@ else:
     player = win.player_panel
 
     # ----- 1. 頁籤 -----
-    check("①頁籤是審片頁、名稱不變", win.tabs.tabText(0) == "① 素材與剪輯" and win.tabs.widget(0) is panel
-          and isinstance(panel, rp.ReviewPanel))
+    check("①頁籤是審片頁、名稱不變", win.tabs.tabText(0) == "① 素材與剪輯" and win.tabs.widget(0).isAncestorOf(panel)
+          and isinstance(panel, rp.ReviewPanel) and win.tabs.widget(0).isAncestorOf(win.audiovis_btn))
     check("四個頁籤、順序不變", [win.tabs.tabText(i) for i in range(win.tabs.count())]
           == ["① 素材與剪輯", "② 字幕", "③ 健檢中心", "④ 輸出與發佈"])
     check("開起來停在①", win.tabs.currentIndex() == 0)

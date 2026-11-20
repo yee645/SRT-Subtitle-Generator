@@ -13,12 +13,13 @@
 設定只讀不寫：骨架沒有任何值要存，貿然寫回可能蓋掉 Tk 版同時開著時改
 的東西。要寫的那一天再處理兩邊同時開的問題。
 """
+import os
 import sys
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
-    QApplication, QLabel, QMainWindow, QSplitter, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QHBoxLayout, QLabel, QMainWindow, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
 import config
@@ -127,6 +128,7 @@ class MainWindow(QMainWindow):
         self.health_panel = None
         self.output_panel = None
         self.review_panel = None
+        self.audiovis_dialog = None
         for name, summary in STAGES:
             if name == "② 字幕":
                 self.tabs.addTab(self._subtitle_page(), name)
@@ -142,7 +144,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(
-            "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、直式短片）、②字幕頁、③健檢中心的影片、字幕檢查與修復、"
+            "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、直式短片）與音訊轉影片、②字幕頁、③健檢中心的影片、字幕檢查與修復、"
             "④的匯出、燒錄與品牌套版，其餘功能請先用一般版。")
 
     def _subtitle_page(self):
@@ -174,8 +176,8 @@ class MainWindow(QMainWindow):
 
     def _review_page(self):
         """
-        ① 素材與剪輯：審片助手（第 11 項第十六～二十階段：分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、
-        直式短片）。
+        ① 素材與剪輯：上面一列「素材準備」（第二十一階段：音訊轉影片），下面是審片助手（第 11 項第十六～二十階段：
+        分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、直式短片）。
         分析的是②開著的字幕；章節、發佈文字與封面候選帶進③健檢中心。
         """
         from gui_qt.review_panel import ReviewPanel
@@ -184,7 +186,37 @@ class MainWindow(QMainWindow):
             self.player_panel, before_analyze=self.cue_panel.commit,
             on_publish=lambda **fields: self.health_panel.adopt_publish(**fields) if self.health_panel else [],
             on_thumbnails=lambda paths: self.health_panel.add_thumbs(list(paths)) if self.health_panel else 0)
-        return self.review_panel
+        # 「素材準備」一列（第 11 項第二十一階段起）：一般版①「素材準備」框的工具，開小視窗做
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        prep = QHBoxLayout()
+        prep.setContentsMargins(12, 8, 12, 0)
+        prep.addWidget(QLabel("素材準備："))
+        self.audiovis_btn = QPushButton("音訊轉影片（波形／頻譜）…")
+        self.audiovis_btn.setToolTip("只有音訊（Podcast、訪談錄音）：轉成附波形或頻譜的影片，轉好可以直接在②開啟")
+        self.audiovis_btn.clicked.connect(lambda _c=False: self.open_audiovis())
+        prep.addWidget(self.audiovis_btn)
+        prep.addStretch(1)
+        layout.addLayout(prep)
+        layout.addWidget(self.review_panel, 1)
+        return page
+
+    def open_audiovis(self):
+        """開「音訊轉影片」小視窗（只建一個，關掉再開沿用；不擋住主視窗）。"""
+        from gui_qt.audiovis_dialog import AudioVisDialog
+
+        if self.audiovis_dialog is None:
+            self.audiovis_dialog = AudioVisDialog(self.player_panel, self)
+        elif not self.audiovis_dialog.rendering() and not self.audiovis_dialog.isVisible():
+            media = self.player_panel.media_path
+            if not self.audiovis_dialog.source_edit.text().strip() and media and os.path.exists(media):
+                self.audiovis_dialog.source_edit.setText(media)
+        self.audiovis_dialog.show()
+        self.audiovis_dialog.raise_()
+        self.audiovis_dialog.activateWindow()
+        return self.audiovis_dialog
 
     def _health_page(self):
         """③ 健檢中心（第 11 項第八階段：先搬影片與字幕的檢查）。對象是②開著的影片與字幕。"""
@@ -208,6 +240,10 @@ class MainWindow(QMainWindow):
             return
         if (self.review_panel is not None and self.review_panel.cutting()
                 and not self.review_panel.ask_close_while_cutting()):  # ①的粗剪／精彩合輯還在輸出
+            event.ignore()
+            return
+        if (self.audiovis_dialog is not None and self.audiovis_dialog.rendering()
+                and not self.audiovis_dialog.ask_close_while_rendering()):  # ①的音訊轉影片還在轉換
             event.ignore()
             return
         if (self.output_panel is not None and self.output_panel.burning()
