@@ -121,6 +121,8 @@ else:
     check("按下去開小視窗：標題、不擋住主視窗", dlg is not None and dlg.isVisible() and not dlg.isModal()
           and dlg.windowTitle() == "音訊轉影片：波形／頻譜視覺化")
     check("②沒開檔：來源空著", dlg.source_edit.text() == "")
+    check("有 ffmpeg：不出現提示列", not dlg.ffmpeg_label.isVisibleTo(dlg))
+    check("狀態列提到音訊轉影片", "直式短片）與音訊轉影片、" in win.statusBar().currentMessage())
     QTest.mouseClick(win.audiovis_btn, Qt.LeftButton)
     check("再按一次：同一個小視窗", win.audiovis_dialog is dlg)
 
@@ -131,6 +133,17 @@ else:
     check("範圍與間距跟一般版一樣", (dlg.width_spin.minimum(), dlg.width_spin.maximum(), dlg.width_spin.singleStep())
           == (640, 3840, 160) and (dlg.height_spin.minimum(), dlg.height_spin.maximum(), dlg.height_spin.singleStep())
           == (360, 2160, 90))
+    cfg["audiovis"]["background_image"] = cover
+    real_ffmpeg = avd.ffmpeg_available
+    avd.ffmpeg_available = lambda: False
+    try:
+        other = avd.AudioVisDialog(player)
+    finally:
+        avd.ffmpeg_available = real_ffmpeg
+    check("另開一個（設定有背景圖、沒有 ffmpeg）：背景圖照設定、提示列出現", other.bg_edit.text() == cover
+          and other.ffmpeg_label.isVisibleTo(other))
+    other.deleteLater()
+    cfg["audiovis"]["background_image"] = ""
     check("頻譜：顏色那格灰掉", not dlg.color_edit.isEnabled() and not dlg.color_btn.isEnabled())
     dlg.mode_box.setCurrentIndex(0)
     check("換成波形：顏色能改", dlg.color_edit.isEnabled() and dlg.color_btn.isEnabled())
@@ -247,6 +260,12 @@ else:
     cues_before = [(c["start"], c["end"], c["text"]) for c in player.cues]
     dlg.last_output = first
     dlg._update_buttons()
+    real_changed = player.project_changed
+    player.project_changed = lambda: True
+    player._ask_project_discard = lambda *a, **k: "cancel"
+    check("專案改過、問了選取消：不開", dlg.open_in_player() is False and player.media_path != first)
+    player.project_changed = real_changed
+    player._ask_project_discard = lambda *a, **k: "discard"
     QTest.mouseClick(dlg.open_btn, Qt.LeftButton)
     wait_until(lambda: player.player.duration() > 0, 20000)
     check("〔在②開啟〕：②換成這支影片", player.media_path == first and dlg.status_label.text().startswith("已在②開啟"))
