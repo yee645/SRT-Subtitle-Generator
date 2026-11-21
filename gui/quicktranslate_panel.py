@@ -46,10 +46,11 @@ from subtitle import quicktranslate as qt
 from subtitle import screencap
 from subtitle import screentranslate as st
 from subtitle import speech
-# 3.0 第 11 項第二十三階段：生字本與略過原因的純邏輯抽到 subtitle/quicklookup.py，Qt 版共用；
+# 3.0 第 11 項第二十三階段：生字本與略過原因的純邏輯（第二十四階段加上朗讀的狀態文字）抽到 subtitle/quicklookup.py，Qt 版共用；
 # 這裡照原名稱 import 進來（名稱、行為、文字都不變）。
 from subtitle.quicklookup import (  # noqa: F401 —— 測試與舊程式照原名稱從這裡拿
-    C14_TOO_LONG, C15_ALREADY_CHINESE, C16_TOO_SHORT_OR_EMPTY, C20_EXPORTED, C22_VOCAB_EMPTY,
+    C14_TOO_LONG, C15_ALREADY_CHINESE, C16_TOO_SHORT_OR_EMPTY, C20_EXPORTED, C22_VOCAB_EMPTY, C34_NOTHING_TO_SPEAK,
+    C36_SPEECH_OFF,
     add_vocab_terms, classify_skip_reason, dst_label, remove_vocab_words, vocab_status_text, write_vocab_csv,
 )
 from subtitle.translator import LANGUAGE_LABELS
@@ -116,9 +117,7 @@ C31_OCR_RUNNING = "辨識中…（在這台電腦上跑，通常 1～3 秒）"
 C32_OCR_CANCELLED = "已取消框選。"
 C33_NEED_TESSERACT = ("螢幕翻譯要先安裝文字辨識引擎。安裝視窗已經打開，"
                       "裝完再按一次「框選螢幕翻譯」。")
-C34_NOTHING_TO_SPEAK = "還沒有可以朗讀的內容。"
 C35_NOTHING_TO_COPY = "還沒有可以複製的內容。"
-C36_SPEECH_OFF = "朗讀功能已在設定裡關閉。"
 C37_SECRET_BLOCKED = ("這段內容看起來像密碼或金鑰，不會送去翻譯。"
                       "需要的話仍可在本機朗讀或複製。")
 C38_OCR_BUSY = "上一次框選還在辨識，請稍候。"
@@ -994,10 +993,7 @@ class QuickTranslatePanel(tk.Toplevel):
             self.status_var.set(str(exc))
             return
         label = "原文" if which == "src" else "譯文"
-        if dropped:
-            self.status_var.set(f"朗讀{label}中（太長，後面 {dropped} 字不念）。")
-        else:
-            self.status_var.set(f"朗讀{label}中。")
+        self.status_var.set(ql.speech_started_text(label, dropped))
         if self._speech_job is None:
             self._speech_job = self.after(_SPEECH_POLL_MS, self._poll_speech)
 
@@ -1012,15 +1008,14 @@ class QuickTranslatePanel(tk.Toplevel):
             return
         if code != 0:
             detail = speaker.last_error or speaker._read_stderr()
-            self.status_var.set(
-                "朗讀失敗%s。" % (f"：{detail.splitlines()[0]}" if detail else ""))
+            self.status_var.set(ql.speech_failed_text(detail))
         else:
-            self.status_var.set("朗讀完畢。")
+            self.status_var.set(ql.SPEECH_DONE)
 
     def _stop_speaking(self):
         if self._speaker is not None and self._speaker.is_speaking():
             self._speaker.stop()
-            self.status_var.set("已停止朗讀。")
+            self.status_var.set(ql.SPEECH_STOPPED)
 
     def _copy(self, which: str):
         text = self._panel_text(which)

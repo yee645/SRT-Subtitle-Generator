@@ -295,6 +295,8 @@ class MainWindow(QMainWindow):
         if self.player_panel is not None and not self.player_panel.maybe_close():
             event.ignore()
             return
+        if self.lookup_dialog is not None:
+            self.lookup_dialog.shutdown()  # 停朗讀（收面板不會停）、停監聽剪貼簿
         if self.player_panel is not None:
             self.player_panel.shutdown()
         super().closeEvent(event)

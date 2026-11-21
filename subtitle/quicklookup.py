@@ -9,6 +9,7 @@ Qt 版要一樣的行為，抽到這裡兩邊共用，一般版改成從這裡 i
   兩版讀寫同一個檔。路徑由呼叫端給（核心不 import config）。
 - 略過原因：`looks_translatable()` 說不送的時候，該講哪一句（太長／已經是中文／太短或沒有字）。
 - 譯文區塊的標題（目標語言是中文時叫「中文翻譯」）。
+- 朗讀的狀態文字（第二十四階段：念的是哪一塊、截掉幾個字、念完或失敗）。
 
 零 GUI 依賴。
 """
@@ -31,6 +32,23 @@ _CHINESE_CODES = ("zh-TW", "zh-CN")
 C15_ALREADY_CHINESE = "已略過：選取內容已是中文。"
 C16_TOO_SHORT_OR_EMPTY = "已略過：選取內容太短或沒有可翻的文字。"
 C22_VOCAB_EMPTY = "生字本還是空的。查譯幾句附關鍵詞的外文，就會自動收詞進來。"
+C34_NOTHING_TO_SPEAK = "還沒有可以朗讀的內容。"
+C36_SPEECH_OFF = "朗讀功能已在設定裡關閉。"
+SPEECH_DONE = "朗讀完畢。"
+SPEECH_STOPPED = "已停止朗讀。"
+
+
+def speech_started_text(label: str, dropped: int) -> str:
+    """開始朗讀時的狀態：`label` 是「原文」或「譯文」；太長被截掉的字數照實講。"""
+    if dropped:
+        return f"朗讀{label}中（太長，後面 {dropped} 字不念）。"
+    return f"朗讀{label}中。"
+
+
+def speech_failed_text(detail: str) -> str:
+    """朗讀引擎結束碼不是 0：只取錯誤訊息第一行。"""
+    detail = (detail or "").strip()
+    return "朗讀失敗%s。" % (f"：{detail.splitlines()[0]}" if detail else "")
 
 
 def C14_TOO_LONG(max_chars: int) -> str:

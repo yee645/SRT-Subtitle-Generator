@@ -18,7 +18,16 @@
 - 設定只記在這次開啟的設定裡（第 19 項之前不寫 config.json）。**生字本照樣寫**：它是查譯的結果、
   不是設定，跟一般版存在同一個檔（config.json 旁邊的 quicktranslate_vocab.json），兩版看到的是同一本。
 
-朗讀、監聽剪貼簿、框選螢幕翻譯、全域熱鍵是第 17 列之後的階段。
+第二十四階段加上：
+- **朗讀**原文／譯文（不需要金鑰、不送出去，用這台電腦的語音引擎；核心 `subtitle/speech.py` 原封沿用，
+  一次只念一句、太長截掉並講截掉幾個字、念完或失敗講一句）。一般版關掉面板不會停止朗讀，這裡一樣；
+  關主視窗才停。
+- **監聽剪貼簿**（複製即翻譯，預設關）：在任何軟體複製外文就翻。會送出去的仍然只有那段文字；過
+  `subtitle/clipwatch.py` 的篩子——密碼、金鑰、路徑、網址、程式碼不送，並講為什麼沒翻。勾選當下剪貼簿裡
+  原本的東西不算；自己按〔複製〕放進去的不算；面板收起來就停；沒金鑰時灰掉。跟一般版一樣定時看
+  （`poll_ms`），不用 `QClipboard.dataChanged`——macOS 上別的程式的複製不一定會發這個訊號。
+
+框選螢幕翻譯、全域熱鍵是第 17 列（三）（四）。
 關閉＝收起來（快取與生字本都留著），再按一次〔即時查譯…〕原地打開。
 """
 import os
@@ -32,12 +41,20 @@ from PySide6.QtWidgets import (
 )
 
 import config as config_module
+from subtitle import clipwatch as cw
 from subtitle import quicklookup as ql
 from subtitle import quicktranslate as qt
 from subtitle import screentranslate as st
+from subtitle import speech
 from subtitle.translator import LANGUAGE_LABELS
 
 TITLE = "即時查譯（選字即翻）"
+CLIP_HINT = ("開啟後，在任何軟體按 Ctrl+C 複製外文就會自動翻譯——本程式之外也能用。"
+             "會送出去的只有複製的那段文字（送到 OpenAI）；密碼、金鑰、檔案路徑、網址與程式碼會自動跳過，不會送出。"
+             "關掉這個面板就停止監聽。")
+CLIP_WATCHING = "監聽中——複製外文即翻譯。"
+CLIP_STOPPED = "已停止監聽。"
+SPEECH_POLL_MS = 300
 HINT = ("在本程式任何文字框（②的逐句校對、①的搜尋框…）選取一段外文，鬆開滑鼠就自動翻譯。"
         "會送出去的只有選取的那段文字，送到 OpenAI（照用量收費，短句約千分之一美元）；"
         "同樣的字句直接用快取，不重複計費。像密碼或金鑰的內容、密碼欄位裡的字不會送。")
@@ -127,6 +144,9 @@ class QuickLookupDialog(QDialog):
         self._last_selection = ""   # 最近一次在文字框裡選到的字（按鈕會搶走焦點，所以先記著）
         self._watching = False
         self._pending_widget = None
+        self.clip_settings = cw.resolve_clipwatch_settings(self.config_data)
+        self._last_clip = None        # 上一次看到的剪貼簿內容：只在「變了」時才動作
+        self._speaker = None
         self.setWindowTitle(TITLE)
         self.setModal(False)
         prefs = self.config_data.get("quicktranslate") or {}
@@ -162,6 +182,13 @@ class QuickLookupDialog(QDialog):
         page_layout.addWidget(self.status_label)
 
         row = QHBoxLayout()
+        row.addWidget(QLabel("朗讀："))  # 朗讀／複製不需要金鑰，像密碼被擋下來時也照樣能用
+        self.speak_src_btn = QPushButton("原文")
+        self.speak_dst_btn = QPushButton("譯文")
+        self.speak_stop_btn = QPushButton("停止")
+        for button in (self.speak_src_btn, self.speak_dst_btn, self.speak_stop_btn):
+            row.addWidget(button)
+        row.addSpacing(16)
         row.addWidget(QLabel("複製："))
         self.copy_src_btn = QPushButton("原文")
         self.copy_dst_btn = QPushButton("譯文")
@@ -199,6 +226,18 @@ class QuickLookupDialog(QDialog):
         row.addWidget(self.topmost_box)
         row.addStretch(1)
         page_layout.addLayout(row)
+
+        # 剪貼簿監聽自成一列：它決定的是「要不要讀你複製的每一樣東西」，跟上面「怎麼翻」不是同一層
+        row = QHBoxLayout()
+        self.clip_box = QCheckBox("監聽剪貼簿（複製即翻譯）")
+        self.clip_box.setChecked(self.clip_settings["enabled"])
+        self.clip_status = QLabel("")
+        row.addWidget(self.clip_box)
+        row.addWidget(self.clip_status, 1)
+        page_layout.addLayout(row)
+        clip_hint = QLabel(CLIP_HINT)
+        clip_hint.setWordWrap(True)
+        page_layout.addWidget(clip_hint)
         self.tabs.addTab(page, "查譯")
 
         # ----- 生字本 -----
@@ -230,10 +269,20 @@ class QuickLookupDialog(QDialog):
         self.debounce.setSingleShot(True)
         self.debounce.setInterval(self.settings["debounce_ms"])  # 一般版同一個去抖動延遲
         self.debounce.timeout.connect(self._on_debounce)
+        self.clip_timer = QTimer(self)
+        self.clip_timer.setInterval(self.clip_settings["poll_ms"])
+        self.clip_timer.timeout.connect(self._poll_clipboard)
+        self.speech_timer = QTimer(self)
+        self.speech_timer.setInterval(SPEECH_POLL_MS)
+        self.speech_timer.timeout.connect(self._poll_speech)
         self.worker = LookupWorker(self)
         self.worker.finished.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
         self.translate_btn.clicked.connect(lambda _c=False: self.translate_selection())
+        self.speak_src_btn.clicked.connect(lambda _c=False: self.speak("src"))
+        self.speak_dst_btn.clicked.connect(lambda _c=False: self.speak("dst"))
+        self.speak_stop_btn.clicked.connect(lambda _c=False: self.stop_speaking())
+        self.clip_box.toggled.connect(lambda _on: self._on_clip_toggled())
         self.copy_src_btn.clicked.connect(lambda _c=False: self.copy("src"))
         self.copy_dst_btn.clicked.connect(lambda _c=False: self.copy("dst"))
         self.auto_box.toggled.connect(lambda _on: self._write_settings())
@@ -262,6 +311,8 @@ class QuickLookupDialog(QDialog):
             QApplication.instance().installEventFilter(self)
             self._watching = True
         self.show()
+        if self.clip_box.isChecked() and self.clip_box.isEnabled():
+            self._start_clipwatch()  # 勾選狀態留著：下次打開自動恢復
         self.raise_()
         self.activateWindow()
 
@@ -270,6 +321,7 @@ class QuickLookupDialog(QDialog):
             QApplication.instance().removeEventFilter(self)
             self._watching = False
         self.debounce.stop()
+        self._stop_clipwatch()  # 收起來就別再讀剪貼簿（勾選留著）；朗讀不停，跟一般版一樣
         super().hideEvent(event)
 
     def watching(self):
@@ -289,6 +341,11 @@ class QuickLookupDialog(QDialog):
                      "auto_translate": self.auto_box.isChecked(), "save_to_vocab": self.save_vocab_box.isChecked(),
                      "topmost": self.topmost_box.isChecked()})
         self.config_data["quicktranslate"] = data
+        clip = dict(self.config_data.get("clipwatch") or {})
+        clip.update({"enabled": self.clip_box.isChecked(), "poll_ms": self.clip_settings["poll_ms"],
+                     "skip_secrets": self.clip_settings["skip_secrets"], "skip_code": self.clip_settings["skip_code"],
+                     "skip_paths": self.clip_settings["skip_paths"]})
+        self.config_data["clipwatch"] = clip
 
     def _on_language_changed(self):
         self.dst_box.setTitle(ql.dst_label(self.language_box.currentData()))
@@ -298,7 +355,7 @@ class QuickLookupDialog(QDialog):
         visible = self.isVisible()
         self.setWindowFlag(Qt.WindowStaysOnTopHint, self.topmost_box.isChecked())
         if visible:
-            self.show()  # 換 flag 會把視窗收起來
+            self.open()  # 換 flag 會把視窗收起來（hideEvent 停了看選取與監聽）：照「打開」的路重新開始
         if write:
             self._write_settings()
 
@@ -312,6 +369,10 @@ class QuickLookupDialog(QDialog):
             return
         self._has_key = has_key
         self.auto_box.setEnabled(has_key)
+        self.clip_box.setEnabled(has_key)
+        if not has_key:  # 沒有金鑰時不讓它空轉讀剪貼簿
+            self._stop_clipwatch()
+            self.clip_status.setText("")
         if has_key:
             self._show(src="", dst=INITIAL, terms="", status=WAITING)
         else:
@@ -441,8 +502,107 @@ class QuickLookupDialog(QDialog):
             self.status_label.setText(NOTHING_TO_COPY)
             return False
         QApplication.clipboard().setText(text)
+        self._last_clip = text  # 自己放進去的不要被監聽當成新複製的再翻一次
         self.status_label.setText(f"已複製{'原文' if which == 'src' else '譯文'}。")
         return True
+
+    # ----- 剪貼簿監聽 -----
+    def clipwatching(self):
+        return self.clip_timer.isActive()
+
+    def _on_clip_toggled(self):
+        if self.clip_box.isChecked():
+            if self.isVisible():
+                self._start_clipwatch()
+        else:
+            self._stop_clipwatch()
+            self.clip_status.setText(CLIP_STOPPED)
+        self._write_settings()
+
+    def _start_clipwatch(self):
+        """開始監聽。當下剪貼簿裡的東西先記下來、不翻（多半是稍早複製的，可能是密碼）；從下一次變動才算。"""
+        if self.clip_timer.isActive():
+            return
+        self._last_clip = QApplication.clipboard().text()
+        self.clip_status.setText(CLIP_WATCHING)
+        self.clip_timer.start()
+
+    def _stop_clipwatch(self):
+        self.clip_timer.stop()
+
+    def _poll_clipboard(self):
+        """剪貼簿變了才動作；先過篩子，不送的講為什麼。"""
+        if not self.clip_box.isChecked() or not self.isVisible() or not self.api_key():
+            self._stop_clipwatch()
+            return
+        current = QApplication.clipboard().text()
+        if not current or current == self._last_clip:
+            return  # 圖片、檔案、空的：text() 是空字串，不算變動
+        self._last_clip = current
+        verdict = cw.classify_clipboard(current, self.clip_settings, self.current_settings())
+        self.clip_status.setText(cw.format_skip_reason(verdict))
+        if verdict["translate"]:
+            self.submit(current, manual=False)
+
+    # ----- 朗讀 -----
+    def _panel_text(self, which):
+        widget = self.src_text if which == "src" else self.dst_text
+        text = widget.toPlainText().strip()
+        return "" if text in (INITIAL, NOKEY_BODY) else text
+
+    def _make_speaker(self, settings):
+        return speech.Speaker(settings=settings)
+
+    def speak(self, which):
+        """念原文或譯文（不送出去）；一次只念一句，按第二次會先停掉前一句。"""
+        text = self._panel_text(which)
+        if not text:
+            self.status_label.setText(ql.C34_NOTHING_TO_SPEAK)
+            return False
+        settings = speech.resolve_speech_settings(self.config_data)
+        if not settings["enabled"]:
+            self.status_label.setText(ql.C36_SPEECH_OFF)
+            return False
+        if self._speaker is None:
+            self._speaker = self._make_speaker(settings)
+        lang = st.guess_speech_lang(text) if which == "src" else self.language_box.currentData()
+        try:
+            dropped = self._speaker.speak(text, lang)
+        except speech.SpeechError as exc:  # 沒有語音引擎時講怎麼裝
+            self.status_label.setText(str(exc))
+            return False
+        self.status_label.setText(ql.speech_started_text("原文" if which == "src" else "譯文", dropped))
+        self.speech_timer.start()
+        return True
+
+    def _poll_speech(self):
+        speaker = self._speaker
+        if speaker is None or speaker._proc is None:
+            self.speech_timer.stop()
+            return
+        code = speaker.wait(timeout=0)
+        if code is None:
+            return  # 還在念
+        self.speech_timer.stop()
+        if code != 0:
+            self.status_label.setText(ql.speech_failed_text(speaker.last_error or speaker._read_stderr()))
+        else:
+            self.status_label.setText(ql.SPEECH_DONE)
+
+    def stop_speaking(self):
+        if self._speaker is not None and self._speaker.is_speaking():
+            self._speaker.stop()
+            self.speech_timer.stop()
+            self.status_label.setText(ql.SPEECH_STOPPED)
+            return True
+        return False
+
+    def shutdown(self):
+        """關主視窗：收起面板（不再看選取）、停朗讀、停監聽。Qt 收主視窗時不會自己把它收起來。"""
+        self.hide()  # hideEvent 會停監聽剪貼簿
+        self.speech_timer.stop()
+        if self._speaker is not None:
+            self._speaker.stop()
 
     # ----- 生字本 -----
     def _refresh_vocab(self):
