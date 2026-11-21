@@ -263,6 +263,7 @@ def run_batch(
     mode: str = "transcribe",
     transcript: str = "",
     report: Optional[ReportCallback] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> list:
     """
     批次執行自動流程：多個檔案依序以相同設定跑 run_pipeline。
@@ -271,14 +272,24 @@ def run_batch(
     文字稿對齊批次時，文字稿一律改由各檔案的同名 .txt sidecar 提供
     （只有單一檔案時才使用傳入的 transcript）。
 
+    should_stop（3.0 第 11 項第二十二階段加的）：每支開始之前問一次，回傳 True 就不再開始下一支——
+    正在跑的那一支照樣跑完（Whisper 與 ffmpeg 都沒辦法從中間打斷）。沒處理的那幾支也各回一筆，
+    ``"skipped": True``、``ok`` 為 False，讓呼叫端照實列出。沒給時行為跟以前一樣。
+
     回傳：每個檔案一筆結果 dict：
         {"path": 檔案路徑, "ok": bool, "result": run_pipeline 回傳值或 None,
-         "error": 錯誤訊息或 None}
+         "error": 錯誤訊息或 None}（停止後沒處理的另加 "skipped": True）
     """
     paths = [p for p in media_paths if p]
     total = len(paths)
     results = []
     for index, path in enumerate(paths):
+        if should_stop is not None and should_stop():
+            results.extend({"path": p, "ok": False, "result": None, "error": "已停止，沒有處理",
+                            "skipped": True} for p in paths[index:])
+            if report:
+                report(f"已停止：還有 {total - index} 個檔案沒有處理。", None)
+            break
         name = os.path.basename(path)
         prefix = f"[{index + 1}/{total}] {name}：" if total > 1 else ""
 

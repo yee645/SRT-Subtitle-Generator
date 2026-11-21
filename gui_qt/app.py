@@ -129,6 +129,7 @@ class MainWindow(QMainWindow):
         self.output_panel = None
         self.review_panel = None
         self.audiovis_dialog = None
+        self.batch_dialog = None
         for name, summary in STAGES:
             if name == "② 字幕":
                 self.tabs.addTab(self._subtitle_page(), name)
@@ -144,8 +145,8 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(
-            "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、直式短片）與音訊轉影片、②字幕頁、③健檢中心的影片、字幕檢查與修復、"
-            "④的匯出、燒錄與品牌套版，其餘功能請先用一般版。")
+            "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、直式短片）、音訊轉影片與批次一鍵完成、②字幕頁、③健檢中心、"
+            "④的匯出、燒錄與品牌套版，其餘請先用一般版。")
 
     def _subtitle_page(self):
         """② 字幕：播放器面板（第 2 項）＋一行說明其餘功能在哪。"""
@@ -176,7 +177,7 @@ class MainWindow(QMainWindow):
 
     def _review_page(self):
         """
-        ① 素材與剪輯：上面一列「素材準備」（第二十一階段：音訊轉影片），下面是審片助手（第 11 項第十六～二十階段：
+        ① 素材與剪輯：上面一列「素材準備」（第二十一、二十二階段：音訊轉影片、批次一鍵完成），下面是審片助手（第 11 項第十六～二十階段：
         分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、直式短片）。
         分析的是②開著的字幕；章節、發佈文字與封面候選帶進③健檢中心。
         """
@@ -198,10 +199,30 @@ class MainWindow(QMainWindow):
         self.audiovis_btn.setToolTip("只有音訊（Podcast、訪談錄音）：轉成附波形或頻譜的影片，轉好可以直接在②開啟")
         self.audiovis_btn.clicked.connect(lambda _c=False: self.open_audiovis())
         prep.addWidget(self.audiovis_btn)
+        self.batch_btn = QPushButton("批次一鍵完成（多支）…")
+        self.batch_btn.setToolTip("好幾支影片用同一份設定依序生成字幕、照④的輸出設定匯出／燒錄")
+        self.batch_btn.clicked.connect(lambda _c=False: self.open_batch())
+        prep.addWidget(self.batch_btn)
         prep.addStretch(1)
         layout.addLayout(prep)
         layout.addWidget(self.review_panel, 1)
         return page
+
+    def open_batch(self):
+        """開「批次一鍵完成」小視窗（只建一個；不擋住主視窗）。②開著的影片、清單又是空的就先加進去。"""
+        from gui_qt.batch_dialog import BatchDialog
+
+        if self.batch_dialog is None:
+            self.batch_dialog = BatchDialog(self.player_panel, self)
+        if not self.batch_dialog.running():
+            media = self.player_panel.media_path
+            if not self.batch_dialog.files() and media and os.path.exists(media):
+                self.batch_dialog.add_files([media])
+            self.batch_dialog.refresh()  # ④的輸出設定可能改過
+        self.batch_dialog.show()
+        self.batch_dialog.raise_()
+        self.batch_dialog.activateWindow()
+        return self.batch_dialog
 
     def open_audiovis(self):
         """開「音訊轉影片」小視窗（只建一個，關掉再開沿用；不擋住主視窗）。"""
@@ -240,6 +261,10 @@ class MainWindow(QMainWindow):
             return
         if (self.review_panel is not None and self.review_panel.cutting()
                 and not self.review_panel.ask_close_while_cutting()):  # ①的粗剪／精彩合輯還在輸出
+            event.ignore()
+            return
+        if (self.batch_dialog is not None and self.batch_dialog.running()
+                and not self.batch_dialog.ask_close_while_running()):  # ①的批次還在跑
             event.ignore()
             return
         if (self.audiovis_dialog is not None and self.audiovis_dialog.rendering()

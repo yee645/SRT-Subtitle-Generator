@@ -122,7 +122,7 @@ else:
           and dlg.windowTitle() == "音訊轉影片：波形／頻譜視覺化")
     check("②沒開檔：來源空著", dlg.source_edit.text() == "")
     check("有 ffmpeg：不出現提示列", not dlg.ffmpeg_label.isVisibleTo(dlg))
-    check("狀態列提到音訊轉影片", "直式短片）與音訊轉影片、" in win.statusBar().currentMessage())
+    check("狀態列提到音訊轉影片", "直式短片）、音訊轉影片與" in win.statusBar().currentMessage())
     QTest.mouseClick(win.audiovis_btn, Qt.LeftButton)
     check("再按一次：同一個小視窗", win.audiovis_dialog is dlg)
 
