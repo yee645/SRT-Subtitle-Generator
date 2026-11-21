@@ -154,7 +154,17 @@ else:
     check("〔移除選取〕", dlg.files() == [A, C])
     QTest.mouseClick(dlg.clear_btn, Qt.LeftButton)
     check("〔清空〕", dlg.files() == [] and not dlg.clear_btn.isEnabled())
+    QTest.mouseClick(dlg.add_current_btn, Qt.LeftButton)
+    check("清單空的時候〔加入②開著的〕：加進來", dlg.files() == [A])
+    dlg.clear_files()
     dlg.add_files([A, B, C])
+
+    check("還沒跑：進度條藏著", not dlg.progress_bar.isVisibleTo(dlg))
+    cfg["transcription"]["language"] = "en"
+    other = bd.BatchDialog(player)
+    check("語言初值照這次開啟的設定（en）", other.language_box.currentData() == "en")
+    other.deleteLater()
+    cfg["transcription"]["language"] = "auto"
 
     # ----- 3. 說明 -----
     text = dlg.notice.text()
@@ -215,9 +225,11 @@ else:
              "enabled": [w.isEnabled() for w in (dlg.start_btn, dlg.add_btn, dlg.add_current_btn, dlg.clear_btn,
                                                  dlg.language_box, dlg.mode_buttons["align"], dlg.open_btn)],
              "stop": dlg.stop_btn.isEnabled()}
+    cfg["automation"]["export_vtt"] = False  # 跑到一半改④的設定：這一批照開始時的設定
     fake["gate"] = None
     gate.set()
     wait_until(lambda: not dlg.running())
+    cfg["automation"]["export_vtt"] = True
     check("按下去：背景跑、控制項灰掉、〔停止〕能按、不能再開始", state["busy"] and state["again"] is False
           and state["progress"] and not any(state["enabled"]) and state["stop"], str(state))
     check("語言照這裡選的（三支都 zh），也記進這次開啟的設定", [lang for _p, lang in heard_paths] == ["zh"] * 3
@@ -236,8 +248,8 @@ else:
           == ["→ 第一集.srt", "→ 第一集.vtt"] and tops[2].childCount() == 0)
     check("總結：一般版同一句", dlg.status_label.text().startswith("批次完成：成功 2、失敗 1（共 3 個檔案）。"),
           dlg.status_label.text())
-    check("做完：控制項亮回來、〔停止〕灰掉、沒選結果時〔在②開啟這支〕灰著", dlg.start_btn.isEnabled()
-          and not dlg.stop_btn.isEnabled() and not dlg.open_btn.isEnabled())
+    check("做完：控制項亮回來、〔停止〕灰掉、進度條收起、沒選結果時〔在②開啟這支〕灰著", dlg.start_btn.isEnabled()
+          and not dlg.stop_btn.isEnabled() and not dlg.open_btn.isEnabled() and not dlg.progress_bar.isVisibleTo(dlg))
 
     # ----- 6. 停止 -----
     fake["fail_on"] = ""
@@ -247,20 +259,25 @@ else:
     check("再跑一次", dlg.start())
     wait_until(lambda: len(heard_paths) == 1, 20000)
     QTest.mouseClick(dlg.stop_btn, Qt.LeftButton)
+    dlg.worker.progress.emit(0.5, "[1/3] 第一集.mp4：正在進行智慧斷句...")
     stopping = {"stop": dlg.stop_btn.isEnabled(), "status": dlg.status_label.text()}
     fake["gate"] = None
     gate.set()
     wait_until(lambda: not dlg.running())
-    check("按停止：〔停止〕灰掉、講做完這一支就停", not stopping["stop"] and "這一支做完之後停" in stopping["status"],
+    check("按停止：〔停止〕灰掉、講做完這一支就停（之後的進度訊息不蓋掉它）", not stopping["stop"]
+          and "這一支做完之後停" in stopping["status"],
           str(stopping))
     check("停止：只跑了正在跑的那一支，沒處理的照實列出", len(heard_paths) == 1
           and [r["ok"] for r in dlg.results] == [True, False, False]
           and [bool(r.get("skipped")) for r in dlg.results] == [False, True, True]
           and dlg.result_tree.topLevelItem(1).text(1) == "— 沒有處理（按了停止）")
-    check("停止：總結講幾個沒處理", "其中 2 個沒有處理" in dlg.status_label.text(), dlg.status_label.text())
+    check("停止：總結講幾個沒處理（沒處理的不算失敗）", dlg.status_label.text().startswith(
+        "批次完成：成功 1、失敗 0（共 3 個檔案），按了停止，其中 2 個沒有處理。"), dlg.status_label.text())
     check("再跑不覆蓋（檔名加編號）", os.path.exists(os.path.join(work, "第一集 (1).srt")))
 
     # ----- 7. 在②開啟 -----
+    player.open_video(B)
+    wait_until(lambda: player.player.duration() > 0, 20000)
     dlg.result_tree.topLevelItem(1).setSelected(True)
     check("選了沒處理的那支：〔在②開啟這支〕灰著", not dlg.open_btn.isEnabled() and dlg.open_selected() is False)
     dlg.result_tree.clearSelection()
@@ -295,6 +312,17 @@ else:
     check("結果清單列出燒錄的影片", dlg.result_tree.topLevelItem(0).child(1).text(0) == "→ 第一集_subtitled.mp4")
     cfg["automation"]["burn_video"] = False
     dlg.mode_buttons["transcribe"].setChecked(True)
+
+    real_batch = bd.pipeline.run_batch
+
+    def broken(*a, **k):
+        raise RuntimeError("批次核心壞掉了")
+    bd.pipeline.run_batch = broken
+    check("核心整個失敗也會開始", dlg.start())
+    wait_until(lambda: not dlg.running())
+    check("核心整個失敗：講原因、鈕亮回來", dlg.status_label.text().startswith("批次失敗：")
+          and "批次核心壞掉了" in dlg.status_label.text() and dlg.start_btn.isEnabled(), dlg.status_label.text())
+    bd.pipeline.run_batch = real_batch
 
     # ----- 9. 關閉 -----
     gate = threading.Event()
