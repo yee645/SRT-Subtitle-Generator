@@ -302,6 +302,9 @@ if old_app_src is not None:
         "subtitle/hotkey.py",       # 第 9 項第一階段：全域熱鍵（全新）
         "subtitle/speech.py",       # 第 9 項第一階段：朗讀（全新）
         "subtitle/screentranslate.py",  # 第 9 項第一階段：螢幕翻譯流程層（全新）
+        # 3.0 第 11 項第二十三階段：即時查譯面板兩版共用的純邏輯（生字本、略過原因、譯文標題），
+        # 從 gui/quicktranslate_panel.py 抽出，Qt 版要一樣的行為（全新檔案，零 GUI 依賴）。
+        "subtitle/quicklookup.py",
         # 3.0 第 2 項：某一刻該顯示哪一句字幕。播放器疊加層與之後的時間軸
         # 共用，放核心層才不會兩邊各寫一份（全新檔案，零 GUI 依賴）。
         "subtitle/cuetime.py",
