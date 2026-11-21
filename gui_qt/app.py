@@ -130,6 +130,7 @@ class MainWindow(QMainWindow):
         self.review_panel = None
         self.audiovis_dialog = None
         self.batch_dialog = None
+        self.lookup_dialog = None
         for name, summary in STAGES:
             if name == "② 字幕":
                 self.tabs.addTab(self._subtitle_page(), name)
@@ -143,10 +144,15 @@ class MainWindow(QMainWindow):
         self.tabs.removeTab(0)
         self.tabs.insertTab(0, self._review_page(), STAGES[0][0])
         self.tabs.setCurrentIndex(0)
+        # 即時查譯在每一頁都用得到：放在頁籤列右上角
+        self.lookup_btn = QPushButton("即時查譯…")
+        self.lookup_btn.setToolTip("選取文字就翻譯；會送出去的只有選取的那段文字（送到 OpenAI）")
+        self.lookup_btn.clicked.connect(lambda _c=False: self.open_lookup())
+        self.tabs.setCornerWidget(self.lookup_btn, Qt.TopRightCorner)
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(
             "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、直式短片）、音訊轉影片與批次一鍵完成、②字幕頁、③健檢中心、"
-            "④的匯出、燒錄與品牌套版，其餘請先用一般版。")
+            "④的匯出、燒錄與品牌套版、右上角的即時查譯，其餘請先用一般版。")
 
     def _subtitle_page(self):
         """② 字幕：播放器面板（第 2 項）＋一行說明其餘功能在哪。"""
@@ -223,6 +229,15 @@ class MainWindow(QMainWindow):
         self.batch_dialog.raise_()
         self.batch_dialog.activateWindow()
         return self.batch_dialog
+
+    def open_lookup(self):
+        """打開即時查譯面板（收起來過就原地打開，快取與生字本都留著）。"""
+        from gui_qt.quicklookup_dialog import QuickLookupDialog
+
+        if self.lookup_dialog is None:
+            self.lookup_dialog = QuickLookupDialog(self.player_panel, self.cue_panel, self)
+        self.lookup_dialog.open()
+        return self.lookup_dialog
 
     def open_audiovis(self):
         """開「音訊轉影片」小視窗（只建一個，關掉再開沿用；不擋住主視窗）。"""

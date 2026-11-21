@@ -29,8 +29,6 @@
 
 from __future__ import annotations
 
-import csv
-import json
 import logging
 import os
 import queue
@@ -43,11 +41,17 @@ from config import CONFIG_PATH, save_config
 from subtitle import clipwatch as cw
 from subtitle import hotkey as hk
 from subtitle import ocrengine
+from subtitle import quicklookup as ql
 from subtitle import quicktranslate as qt
 from subtitle import screencap
 from subtitle import screentranslate as st
 from subtitle import speech
-from subtitle.punctstyle import cjk_ratio
+# 3.0 第 11 項第二十三階段：生字本與略過原因的純邏輯抽到 subtitle/quicklookup.py，Qt 版共用；
+# 這裡照原名稱 import 進來（名稱、行為、文字都不變）。
+from subtitle.quicklookup import (  # noqa: F401 —— 測試與舊程式照原名稱從這裡拿
+    C14_TOO_LONG, C15_ALREADY_CHINESE, C16_TOO_SHORT_OR_EMPTY, C20_EXPORTED, C22_VOCAB_EMPTY,
+    add_vocab_terms, classify_skip_reason, dst_label, remove_vocab_words, vocab_status_text, write_vocab_csv,
+)
 from subtitle.translator import LANGUAGE_LABELS
 
 from gui.region_overlay import RegionOverlay
@@ -56,7 +60,6 @@ from gui.tesseract_dialog import TesseractInstallDialog
 logger = logging.getLogger(__name__)
 
 _LANGUAGE_CODES_BY_LABEL = {label: code for code, label in LANGUAGE_LABELS.items()}
-_CHINESE_CODES = ("zh-TW", "zh-CN")
 
 HINT_FG = "#666666"
 STATUS_FG = "#1a5fb4"
@@ -64,7 +67,7 @@ STATUS_FG = "#1a5fb4"
 # 生字本存檔路徑：放在 config.json 旁邊（本機保存，不進 git）。
 VOCAB_PATH = os.path.join(
     os.path.dirname(os.path.abspath(CONFIG_PATH)) or ".",
-    "quicktranslate_vocab.json")
+    ql.VOCAB_FILENAME)
 
 _CONSECUTIVE_FAILURE_LIMIT = 3
 _POLL_MS = 150
@@ -99,15 +102,12 @@ C10_NOKEY_BODY = (
     "最便宜的文字模型，選一句話約千分之一美元。")
 C13_AUTO_PAUSED = ("連續 3 次翻譯失敗，已先暫停自動翻譯，避免每選一次就"
                     "失敗一次。問題排除後重新勾選「選取後自動翻譯」即可。")
-C15_ALREADY_CHINESE = "已略過：選取內容已是中文。"
-C16_TOO_SHORT_OR_EMPTY = "已略過：選取內容太短或沒有可翻的文字。"
 C17_NOTHING_SELECTED = ("沒有選取內容。先選取一段文字，或點字幕清單的一列"
                          "再按此鈕。")
 C18_VOCAB_HINT = ("查譯時的關鍵詞會自動收進這裡（本機保存，不佔 API 費用）。"
                    "匯出的 CSV 前欄是詞、後欄是意思，可直接匯入 Anki 做"
                    "記憶卡。")
 C21_CLEAR_TITLE = "清空生字本"
-C22_VOCAB_EMPTY = "生字本還是空的。查譯幾句附關鍵詞的外文，就會自動收詞進來。"
 
 # v2.3.0 螢幕翻譯（第 9 項 5b）。
 C30_SCREEN_HINT = ("框選螢幕上任何一塊畫面（遊戲、影片、圖片裡的字），"
@@ -128,109 +128,17 @@ def hotkey_check_label(combo: str) -> str:
     return f"熱鍵 {combo}"
 
 
-def C14_TOO_LONG(max_chars: int) -> str:
-    return (f"已略過：選取超過 {max_chars} 字"
-            "（快速查譯是查詞句用的，整批翻譯請用「翻譯字幕」）。")
-
-
-def C20_EXPORTED(n: int, path: str) -> str:
-    return f"已匯出 {n} 個詞到 {path}。"
-
-
-def vocab_status_text(n: int) -> str:
-    return f"生字本共 {n} 個詞。" if n else C22_VOCAB_EMPTY
-
-
-def dst_label(target_language: str) -> str:
-    """『中文翻譯』區塊標題：目標語言非中文時動態換成「◯◯翻譯」。"""
-    if target_language in _CHINESE_CODES:
-        return "中文翻譯"
-    return f"{LANGUAGE_LABELS.get(target_language, target_language)}翻譯"
-
-
-def classify_skip_reason(source: str, settings: dict) -> str:
-    """
-    `looks_translatable()` 回傳 False 時，判斷該顯示哪一句略過訊息。
-
-    只在已知 `not looks_translatable(source, settings)` 的前提下呼叫；
-    判斷順序與 `looks_translatable` 內部一致（太長 → 已是中文 → 其餘
-    歸類為「太短或沒有可翻的文字」，涵蓋太短與純數字/純標點兩種情況，
-    設計文件的 C16 本來就是同一句文案，不必細分）。
-    """
-    length = len(source)
-    if length > settings["max_chars"]:
-        return C14_TOO_LONG(settings["max_chars"])
-    target = settings.get("target_language", "")
-    if (length >= settings["min_chars"] and target.startswith("zh")
-            and cjk_ratio(source) >= 0.15):
-        return C15_ALREADY_CHINESE
-    return C16_TOO_SHORT_OR_EMPTY
-
-
 # ---------------------------------------------------------------------------
-# 生字本：純邏輯（不碰 Tkinter），方便測試檔直接呼叫。
+# 生字本：路徑照 config.json 旁邊（模組層 VOCAB_PATH，測試會換掉）；邏輯在 subtitle/quicklookup.py。
 
 def load_vocab(path: Optional[str] = None) -> list:
     """讀取生字本 JSON；檔案不存在或壞掉一律回傳空清單，不丟例外。"""
-    # path 預設用 None 而不是直接把 VOCAB_PATH 當參數預設值：後者在函式
-    # 定義當下就會被綁死，日後（例如測試）改指派模組層的 VOCAB_PATH 也
-    # 不會反映到這裡；改成呼叫當下才查一次，行為才會跟著模組層的值走。
-    path = path or VOCAB_PATH
-    try:
-        with open(path, "r", encoding="utf-8") as fp:
-            data = json.load(fp)
-    except (OSError, json.JSONDecodeError):
-        return []
-    if not isinstance(data, list):
-        return []
-    return [dict(word=str(row["word"]), meaning=str(row["meaning"]))
-            for row in data
-            if isinstance(row, dict) and row.get("word") and row.get("meaning")]
+    # 呼叫當下才查 VOCAB_PATH：測試改指派模組層的值時才會跟著走。
+    return ql.load_vocab(path or VOCAB_PATH)
 
 
 def save_vocab(vocab: list, path: Optional[str] = None) -> None:
-    path = path or VOCAB_PATH
-    try:
-        with open(path, "w", encoding="utf-8") as fp:
-            json.dump(vocab, fp, ensure_ascii=False, indent=2)
-    except OSError:
-        logger.warning("生字本存檔失敗：%s", path)
-
-
-def add_vocab_terms(vocab: list, terms: list) -> tuple:
-    """
-    把關鍵詞併入生字本，回傳 `(新清單, 是否有變動)`。
-
-    同一個詞（完全相同字串）只留第一次查到的意思，避免使用者反覆查
-    同一個詞時生字本被灌成一長串重複列。
-    """
-    existing = {row["word"] for row in vocab}
-    merged = list(vocab)
-    changed = False
-    for term in terms or []:
-        word = str(term.get("word") or "").strip()
-        meaning = str(term.get("meaning") or "").strip()
-        if not word or not meaning or word in existing:
-            continue
-        merged.append({"word": word, "meaning": meaning})
-        existing.add(word)
-        changed = True
-    return merged, changed
-
-
-def remove_vocab_words(vocab: list, words) -> list:
-    """回傳移除指定詞句之後的生字本清單（`words` 為要刪除的詞句集合）。"""
-    drop = set(words)
-    return [row for row in vocab if row["word"] not in drop]
-
-
-def write_vocab_csv(vocab: list, path: str) -> None:
-    """匯出生字本 CSV（UTF-8 BOM，Excel 與 Anki 皆可直接匯入）。"""
-    with open(path, "w", encoding="utf-8-sig", newline="") as fp:
-        writer = csv.writer(fp)
-        writer.writerow(["詞句", "意思"])
-        for row in vocab:
-            writer.writerow([row["word"], row["meaning"]])
+    ql.save_vocab(vocab, path or VOCAB_PATH)
 
 
 # ---------------------------------------------------------------------------
