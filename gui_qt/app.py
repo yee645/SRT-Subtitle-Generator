@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 import config
-from subtitle.configmerge import merge_for_save
+from subtitle.configmerge import changed_sections, merge_for_save
 from updater import APP_VERSION
 
 logger = logging.getLogger(__name__)
@@ -316,9 +316,10 @@ class MainWindow(QMainWindow):
         """
         把這次開啟期間改過的設定存回 config.json（只寫改過的最上層區塊，見 `configmerge`）。
 
-        回傳有沒有寫。存不進去（唯讀、磁碟滿）不擋關視窗：記在記錄檔，這次改的設定下次開啟就不在了。
+        回傳有沒有寫。什麼都沒改就不寫（檔案原封不動）。存不進去（唯讀、磁碟滿）不擋關視窗：記在記錄檔，
+        這次改的設定下次開啟就不在了。
         """
-        if not self.persist:
+        if not self.persist or not changed_sections(self._opened_config, self.config_data):
             return False
         try:
             disk = config.load_config()  # 磁碟上現在的（一般版剛存的也在裡面）

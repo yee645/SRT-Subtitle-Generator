@@ -102,6 +102,15 @@ else:
     src = open(os.path.join(os.path.dirname(qt_app.__file__), "app.py"), encoding="utf-8").read()
     check("main() 開的會存、自檢模式不存", "MainWindow(data, persist=SELFTEST_FLAG not in argv)" in src)
 
+    untouched = qt_app.MainWindow()
+    tame(untouched)
+    untouched.show()
+    wait(50)
+    stamp = (os.path.getmtime(config.CONFIG_PATH), open(config.CONFIG_PATH, encoding="utf-8").read())
+    untouched.close()
+    check("開了什麼都沒改就關：檔案原封不動", (os.path.getmtime(config.CONFIG_PATH),
+                                             open(config.CONFIG_PATH, encoding="utf-8").read()) == stamp
+          and untouched.save_settings() is False)
     win = qt_app.MainWindow()
     tame(win)
     win.show()
@@ -162,8 +171,10 @@ else:
     other = disk()
     other["seriescheck"]["cast_tolerance"] = 5.0  # 一般版又改了 Qt 剛存過的區塊
     write_disk(other)
-    check("Qt 沒再改：再存不會把一般版的蓋回去", win2.save_settings() is True
-          and disk()["seriescheck"]["cast_tolerance"] == 5.0)
+    before = open(config.CONFIG_PATH, encoding="utf-8").read()
+    check("Qt 沒再改：再存不寫（一般版的不會被蓋回去）", win2.save_settings() is False
+          and disk()["seriescheck"]["cast_tolerance"] == 5.0
+          and open(config.CONFIG_PATH, encoding="utf-8").read() == before)
 
     # ----- 5. 關視窗被取消 -----
     dlg2.spins["cast_tolerance"].setValue(9.0)
