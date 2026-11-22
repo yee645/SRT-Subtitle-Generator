@@ -16,7 +16,7 @@
 燒錄在背景用 ffmpeg 跑，輸出到一半不能停（一般版也不能），關視窗時先問。字幕燒在②開著的**原始影片**
 上：剪點、素材軌、轉場、畫面調整不會算進去（那些用②的「照剪點輸出…」「輸出多軌…」），頁面上寫明。
 
-設定只記在這次開啟的設定裡（Qt 預覽版不寫 config.json）。
+設定寫進這次開啟的設定（關掉 Qt 版時只把改過的區塊存回 config.json，見 app.py）。
 
 「輸出」框下面是「成品加工：品牌套版」（第十四階段，`gui_qt/branding_box.py`）。燒錄完，套版的來源自動換成
 剛燒好的那一支。一次只跑一件：燒錄與套版不同時跑。
@@ -118,7 +118,7 @@ class OutputPanel(QWidget):
         inner.addLayout(row)
 
         # ② 輸出設定
-        inner.addWidget(self._heading("輸出設定（這次開啟會記住）"))
+        inner.addWidget(self._heading("輸出設定（自動記憶）"))
         row = QHBoxLayout()
         row.addWidget(QLabel("匯出字幕檔："))
         self.format_boxes = {}

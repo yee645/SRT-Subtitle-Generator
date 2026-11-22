@@ -11,7 +11,7 @@
    gui_qt；2.x exe 的 spec 排除 PySide6、shiboken6、gui_qt。
 3. 有 PySide6 時（offscreen）：主視窗真的建得起來，四個頁籤名稱與 Tk 版
    一字不差、順序相同；標題帶版號；深淺主題跟 config 的 theme 走，量的
-   是實際調色盤的亮度；骨架不寫回設定檔。
+   是實際調色盤的亮度；存設定只有一處、一定經過 merge_for_save（第二十八階段起才寫設定檔）。
 
 沒有 PySide6 的環境（2.x 的 CI）第 3 段略過、其餘照跑。
 """
@@ -115,8 +115,10 @@ excluded = set(re.findall(r"'([^']+)'", excludes.group(1))) if excludes else set
 check("2.x exe 的 spec 排除 PySide6、shiboken6、gui_qt",
       {"PySide6", "shiboken6", "gui_qt"} <= excluded, str(sorted(excluded)))
 
-check("骨架不寫回設定檔（兩個版本同時開時不能互相蓋掉）",
-      "save_config" not in _read("gui_qt/app.py"))
+_app_src = _read("gui_qt/app.py")
+check("存設定只有一處，而且一定經過 merge_for_save（只寫改過的區塊，兩個版本同時開時不互相蓋掉）",
+      _app_src.count("save_config(") == 1
+      and "config.save_config(merge_for_save(disk, self._opened_config, self.config_data))" in _app_src)
 
 # ===== 3. 真的建視窗（需要 PySide6） =====================================
 

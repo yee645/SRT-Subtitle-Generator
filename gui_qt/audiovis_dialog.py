@@ -4,7 +4,7 @@
 
 Podcast、訪談錄音這類素材手上只有音訊，平台卻要上傳影片：把音訊轉成附波形或頻譜的 mp4，
 可選擇疊在背景圖（例如節目封面）上。核心同一個 `subtitle.audiovis.render_audio_video`、同一份設定
-（config 的 audiovis）、同樣的範圍。只記在這次開啟的設定裡（Qt 預覽版不寫 config.json）。
+（config 的 audiovis）、同樣的範圍。寫進這次開啟的設定（關掉 Qt 版時只把改過的區塊存回 config.json，見 app.py）。
 
 比一般版多的：
 - 轉好之後可以直接在②開啟（同一條時間軸，原本對著音訊做的字幕照樣對得上）；

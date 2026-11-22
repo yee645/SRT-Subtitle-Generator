@@ -10,7 +10,7 @@
 * **翻到一半可以停**：每一批送出前看一下有沒有按「停止」，停了就什麼都不改。
 * **翻完整份是一步復原**（Ctrl+Z 一次退回，逐字時間軸也回來）。翻的時候字幕若被改過（照理
   視窗擋著改不了，這裡再保險一次），就不套用、說原因，免得蓋掉。
-* 選的語言與模式只記在這次開啟的設定裡：Qt 預覽版不寫回 config.json。
+* 選的語言與模式寫進這次開啟的設定，關掉 Qt 版時存回 config.json。
 
 **多語字幕包**（第七階段）：一份字幕一次翻成好幾個語言，每個語言存一個上傳用的**單語** .srt
 （`影片.en.srt`），跟一般版、CLI 同一段（`subtitle/multilang.write_language_pack`）。送出前寫明每個
@@ -273,7 +273,7 @@ class TranslateDialog(QDialog):
         if self.busy() or not self.player.cues or not self.api_key():
             return False
         settings = self.settings()
-        # 記住這次選的，下次打開預設就是它——只記在這次開啟的設定裡，不寫回 config.json
+        # 記住這次選的，下次打開預設就是它——寫進這次開啟的設定，關掉 Qt 版時存回 config.json
         self.player._config["translate"] = dict(self.player._config.get("translate") or {},
                                                 target_language=settings["target_language"],
                                                 mode=settings["mode"])
@@ -298,7 +298,7 @@ class TranslateDialog(QDialog):
         if existing and not self._ask_overwrite(existing):
             self.status.setText("沒有輸出：資料夾裡已經有同名的檔，換一個資料夾再試。")
             return False
-        # 記住這次填的——只記在這次開啟的設定裡，不寫回 config.json
+        # 記住這次填的——寫進這次開啟的設定，關掉 Qt 版時存回 config.json
         self.player._config["multilang"] = dict(self.player._config.get("multilang") or {},
                                                 languages=self.pack_edit.text(),
                                                 dedupe=self.pack_dedupe.isChecked())
