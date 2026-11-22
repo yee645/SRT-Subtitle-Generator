@@ -307,6 +307,20 @@ else:
             check("Tk 實測段沒有丟 TclError", False, str(exc))
 
 
+# ----- 3.0 第 11 項第二十六階段：Qt 的組合鍵寫法 -----
+check("Qt 寫法：預設組合鍵", hk.to_qt_sequence("Ctrl+Alt+F8") == "Ctrl+Alt+F8")
+check("Qt 寫法：Win 是 Meta、修飾鍵照固定順序", hk.to_qt_sequence("win+shift+pageup") == "Shift+Meta+PgUp")
+check("Qt 寫法：有名字的鍵換成 Qt 的名字", [hk.to_qt_sequence(c) for c in
+      ("alt+enter", "ctrl+delete", "ctrl+insert", "ctrl+pagedown", "ctrl+alt+backslash", "ctrl+space")]
+      == ["Alt+Return", "Ctrl+Del", "Ctrl+Ins", "Ctrl+PgDown", "Ctrl+Alt+\\", "Ctrl+Space"])
+check("Qt 寫法：字母大寫、數字照舊", hk.to_qt_sequence("ctrl+shift+z") == "Ctrl+Shift+Z"
+      and hk.to_qt_sequence("alt+7") == "Alt+7")
+try:
+    hk.to_qt_sequence("F8")
+    check("Qt 寫法：沒有修飾鍵一樣擋", False)
+except hk.HotkeyError:
+    check("Qt 寫法：沒有修飾鍵一樣擋", True)
+
 print()
 if failures:
     print(f"失敗 {len(failures)} 項：{', '.join(failures)}")

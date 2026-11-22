@@ -2356,7 +2356,7 @@ Python 的那條路（跟一般版同一段程式，一般版用了很久，但 
 | 14 | ✅ **④成品加工**：品牌套版（片頭片尾、浮水印，2026-11-11）；配樂助手對照音樂軌補缺的（閃避設定、節拍分析，2026-11-12） | `branding_dialog`、`music_dialog` | `branding`、`audio`、`beatsync` | **完成**。配樂助手的混音 Qt 的音樂軌已有（循環、音量、閃避），補的是閃避強度／靈敏度與節拍分析，放在選取音樂時的「配樂設定…」小視窗 |
 | 15 | **①審片助手**（進行中：✅（一）分析與段落清單 2026-11-13；✅（二）粗剪與匯出 2026-11-15；✅（三）章節、發佈包、廣告插入點 2026-11-17；✅（四）封面候選 2026-11-19；✅（五）直式短片 2026-11-20——這一列完成）：分段清單、精彩／冷場標記、粗剪與精彩合輯、章節、發佈包、封面候選、短片選段 | `review_window` | `review`、`publisher`、`thumbnails`、`shorts` | 最大的一塊，拆多階段；剪點已經能畫在時間軸上（第 5 項），這裡搬的是分析與清單。章節、發佈包、封面候選直接送③ |
 | 16 | ✅ **①其餘**（✅（一）音訊轉影片 2026-11-21；✅（二）批次一鍵完成 2026-11-21——這一列完成）：音訊轉影片、批次（多檔一鍵完成） | ①「素材準備」、動作列 | `audiovis`、`pipeline` | 匯入字幕、剪停頓、剪重複 Qt 已有 |
-| 17 | **即時查譯＋螢幕畫面翻譯**（進行中：✅（一）查譯面板與生字本 2026-11-21；✅（二）朗讀與剪貼簿監聽 2026-11-21；✅（三）框選螢幕翻譯 2026-11-22；（四）全域熱鍵）（含生字本、朗讀、全域熱鍵、剪貼簿監聽） | `quicktranslate_panel`、`region_overlay` | `quicktranslate`、`screentranslate`、`ocrengine`、`speech`、`hotkey`、`clipwatch` | 搬法見下面「螢幕畫面翻譯搬到 Qt 時的參考」；隱私規則原樣沿用 |
+| 17 | ✅ **即時查譯＋螢幕畫面翻譯**（✅（一）查譯面板與生字本 2026-11-21；✅（二）朗讀與剪貼簿監聽 2026-11-21；✅（三）框選螢幕翻譯 2026-11-22；✅（四）全域熱鍵 2026-11-22——這一列完成）（含生字本、朗讀、全域熱鍵、剪貼簿監聽） | `quicktranslate_panel`、`region_overlay` | `quicktranslate`、`screentranslate`、`ocrengine`、`speech`、`hotkey`、`clipwatch` | 搬法見下面「螢幕畫面翻譯搬到 Qt 時的參考」；隱私規則原樣沿用 |
 | 18 | **系列一致性** | `series_dialog` | `seriescheck` | 獨立小工具 |
 | 19 | **雜項**：ffmpeg／tesseract 一鍵安裝視窗、自動更新提示、習慣設定（樣式組合）、Qt 版寫 config.json、首次啟動導覽 | 各對話框 | `ffmpeg_setup`、`tesseract_setup`、`updater` | Qt 版到這裡才開始寫設定檔（之前刻意不寫，避免預覽版弄壞一般版的設定） |
 
@@ -3031,6 +3031,61 @@ Windows／macOS。
 
 **下一步**：第 17 列（四）——全域熱鍵（叫出框選）。核心 `subtitle/hotkey.py` 沿用；Windows 那段照參考表改在 Qt 的
 原生事件過濾器接 `WM_HOTKEY`，Linux／macOS 照一般版退成「本程式視窗內有效」。做完第 17 列就完成。
+
+### 第 11 項第二十六階段：即時查譯（四）——全域熱鍵（2026-11-22，第 17 列完成）
+
+同一晚的第二個階段。
+
+題目與理由：第 17 列（四）。一般版在框選那一列有「熱鍵 Ctrl+Alt+F8」：在別的程式裡按就叫出框選。核心
+`subtitle/hotkey.py`（三種狀態 `global`／`window-only`／`unavailable`、組合鍵解析與驗證、每一種狀態都講一句話）沿用，
+要換的是兩條接線。
+
+調研與決定：
+
+- **視窗內那條退路**：一般版用 Tk 的 `bind_all`；Qt 用掛在主視窗上的 `QShortcut`（`Qt.ApplicationShortcut`：焦點在
+  本程式任何一個視窗都有效，面板收起來也有效）。核心加 `hotkey.to_qt_sequence`（Win→Meta、PageUp→PgUp…），每一種
+  組合鍵換過去 `QKeySequence` 都認得（測試逐一驗）。
+- **Windows 的全域熱鍵**：註冊照 `WindowsBackend.register`（`RegisterHotKey`），但**不輪詢**——Qt 的事件迴圈會先把
+  `WM_HOTKEY` 拿走，一般版的 `PeekMessage` 輪詢會搶不到。改成裝原生事件過濾器（`QAbstractNativeEventFilter`）認
+  `WM_HOTKEY` 與熱鍵編號（照上面參考表 2026-09-23 的規劃）。**這一段沒有 Windows 可以實測**：認訊息的函式寫成純的，
+  用 ctypes 自己組 MSG 結構測；註冊用假的後端把「成功」「被佔走」兩條路走過。
+
+| 一般版 | Qt |
+|---|---|
+| 框選那一列「熱鍵 Ctrl+Alt+F8」，預設關 | 搬 |
+| 先試全域，搶不到退成本程式視窗內，再不行講註冊不起來（按鈕照樣能用）；每一種都講一句、講是哪個組合鍵 | 搬（核心同一套） |
+| 被別的程式佔走 vs. 系統不支援：講不同的話 | 搬 |
+| 按了叫出框選；面板沒開也行（框完才叫出來，取消就不叫出來） | 搬 |
+| Windows：`RegisterHotKey`＋計時器輪詢 `PeekMessage` | **改**：原生事件過濾器接 `WM_HOTKEY`（理由見上，沒有實測） |
+| Linux／macOS：只在本程式視窗內有效（Tk `bind_all`） | **改**：`QShortcut`（ApplicationShortcut） |
+| 關掉：取消註冊、講一句；關掉面板熱鍵照樣有效 | 搬；關主視窗時取消註冊（不然程式關了那個組合鍵還被佔著） |
+| 開關寫進 config.json | **改**：只記在這次開啟的設定 |
+
+**會送出去的**：沒有。熱鍵只叫出框選（在這台電腦截圖、辨識）；之後送不送照上一階段的規則（使用者確認才送）。
+
+做了什麼：
+
+- `subtitle/hotkey.py`：`to_qt_sequence`（純函式）。
+- `gui_qt/hotkey_qt.py`（新）：`QtHotkey`（包 `HotkeyManager`；Windows 直接用 `WindowsBackend` 註冊，它的輪詢在 Qt 裡
+  不呼叫）、原生事件過濾器、`is_hotkey_message`。
+- `gui_qt/quicklookup_dialog.py`：框選那一列的熱鍵勾選框、`enable_hotkey`／`disable_hotkey`；`shutdown` 取消註冊。
+
+測試：
+
+- `tests/test_hotkey.py`：Qt 寫法 5 項（收緊，原有斷言不動）。
+- `tests/test_qt_lookup_hotkey.py`（新，39 項）：預設關；這台真的走視窗內那條路（按組合鍵叫出框選、面板沒開也行、
+  取消不叫出面板、框完叫出面板）；關掉；設定沿用與一建好就啟用；假的 Windows 後端（全域、`WM_HOTKEY` 對的編號才
+  觸發、別的訊息與別的平台的事件不觸發、關掉就取消註冊、被佔走、綁不上、組合鍵不合法）；每一種組合鍵的 Qt 寫法；
+  收面板不取消、關主視窗取消。
+- 破壞探針 26 個：第一輪漏 3 個（另 2 個探針字串寫錯，改好重跑都抓到）。補了檢查的 2 個（別的訊息就算編號一樣也不算；
+  換成 Qt 寫法認不得時不綁空的快捷鍵）；另 1 個證明是多餘的——原本為 Windows 包了一層「不輪詢」的後端，但 Qt 裡根本
+  沒有人呼叫輪詢，拿掉、直接用 `WindowsBackend`。補完全數抓到。
+- 深淺兩色截圖看過（框選那一列的熱鍵、啟用後講「只在本程式視窗內有效」）。
+
+**容器裡驗不到**：Windows 的 `RegisterHotKey` 與 `WM_HOTKEY` 真的進到過濾器（用假後端＋自己組的 MSG）；macOS 上
+Ctrl／Command 的對應；在別的程式（遊戲）裡按。
+
+**第 17 列完成。下一步**：盤點表第 18 列——系列一致性（`series_dialog`／`seriescheck`，獨立小工具）。先列一般版能力清單再搬。
 
 ### 螢幕畫面翻譯搬到 Qt 時的參考（2026-09-23 實測）
 

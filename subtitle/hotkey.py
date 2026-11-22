@@ -210,6 +210,26 @@ def to_tk_binding(text):
     return f"<{prefix}KeyPress-{key_name}>"
 
 
+# Qt 預覽版（3.0 第 11 項第二十六階段）：視窗內那條退路用 QShortcut，要的是 Qt 的組合鍵寫法。
+_MODIFIER_QT = {"Ctrl": "Ctrl", "Alt": "Alt", "Shift": "Shift", "Win": "Meta"}
+_NAMED_QT = {"Space": "Space", "Enter": "Return", "Tab": "Tab", "Insert": "Ins",
+             "Delete": "Del", "Home": "Home", "End": "End", "PageUp": "PgUp",
+             "PageDown": "PgDown", "Left": "Left", "Up": "Up", "Right": "Right",
+             "Down": "Down", "Backslash": "\\"}
+
+
+def to_qt_sequence(text):
+    """
+    換成 Qt `QKeySequence` 認得的寫法，例如 ``Ctrl+Alt+F8``、``Meta+Shift+PgUp``。
+
+    跟 `to_tk_binding` 同一個用途：全域熱鍵搶不到時，同一個組合鍵改成只在本程式視窗內有效。
+    Win 鍵在 Qt 叫 Meta；macOS 上 Qt 的 Ctrl 是 Command 鍵（**沒有實測**）。
+    """
+    parsed = parse_combo(text)
+    key = _NAMED_QT.get(parsed["key"], parsed["key"])
+    return "+".join([_MODIFIER_QT[m] for m in parsed["modifiers"]] + [key])
+
+
 def describe_status(status, combo, reason="", taken=False):
     """
     把狀態換成一句使用者看得懂的話。
