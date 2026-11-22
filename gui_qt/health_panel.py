@@ -7,8 +7,8 @@
 的門檻、同樣的「一定要修／建議修／通過」與準備度評級。這一頁檢查的對象就是②字幕頁開著的影片與字幕
 （按「開始健檢」時現拿：逐句校對改到一半的會先套用，報告講的是現在的句子）。
 
-這一階段還沒有的（頁面上寫明，請先用一般版）：
-* 系列一致性（多支影片彼此比對）——之後的階段搬。
+系列一致性（多支影片彼此比對，第二十七階段）跟健檢性質不同（健檢看一支合不合格），跟一般版一樣另開一個
+視窗（`gui_qt/series_dialog.py`），入口在封面圖下面。
 
 封面圖在「封面圖」那塊加入（可多選，依分數排名，跟一般版同一套檢查；只要 ffmpeg，不必開影片）。加入的
 圖只記在畫面上、不存檔，跟一般版一樣。
@@ -55,14 +55,16 @@ CHECK_COLUMNS = 3
 PAGE_NOTE = ("檢查②字幕頁開著的影片與字幕：音訊、畫質、曝光、音量、節奏、字幕（CPS／行數／重疊）、"
              "廣告友善度、開場、可讀性、標點、語音同步、片尾、工商揭露、術語、檔名，跟一般版同一套門檻；"
              "發佈文字與章節在下面另外貼。可以直接按「修復此項」：字幕類直接改②的字幕，影音類另外輸出一個"
-             "修復版，章節直接改章節框。封面圖在下面加入（可多選、依分數排名）。系列一致性的檢查還在一般版"
-             "（之後的階段搬過來）。")
+             "修復版，章節直接改章節框。封面圖在下面加入（可多選、依分數排名）。同一系列的多支影片彼此比對"
+             "按封面圖下面的「系列一致性比對…」。")
 PUBLISH_CLOSED = "▸ 發佈文字與章節（選填，填什麼檢什麼；點一下展開）"
 PUBLISH_OPEN = "▾ 發佈文字與章節（選填，填什麼檢什麼；點一下收合）"
 PUBLISH_NOTE = ("標籤用逗號分隔，就是 YouTube 後台那一欄的填法。說明欄上限算的是位元組，中文一個字佔 3 個。"
                 "這裡貼的只放在畫面上、不存檔。")
 THUMB_CLOSED = "▸ 封面圖（可多選，會依分數排名；點一下展開）"
 THUMB_OPEN = "▾ 封面圖（可多選，會依分數排名；點一下收合）"
+SERIES_NOTE = ("系列一致性比的是「多支影片彼此之間」（音量、解析度、亮度、色調有沒有哪一支偏離整批），"
+               "跟上面的檢查（單支影片合不合格）性質不同，所以另開一個視窗、不併進下面的報告。")
 THUMB_NOTE = "只要 ffmpeg、不必開影片。加入的圖只記在畫面上、不存檔；圖片本身不會被改。"
 NOTHING = "先在②字幕頁開影片或載入字幕，或在下面貼發佈文字、章節、加入封面圖，這裡才有東西可以檢查。"
 NONE_CHECKED = "請至少勾一項要跑的檢查。"
@@ -176,6 +178,16 @@ class HealthPanel(QWidget):
         layout.addWidget(box)
         layout.addWidget(self._build_publish())
         layout.addWidget(self._build_thumbs())
+        series_row = QHBoxLayout()
+        self.series_btn = QPushButton("系列一致性比對…")
+        self.series_btn.setToolTip("同一系列的多支影片彼此比對：音量、解析度、亮度、色調")
+        self.series_btn.clicked.connect(lambda _c=False: self.open_series())
+        series_row.addWidget(self.series_btn)
+        series_note = QLabel(SERIES_NOTE)
+        series_note.setWordWrap(True)
+        series_row.addWidget(series_note, 1)
+        layout.addLayout(series_row)
+        self.series_dialog = None
 
         row = QHBoxLayout()
         self.run_btn = QPushButton("開始健檢")
@@ -705,6 +717,16 @@ class HealthPanel(QWidget):
         from PySide6.QtWidgets import QMessageBox
         answer = QMessageBox.question(self, "修復版還在輸出", self.close_question())
         return answer == QMessageBox.Yes
+
+    # ----- 系列一致性（另開視窗；只開一個，清單與報告關掉再開還在） -----
+    def open_series(self):
+        from gui_qt.series_dialog import SeriesDialog
+        if self.series_dialog is None:
+            self.series_dialog = SeriesDialog(self.player, self)
+        self.series_dialog.show()
+        self.series_dialog.raise_()
+        self.series_dialog.activateWindow()
+        return self.series_dialog
 
     def report_text(self):
         return hc.format_health_report(self.last_result) if self.last_result else ""
