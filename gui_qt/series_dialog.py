@@ -5,7 +5,7 @@
 批次製作時每一支單獨看都沒問題，彼此之間卻可能不一致——連看同一系列時某一集突然要調大音量、某一集畫面
 明顯偏暗、某一集解析度掉下來。以整批的中位數為基準，找出偏離整批的那幾支。核心同一個
 `subtitle/seriescheck.py`（量測、比對、報告文字都一樣），同一份設定（config 的 seriescheck）、同樣的範圍；
-只記在這次開啟的設定裡（Qt 預覽版不寫 config.json）。
+寫進這次開啟的設定（關掉 Qt 版時只把改過的區塊存回 config.json，見 app.py）。
 
 跟③健檢的差別：健檢拿固定門檻看一支影片合不合格；這裡比的是多支影片彼此之間一不一致，所以另開一個視窗、
 不併進健檢的分級報告（一般版同樣的理由）。
@@ -126,7 +126,7 @@ class SeriesDialog(QDialog):
         files_layout.addLayout(row)
         layout.addWidget(files)
 
-        box = QGroupBox("容許差異（這次開啟會記住）")
+        box = QGroupBox("容許差異（自動記憶）")
         box_layout = QVBoxLayout(box)
         row = QHBoxLayout()
         self.spins = {}

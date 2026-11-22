@@ -39,8 +39,8 @@ Tk 版的「預覽」是 Canvas 畫的假畫面（`gui/preview_panel.py`），�
 代理檔（第 6 項）：短邊 1080 以上的影片，編輯時換成短邊 540、關鍵影格密的代理檔播
 （`subtitle/proxy.py`），跳轉快很多；快取裡沒有就先用原檔、背景做一份，做好了在同一
 個位置無縫換過去。縮圖、波形、剪點與「照剪點輸出」一律用原檔，時間以原檔的片長為準。
-「編輯用代理檔」可以關掉（讀 config 的 `qt_proxy`，預設開；Qt 預覽版還不寫回
-config.json，關掉只算這一次）。
+「編輯用代理檔」可以關掉（讀 config 的 `qt_proxy`，預設開；關掉 Qt 版時存回 config.json，
+下次開啟照舊）。
 
 素材軌（第 7 項第二階段）：「加入畫面…」「加入音樂…」在播放頭的位置放一段疊加的影片
 ／圖片或背景音樂，畫在時間軸的兩條素材軌上，可以拖位置、選取後按 Delete 刪；「輸出多
@@ -1182,7 +1182,7 @@ class PlayerPanel(QWidget):
     def apply_project(self, state):
         """
         照專案狀態（subtitle/project.py 的格式）還原播放器：影片、字幕、調整、素材軌、剪點、接縫、字幕
-        樣式。專案沒記樣式（第 1 版存的）就沿用目前的。樣式只記在這次開啟的設定裡，不寫回 config.json。
+        樣式。專案沒記樣式（第 1 版存的）就沿用目前的。樣式寫進這次開啟的設定，關掉 Qt 版時存回 config.json。
         """
         state = project_mod.normalize_state(state)
         self.open_video(state["media"])  # 會清掉上一支的素材與調整
@@ -1614,8 +1614,7 @@ class PlayerPanel(QWidget):
         self.player.setSource(QUrl.fromLocalFile(proxy_path or self.media_path))
 
     def _on_proxy_toggled(self, on):
-        # 只記在這次開啟的設定裡：Qt 預覽版不寫回 config.json（跟一般版同時開時會互相蓋掉，
-        # 見 test_qt_skeleton），要等兩邊的設定寫法說好了才記得住。
+        # 寫進這次開啟的設定；關掉 Qt 版時只把改過的區塊存回 config.json（見 app.py 的 save_settings）
         self._config["qt_proxy"] = bool(on)
         if not self.media_path:
             return

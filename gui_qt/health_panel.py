@@ -26,8 +26,7 @@
 能），關視窗時先問。健檢之後②換過影片的話不修，請先重新健檢。修「整體響度」那筆時一併做響度正規化（預設
 沒勾，照預設輸出聲音不會變大），只在那一次、不改記著的設定，畫面上寫明。
 
-勾選哪幾項只記在這次開啟的設定裡（跟一般版同一個區塊，切去一般版前不會寫進 config.json：Qt 預覽版不
-寫設定檔）。
+勾選哪幾項寫進這次開啟的設定（跟一般版同一個區塊；關掉 Qt 版時只把改過的區塊存回 config.json，見 app.py）。
 """
 import os
 import threading
@@ -157,7 +156,7 @@ class HealthPanel(QWidget):
         self.target_label.setWordWrap(True)
         layout.addWidget(self.target_label)
 
-        box = QGroupBox("要跑哪些檢查（這次開啟會記住）")
+        box = QGroupBox("要跑哪些檢查（自動記憶）")
         grid = QGridLayout(box)
         chosen = hc.default_selected_keys(self.config)
         self.check_boxes = {}

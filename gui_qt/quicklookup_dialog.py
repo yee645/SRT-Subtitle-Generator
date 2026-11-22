@@ -15,7 +15,7 @@
 - 觸發方式：Tk 聽 `<<Selection>>` 再等滑鼠放開；Qt 在整個程式的事件裡看「放開滑鼠／放開按鍵時，
   那個文字框（或焦點所在的文字框）有沒有選取」，面板自己的框不算，去抖動一樣用 `debounce_ms`。密碼欄位（QLineEdit 不是一般顯示模式）略過。
 - 沒有金鑰時的說明指向一般版的「轉寫設定」（Qt 預覽版還沒有填金鑰的地方）。
-- 設定只記在這次開啟的設定裡（第 19 項之前不寫 config.json）。**生字本照樣寫**：它是查譯的結果、
+- 設定寫進這次開啟的設定（關掉 Qt 版時只把改過的區塊存回 config.json）。**生字本照樣寫**：它是查譯的結果、
   不是設定，跟一般版存在同一個檔（config.json 旁邊的 quicktranslate_vocab.json），兩版看到的是同一本。
 
 第二十四階段加上：
@@ -406,7 +406,7 @@ class QuickLookupDialog(QDialog):
         return settings
 
     def _write_settings(self):
-        """寫進這次開啟的設定（quicktranslate；別的項目留著）。不寫 config.json。"""
+        """寫進這次開啟的設定（quicktranslate；別的項目留著）。關掉 Qt 版時存回 config.json。"""
         data = dict(self.config_data.get("quicktranslate") or {})
         data.update({"target_language": self.language_box.currentData(), "explain": self.explain_box.isChecked(),
                      "auto_translate": self.auto_box.isChecked(), "save_to_vocab": self.save_vocab_box.isChecked(),

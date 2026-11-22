@@ -10,9 +10,12 @@
 → ② 字幕 → ③ 健檢中心 → ④ 輸出與發佈」，換工具包不是重新命名的理由。
 測試會拿 `gui/app.py` 的原始碼比對。
 
-設定只讀不寫：骨架沒有任何值要存，貿然寫回可能蓋掉 Tk 版同時開著時改
-的東西。要寫的那一天再處理兩邊同時開的問題。
+設定（第 11 項第二十八階段起）：從 `main()` 開的視窗關掉時存回 config.json，而且**只寫這次開啟期間改過的
+最上層區塊**（`subtitle/configmerge.py`）：一般版同時開著、在這段期間存的東西不會被這邊開啟當下的舊值蓋掉。
+測試直接建 `MainWindow(設定)` 不存（`persist` 預設只有自己讀設定檔時才開）。
 """
+import copy
+import logging
 import os
 import sys
 
@@ -23,7 +26,10 @@ from PySide6.QtWidgets import (
 )
 
 import config
+from subtitle.configmerge import changed_sections, merge_for_save
 from updater import APP_VERSION
+
+logger = logging.getLogger(__name__)
 
 # (頁籤名稱, 還沒搬過來時頁面上的說明)。名稱必須與 gui/app.py 的
 # notebook.add(..., text=...) 相同。
@@ -115,9 +121,13 @@ def _subtitle_page_note():
 class MainWindow(QMainWindow):
     """3.0 預覽版主視窗。"""
 
-    def __init__(self, config_data=None):
+    def __init__(self, config_data=None, persist=None):
         super().__init__()
+        # 關掉時要不要存回 config.json：沒指定的話，自己讀設定檔的才存（測試給一份設定進來的不存）
+        self.persist = (config_data is None) if persist is None else bool(persist)
         self.config_data = config_data if config_data is not None else config.load_config()
+        # 開啟當下的樣子：存檔時拿來比，只寫這次改過的區塊
+        self._opened_config = copy.deepcopy(self.config_data) if self.persist else None
         self.setWindowTitle(WINDOW_TITLE)
         self.resize(*DEFAULT_SIZE)
 
@@ -299,7 +309,26 @@ class MainWindow(QMainWindow):
             self.lookup_dialog.shutdown()  # 停朗讀（收面板不會停）、停監聽剪貼簿
         if self.player_panel is not None:
             self.player_panel.shutdown()
+        self.save_settings()
         super().closeEvent(event)
+
+    def save_settings(self):
+        """
+        把這次開啟期間改過的設定存回 config.json（只寫改過的最上層區塊，見 `configmerge`）。
+
+        回傳有沒有寫。什麼都沒改就不寫（檔案原封不動）。存不進去（唯讀、磁碟滿）不擋關視窗：記在記錄檔，
+        這次改的設定下次開啟就不在了。
+        """
+        if not self.persist or not changed_sections(self._opened_config, self.config_data):
+            return False
+        try:
+            disk = config.load_config()  # 磁碟上現在的（一般版剛存的也在裡面）
+            config.save_config(merge_for_save(disk, self._opened_config, self.config_data))
+        except OSError as exc:
+            logger.warning("Qt 版存設定失敗（%s）：%s", config.CONFIG_PATH, exc)
+            return False
+        self._opened_config = copy.deepcopy(self.config_data)
+        return True
 
 
 SELFTEST_FLAG = "--selftest"
@@ -319,7 +348,7 @@ def main(argv=None):
     app = QApplication.instance() or QApplication(argv[:1])
     data = config.load_config()
     apply_theme(app, data.get("theme", "light"))
-    win = MainWindow(data)
+    win = MainWindow(data, persist=SELFTEST_FLAG not in argv)  # 自檢模式不碰使用者的設定檔
     if SELFTEST_FLAG in argv:
         at = argv.index(SELFTEST_FLAG)
         if len(argv) < at + 3:

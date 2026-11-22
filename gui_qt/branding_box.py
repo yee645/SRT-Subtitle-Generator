@@ -11,7 +11,7 @@
 版畫面上會疊兩層字），只換套版的來源。
 
 片頭、片尾、浮水印至少設一項。套版在背景用 ffmpeg 跑，輸出到一半不能停（一般版也不能）。
-設定只記在這次開啟的設定裡（Qt 預覽版不寫 config.json）。
+設定寫進這次開啟的設定（關掉 Qt 版時只把改過的區塊存回 config.json，見 app.py）。
 """
 import os
 import threading

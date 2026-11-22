@@ -17,7 +17,7 @@
 - 做完的任何一支都能〔在②開啟〕（影片＋它剛匯出的字幕），接著校對；一般版是自動換成最後一支。
   不會自動換掉②正在做的東西。
 
-不擋住主視窗（非強制回應）。語言只記在這次開啟的設定裡（Qt 預覽版不寫 config.json）。
+不擋住主視窗（非強制回應）。語言寫進這次開啟的設定（關掉 Qt 版時只把改過的區塊存回 config.json，見 app.py）。
 """
 import os
 import threading
@@ -335,7 +335,7 @@ class BatchDialog(QDialog):
                 return self._refuse(NO_KEY)
             if not self._ask_send(self.send_text(plan)):
                 return self._refuse(DECLINED)
-        # 記住這次選的語言——只記在這次開啟的設定裡，不寫回 config.json
+        # 記住這次選的語言——寫進這次開啟的設定，關掉 Qt 版時存回 config.json
         self.config_data["transcription"] = dict(config["transcription"])
         self.results = []
         self.result_tree.clear()

@@ -9,8 +9,8 @@
   送聲音（文字稿對齊時文字稿也會當提示詞送）、照用量收費。OpenAI 模式沒有金鑰就不能按開始。
 * **會換掉目前的字幕**：有還沒存的修改，按開始時先問（存檔／放棄／取消）。
 * **取消**：Whisper 沒辦法從中間打斷，取消後辨識在背景跑完才真的停，結果不套用；跑完之前不能再按開始。
-* 生成完整份換掉（還沒有字幕檔，「存字幕」會問存到哪，建議跟影片同名）。選的語言與做法只記在這次
-  開啟的設定裡：Qt 預覽版不寫回 config.json。
+* 生成完整份換掉（還沒有字幕檔，「存字幕」會問存到哪，建議跟影片同名）。選的語言與做法寫進這次
+  開啟的設定，關掉 Qt 版時存回 config.json。
 """
 import os
 import threading
@@ -225,7 +225,7 @@ class GenerateDialog(QDialog):
             self.status.setText("沒有開始：目前的字幕還有沒存的修改。")
             return False
         config = self.config()
-        # 記住這次選的語言——只記在這次開啟的設定裡，不寫回 config.json
+        # 記住這次選的語言——寫進這次開啟的設定，關掉 Qt 版時存回 config.json
         self.player._config["transcription"] = dict(config["transcription"])
         self._snapshot = [dict(c) for c in self.player.cues]
         self.progress.setValue(0)

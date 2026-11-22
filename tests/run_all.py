@@ -55,7 +55,8 @@ TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
  "test_qt_audiovis.py",
  "test_batch_stop.py", "test_qt_batch.py", "test_qt_lookup.py",
  "test_qt_lookup_voice.py", "test_qt_lookup_screen.py",
- "test_qt_lookup_hotkey.py", "test_qt_series.py"]
+ "test_qt_lookup_hotkey.py", "test_qt_series.py",
+ "test_configmerge.py", "test_qt_settings_save.py"]
 
 
 def main() -> int:
