@@ -35,7 +35,10 @@
 **會送出去的**：只有使用者確認後的那段辨識文字（送到 OpenAI）。沒裝 tesseract：Qt 預覽版還沒有一鍵安裝（第 19 列），
 講怎麼裝。
 
-全域熱鍵是第 17 列（四）。
+第二十六階段加上 **全域熱鍵**（預設關，預設組合鍵 Ctrl+Alt+F8）：按了就叫出框選（面板沒開也行）。核心
+`subtitle/hotkey.py` 沿用（三種狀態、每一種都講一句話）；Qt 的接線在 `gui_qt/hotkey_qt.py`——Windows 用
+`RegisterHotKey`＋原生事件過濾器（沒有實測），其他平台退成只在本程式視窗內有效（`QShortcut`）。熱鍵本身不送任何東西出去。
+關掉面板熱鍵照樣有效（跟一般版一樣）；關主視窗才取消註冊。
 關閉＝收起來（快取與生字本都留著），再按一次〔即時查譯…〕原地打開。
 """
 import os
@@ -50,6 +53,7 @@ from PySide6.QtWidgets import (
 
 import config as config_module
 from subtitle import clipwatch as cw
+from subtitle import hotkey as hk
 from subtitle import quicklookup as ql
 from subtitle import quicktranslate as qt
 from subtitle import screentranslate as st
@@ -91,6 +95,10 @@ VOCAB_HINT = ("查譯時的關鍵詞會自動收進這裡（本機保存，不�
               "匯出的 CSV 前欄是詞、後欄是意思，可直接匯入 Anki 做記憶卡。")
 FAILURE_LIMIT = 3
 _TEXT_WIDGETS = (QLineEdit, QPlainTextEdit, QTextEdit)
+
+
+def hotkey_label(combo):
+    return f"熱鍵 {combo}"
 
 
 def vocab_path():
@@ -176,6 +184,8 @@ class QuickLookupDialog(QDialog):
         self._watching = False
         self._pending_widget = None
         self.clip_settings = cw.resolve_clipwatch_settings(self.config_data)
+        self.hotkey_settings = hk.resolve_hotkey_settings(self.config_data)
+        self._hotkey = None
         self._last_clip = None        # 上一次看到的剪貼簿內容：只在「變了」時才動作
         self._speaker = None
         self.screen_settings = st.resolve_screentranslate_settings(self.config_data)
@@ -205,6 +215,10 @@ class QuickLookupDialog(QDialog):
         self.ocr_translate_btn.setEnabled(False)
         row.addWidget(self.screen_btn)
         row.addWidget(self.ocr_translate_btn)
+        self.hotkey_box = QCheckBox(hotkey_label(self.hotkey_settings["combo"]))
+        self.hotkey_box.setToolTip("在別的程式裡按這個組合鍵就能叫出框選（只叫出框選，不會送任何東西出去）")
+        self.hotkey_box.setChecked(self.hotkey_settings["enabled"])
+        row.addWidget(self.hotkey_box)
         row.addStretch(1)
         page_layout.addLayout(row)
         self.screen_status = QLabel(ql.C30_SCREEN_HINT)
@@ -328,6 +342,7 @@ class QuickLookupDialog(QDialog):
         self.ocr_worker.finished.connect(self._on_ocr_finished)
         self.ocr_worker.failed.connect(self._on_ocr_failed)
         self.screen_btn.clicked.connect(lambda _c=False: self.start_screen_capture())
+        self.hotkey_box.toggled.connect(lambda _on: self._on_hotkey_toggled())
         self.ocr_translate_btn.clicked.connect(lambda _c=False: self.translate_ocr())
         self.worker = LookupWorker(self)
         self.worker.finished.connect(self._on_finished)
@@ -354,6 +369,8 @@ class QuickLookupDialog(QDialog):
         self._refresh_key_state(force=True)
         self._refresh_vocab()
         self.resize(560, 720)
+        if self.hotkey_box.isChecked():
+            self.enable_hotkey()
 
     # ----- 顯示／收起 -----
     def open(self):  # noqa: A003 —— 跟 QDialog.open 同名：這裡是「打開面板」
@@ -768,6 +785,44 @@ class QuickLookupDialog(QDialog):
         self.ocr_translate_btn.setEnabled(False)
         return self.submit(text, manual=True)
 
+    # ----- 全域熱鍵 -----
+    def _make_hotkey(self):
+        from gui_qt.hotkey_qt import QtHotkey
+        return QtHotkey(self.parent() or self)  # 掛在主視窗上：面板收起來也有效
+
+    def hotkey_status(self):
+        return self._hotkey.status if self._hotkey is not None else "off"
+
+    def enable_hotkey(self):
+        """啟用熱鍵，回傳落在哪一種狀態（global／window-only／unavailable）；每一種都在框選那一列講一句。"""
+        if self._hotkey is None:
+            self._hotkey = self._make_hotkey()
+            self._hotkey.triggered.connect(self._on_hotkey_pressed)
+        try:
+            status = self._hotkey.enable(self.hotkey_settings["combo"])
+        except hk.HotkeyError as exc:
+            self.screen_status.setText(str(exc))
+            return "unavailable"
+        self.screen_status.setText(self._hotkey.describe())
+        return status
+
+    def disable_hotkey(self):
+        if self._hotkey is not None:
+            self._hotkey.disable()
+
+    def _on_hotkey_toggled(self):
+        if self.hotkey_box.isChecked():
+            self.enable_hotkey()
+        else:
+            self.disable_hotkey()
+            self.screen_status.setText(f"熱鍵 {self.hotkey_settings['combo']} 已關閉。")
+        data = dict(self.config_data.get("hotkey") or {})  # 只記在這次開啟的設定
+        data.update({"enabled": self.hotkey_box.isChecked(), "combo": self.hotkey_settings["combo"]})
+        self.config_data["hotkey"] = data
+
+    def _on_hotkey_pressed(self):
+        self.start_screen_capture()  # 面板沒開也行：框完才叫出來，取消就不叫出來
+
     def shutdown(self):
         """關主視窗：收起面板（不再看選取）、停朗讀、停監聽、收掉框選層。Qt 收主視窗時不會自己把它收起來。"""
         self._was_visible = False  # 框選中（或正要截圖）關主視窗：取消，面板不再叫出來
@@ -777,6 +832,7 @@ class QuickLookupDialog(QDialog):
             self._pending_grab = False
             self._ocr_busy = False
         self.hide()  # hideEvent 會停監聽剪貼簿
+        self.disable_hotkey()  # Windows 上要取消註冊，不然程式關了那個組合鍵還被佔著
         self.speech_timer.stop()
         if self._speaker is not None:
             self._speaker.stop()
