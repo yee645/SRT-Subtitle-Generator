@@ -49,6 +49,13 @@ DEFAULT_SCREENCAP = {
 _TIMEOUT = 30
 
 
+# 擷取結果的兩種失敗（Qt 預覽版用 QScreen 截圖時也講同樣的話，所以寫成常數共用）。
+EMPTY_CAPTURE_MESSAGE = "擷取結果是空的，請再試一次。"
+FLAT_CAPTURE_MESSAGE = ("抓到的畫面整塊都是同一個顏色，通常表示那個視窗不允許被擷取"
+                        "——全螢幕獨佔模式的遊戲就是這樣。把它改成「視窗化」或"
+                        "「無邊框視窗」再試一次。")
+
+
 class CaptureError(RuntimeError):
     """擷取失敗；訊息一律寫成看得懂、而且講得出下一步的話。"""
 
@@ -404,10 +411,7 @@ def capture_region(region, out_path, config=None, bounds=None):
     else:
         _capture_linux(region, out_path)
     if not os.path.isfile(out_path) or os.path.getsize(out_path) < 64:
-        raise CaptureError("擷取結果是空的，請再試一次。")
+        raise CaptureError(EMPTY_CAPTURE_MESSAGE)
     if looks_flat(out_path, config):
-        raise CaptureError(
-            "抓到的畫面整塊都是同一個顏色，通常表示那個視窗不允許被擷取"
-            "——全螢幕獨佔模式的遊戲就是這樣。把它改成「視窗化」或"
-            "「無邊框視窗」再試一次。")
+        raise CaptureError(FLAT_CAPTURE_MESSAGE)
     return out_path

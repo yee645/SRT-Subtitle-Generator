@@ -10,6 +10,7 @@ Qt 版要一樣的行為，抽到這裡兩邊共用，一般版改成從這裡 i
 - 略過原因：`looks_translatable()` 說不送的時候，該講哪一句（太長／已經是中文／太短或沒有字）。
 - 譯文區塊的標題（目標語言是中文時叫「中文翻譯」）。
 - 朗讀的狀態文字（第二十四階段：念的是哪一塊、截掉幾個字、念完或失敗）。
+- 框選螢幕翻譯的狀態文字（第二十五階段：說明、辨識中、取消、還在辨識、失敗）。
 
 零 GUI 依賴。
 """
@@ -36,6 +37,18 @@ C34_NOTHING_TO_SPEAK = "還沒有可以朗讀的內容。"
 C36_SPEECH_OFF = "朗讀功能已在設定裡關閉。"
 SPEECH_DONE = "朗讀完畢。"
 SPEECH_STOPPED = "已停止朗讀。"
+
+C30_SCREEN_HINT = ("框選螢幕上任何一塊畫面（遊戲、影片、圖片裡的字），"
+                   "在這台電腦上辨識成文字，確認後再翻譯。畫面不會被傳出去。")
+C31_OCR_RUNNING = "辨識中…（在這台電腦上跑，通常 1～3 秒）"
+C32_OCR_CANCELLED = "已取消框選。"
+C38_OCR_BUSY = "上一次框選還在辨識，請稍候。"
+
+
+def ocr_failed_text(exc) -> str:
+    """擷取或辨識失敗：只取訊息第一行（那些例外的訊息本來就寫成使用者看得懂的話）。"""
+    reason = str(exc).strip().splitlines()
+    return "螢幕翻譯失敗：%s" % (reason[0] if reason else "未知錯誤")
 
 
 def speech_started_text(label: str, dropped: int) -> str:

@@ -46,11 +46,11 @@ from subtitle import quicktranslate as qt
 from subtitle import screencap
 from subtitle import screentranslate as st
 from subtitle import speech
-# 3.0 第 11 項第二十三階段：生字本與略過原因的純邏輯（第二十四階段加上朗讀的狀態文字）抽到 subtitle/quicklookup.py，Qt 版共用；
+# 3.0 第 11 項第二十三階段：生字本與略過原因的純邏輯（第二十四、二十五階段加上朗讀、框選螢幕翻譯的狀態文字）抽到 subtitle/quicklookup.py，Qt 版共用；
 # 這裡照原名稱 import 進來（名稱、行為、文字都不變）。
 from subtitle.quicklookup import (  # noqa: F401 —— 測試與舊程式照原名稱從這裡拿
     C14_TOO_LONG, C15_ALREADY_CHINESE, C16_TOO_SHORT_OR_EMPTY, C20_EXPORTED, C22_VOCAB_EMPTY, C34_NOTHING_TO_SPEAK,
-    C36_SPEECH_OFF,
+    C36_SPEECH_OFF, C30_SCREEN_HINT, C31_OCR_RUNNING, C32_OCR_CANCELLED, C38_OCR_BUSY,
     add_vocab_terms, classify_skip_reason, dst_label, remove_vocab_words, vocab_status_text, write_vocab_csv,
 )
 from subtitle.translator import LANGUAGE_LABELS
@@ -111,16 +111,11 @@ C18_VOCAB_HINT = ("查譯時的關鍵詞會自動收進這裡（本機保存，�
 C21_CLEAR_TITLE = "清空生字本"
 
 # v2.3.0 螢幕翻譯（第 9 項 5b）。
-C30_SCREEN_HINT = ("框選螢幕上任何一塊畫面（遊戲、影片、圖片裡的字），"
-                   "在這台電腦上辨識成文字，確認後再翻譯。畫面不會被傳出去。")
-C31_OCR_RUNNING = "辨識中…（在這台電腦上跑，通常 1～3 秒）"
-C32_OCR_CANCELLED = "已取消框選。"
 C33_NEED_TESSERACT = ("螢幕翻譯要先安裝文字辨識引擎。安裝視窗已經打開，"
                       "裝完再按一次「框選螢幕翻譯」。")
 C35_NOTHING_TO_COPY = "還沒有可以複製的內容。"
 C37_SECRET_BLOCKED = ("這段內容看起來像密碼或金鑰，不會送去翻譯。"
                       "需要的話仍可在本機朗讀或複製。")
-C38_OCR_BUSY = "上一次框選還在辨識，請稍候。"
 
 
 def hotkey_check_label(combo: str) -> str:
@@ -859,9 +854,7 @@ class QuickTranslatePanel(tk.Toplevel):
             return
         self._reveal()
         if kind == "error":
-            reason = str(payload).strip().splitlines()
-            self.screen_status_var.set(
-                "螢幕翻譯失敗：%s" % (reason[0] if reason else "未知錯誤"))
+            self.screen_status_var.set(ql.ocr_failed_text(payload))
             return
         self._show_ocr_result(payload)
 

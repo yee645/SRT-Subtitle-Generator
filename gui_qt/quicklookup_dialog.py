@@ -27,7 +27,15 @@
   原本的東西不算；自己按〔複製〕放進去的不算；面板收起來就停；沒金鑰時灰掉。跟一般版一樣定時看
   （`poll_ms`），不用 `QClipboard.dataChanged`——macOS 上別的程式的複製不一定會發這個訊號。
 
-框選螢幕翻譯、全域熱鍵是第 17 列（三）（四）。
+第二十五階段加上 **框選螢幕翻譯**：〔框選螢幕翻譯〕→ 面板先收起來 → 截整個螢幕（`QScreen.grabWindow`，只放記憶體）
+→ 鋪著這張截圖的框選層（`gui_qt/region_overlay.py`，Esc／右鍵取消）→ 從同一張圖裁出框的那塊 → 背景交給原封不動的
+`screentranslate.capture_and_recognize`（在這台電腦用 tesseract 辨識，**畫面不送出去**，截圖用完就刪）→ 辨識結果
+放進原文框（可以改錯字）→ 照 `screentranslate.decide` 決定：讀不到字、像密碼就擋下（仍可朗讀、複製）；其餘等使用者
+按〔翻譯辨識結果〕才送（送之前用 `may_send` 對改過的原文再檢查一次）；設定裡打開了自動送出、又辨識得清楚才直接送。
+**會送出去的**：只有使用者確認後的那段辨識文字（送到 OpenAI）。沒裝 tesseract：Qt 預覽版還沒有一鍵安裝（第 19 列），
+講怎麼裝。
+
+全域熱鍵是第 17 列（四）。
 關閉＝收起來（快取與生字本都留著），再按一次〔即時查譯…〕原地打開。
 """
 import os
@@ -45,6 +53,8 @@ from subtitle import clipwatch as cw
 from subtitle import quicklookup as ql
 from subtitle import quicktranslate as qt
 from subtitle import screentranslate as st
+from subtitle import ocrengine
+from subtitle import screencap
 from subtitle import speech
 from subtitle.translator import LANGUAGE_LABELS
 
@@ -52,6 +62,8 @@ TITLE = "即時查譯（選字即翻）"
 CLIP_HINT = ("開啟後，在任何軟體按 Ctrl+C 複製外文就會自動翻譯——本程式之外也能用。"
              "會送出去的只有複製的那段文字（送到 OpenAI）；密碼、金鑰、檔案路徑、網址與程式碼會自動跳過，不會送出。"
              "關掉這個面板就停止監聽。")
+NEED_TESSERACT = ("螢幕翻譯要先安裝文字辨識引擎（tesseract）。Qt 預覽版還沒有一鍵安裝：請先用一般版"
+                  "「即時查譯」面板裡的一鍵安裝，或自行安裝後加入系統 PATH，裝完再按一次「框選螢幕翻譯」。")
 CLIP_WATCHING = "監聽中——複製外文即翻譯。"
 CLIP_STOPPED = "已停止監聽。"
 SPEECH_POLL_MS = 300
@@ -127,6 +139,25 @@ class LookupWorker(QObject):
         self.finished.emit(request_id, source, result)
 
 
+class OcrWorker(QObject):
+    """背景執行緒存圖＋辨識；結果帶著編號送回（舊的作廢）。截圖已經在主執行緒做好了。"""
+
+    finished = Signal(int, object)
+    failed = Signal(int, object)
+
+    def start(self, ocr_id, region, image, config):
+        threading.Thread(target=self._run, args=(ocr_id, region, image, config), daemon=True).start()
+
+    def _run(self, ocr_id, region, image, config):
+        from gui_qt import region_overlay as ro
+        try:
+            result = st.capture_and_recognize(region, config=config, capture=ro.image_capture(image))
+        except Exception as exc:  # noqa: BLE001 —— 擷取與辨識的例外訊息本來就寫成使用者看得懂的話
+            self.failed.emit(ocr_id, exc)
+            return
+        self.finished.emit(ocr_id, result)
+
+
 class QuickLookupDialog(QDialog):
     """即時查譯面板。`player` 是②的播放器（這次開啟的設定、字幕都在那邊），`cue_panel` 是②的字幕清單。"""
 
@@ -147,6 +178,13 @@ class QuickLookupDialog(QDialog):
         self.clip_settings = cw.resolve_clipwatch_settings(self.config_data)
         self._last_clip = None        # 上一次看到的剪貼簿內容：只在「變了」時才動作
         self._speaker = None
+        self.screen_settings = st.resolve_screentranslate_settings(self.config_data)
+        self._ocr_busy = False
+        self._ocr_id = 0
+        self._overlay = None
+        self._frozen = None      # 框選期間整個螢幕的截圖（只在記憶體，框完就丟）
+        self._pending_grab = False  # 面板收起來了、等畫面更新完才截
+        self._was_visible = True
         self.setWindowTitle(TITLE)
         self.setModal(False)
         prefs = self.config_data.get("quicktranslate") or {}
@@ -161,6 +199,17 @@ class QuickLookupDialog(QDialog):
         # ----- 查譯 -----
         page = QWidget()
         page_layout = QVBoxLayout(page)
+        row = QHBoxLayout()
+        self.screen_btn = QPushButton("框選螢幕翻譯")
+        self.ocr_translate_btn = QPushButton("翻譯辨識結果")
+        self.ocr_translate_btn.setEnabled(False)
+        row.addWidget(self.screen_btn)
+        row.addWidget(self.ocr_translate_btn)
+        row.addStretch(1)
+        page_layout.addLayout(row)
+        self.screen_status = QLabel(ql.C30_SCREEN_HINT)
+        self.screen_status.setWordWrap(True)
+        page_layout.addWidget(self.screen_status)
         src_box = QGroupBox("原文")
         self.src_text = QPlainTextEdit()
         self.src_text.setReadOnly(True)
@@ -275,6 +324,11 @@ class QuickLookupDialog(QDialog):
         self.speech_timer = QTimer(self)
         self.speech_timer.setInterval(SPEECH_POLL_MS)
         self.speech_timer.timeout.connect(self._poll_speech)
+        self.ocr_worker = OcrWorker(self)
+        self.ocr_worker.finished.connect(self._on_ocr_finished)
+        self.ocr_worker.failed.connect(self._on_ocr_failed)
+        self.screen_btn.clicked.connect(lambda _c=False: self.start_screen_capture())
+        self.ocr_translate_btn.clicked.connect(lambda _c=False: self.translate_ocr())
         self.worker = LookupWorker(self)
         self.worker.finished.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
@@ -491,6 +545,7 @@ class QuickLookupDialog(QDialog):
                 ql.save_vocab(self.vocab, vocab_path())
                 self._refresh_vocab()
         status = CACHED if result.get("cached") else DONE_SAVED if saved else DONE
+        self.src_text.setReadOnly(True)  # 辨識結果翻好了：原文框回到唯讀
         self._show(src=result.get("source", source), dst=result.get("translation", ""), terms=term_text,
                    status=status)
 
@@ -597,8 +652,130 @@ class QuickLookupDialog(QDialog):
             return True
         return False
 
+    # ----- 框選螢幕翻譯 -----
+    def ocr_busy(self):
+        return self._ocr_busy
+
+    def _target_screen(self):
+        return self.screen() or QApplication.primaryScreen()
+
+    def _make_overlay(self, screen, background):
+        from gui_qt.region_overlay import RegionOverlay
+        return RegionOverlay(screen, background)
+
+    def _grab(self, screen):
+        from gui_qt.region_overlay import grab_screen
+        return grab_screen(screen)
+
+    def start_screen_capture(self):
+        """框選一塊螢幕 → 本機辨識 → 放進原文框。框之前先把面板收起來（不然面板自己會被框進去）。"""
+        if self._ocr_busy:
+            self.open()
+            self.screen_status.setText(ql.C38_OCR_BUSY)
+            return False
+        if not ocrengine.tesseract_available():
+            self.open()
+            self.screen_status.setText(NEED_TESSERACT)
+            return False
+        self._ocr_busy = True
+        self.screen_btn.setEnabled(False)
+        self._was_visible = self.isVisible()
+        screen = self._target_screen()
+        self.hide()  # 先收起來、等畫面更新完再截，不然面板自己會被截進去
+        from gui_qt.region_overlay import SETTLE_MS
+        self._pending_grab = True
+        QTimer.singleShot(SETTLE_MS, lambda: self._show_overlay(screen))
+        return True
+
+    def _show_overlay(self, screen):
+        if not self._pending_grab:
+            return  # 等的期間關了主視窗
+        self._pending_grab = False
+        self._frozen = self._grab(screen)
+        self._overlay = self._make_overlay(screen, self._frozen)
+        self._overlay.selected.connect(lambda region: self._on_region_selected(screen, region))
+        self._overlay.cancelled.connect(self._on_region_cancelled)
+        self._overlay.start()
+
+    def _on_region_cancelled(self):
+        self._overlay = None
+        self._frozen = None
+        self._ocr_busy = False
+        self.screen_btn.setEnabled(True)
+        if self._was_visible:
+            self.open()
+            self.screen_status.setText(ql.C32_OCR_CANCELLED)
+
+    def _on_region_selected(self, screen, region):
+        from gui_qt.region_overlay import crop_image
+        self._overlay = None
+        frozen, self._frozen = self._frozen, None
+        self._ocr_id += 1
+        g = screen.geometry()
+        region = screencap.clamp_region(region, (g.x(), g.y(), g.width(), g.height()))
+        try:
+            screencap.validate_region(region, self.config_data)  # 太小（只點一下）、太大：講原因、不截
+            image = crop_image(frozen, screen, region)
+        except screencap.CaptureError as exc:
+            self._ocr_busy = False
+            self.screen_btn.setEnabled(True)
+            self.open()
+            self.screen_status.setText(ql.ocr_failed_text(exc))
+            return
+        self.open()
+        self.screen_status.setText(ql.C31_OCR_RUNNING)
+        self.ocr_worker.start(self._ocr_id, region, image, self.config_data)
+
+    def _on_ocr_failed(self, ocr_id, exc):
+        self._ocr_busy = False
+        self.screen_btn.setEnabled(True)
+        if ocr_id != self._ocr_id:
+            return
+        self.screen_status.setText(ql.ocr_failed_text(exc))
+
+    def _on_ocr_finished(self, ocr_id, result):
+        self._ocr_busy = False
+        self.screen_btn.setEnabled(True)
+        if ocr_id != self._ocr_id:
+            return
+        decision = st.decide(result, self.screen_settings)
+        self.tabs.setCurrentIndex(0)
+        self.src_text.setPlainText(decision["text"])
+        self.src_text.setReadOnly(False)  # 辨識常有錯字：原文框開放修改，改好再送
+        if self._has_key:
+            self.dst_text.setPlainText("")
+        self.term_text.setPlainText("")
+        # 結論寫在按鈕下面那一行；下面的狀態清掉，免得留著上一次的「翻譯完成」讓人以為這段也翻好了
+        self.screen_status.setText(st.format_status(result, decision))
+        self.status_label.setText("")
+        if decision["action"] == st.ACTION_BLOCK:
+            self.ocr_translate_btn.setEnabled(False)
+        else:
+            self.ocr_translate_btn.setEnabled(True)
+            if decision["action"] == st.ACTION_SEND:
+                self.translate_ocr()
+
+    def translate_ocr(self):
+        """〔翻譯辨識結果〕：以使用者**改過之後**的原文為準再檢查一次才送。"""
+        text = self.src_text.toPlainText()
+        ok, why = st.may_send(text)
+        if not ok:
+            self.status_label.setText(why)
+            return False
+        if not self.api_key():
+            self.status_label.setText(NOKEY_STATUS)
+            return False
+        self.ocr_translate_btn.setEnabled(False)
+        return self.submit(text, manual=True)
+
     def shutdown(self):
-        """關主視窗：收起面板（不再看選取）、停朗讀、停監聽。Qt 收主視窗時不會自己把它收起來。"""
+        """關主視窗：收起面板（不再看選取）、停朗讀、停監聽、收掉框選層。Qt 收主視窗時不會自己把它收起來。"""
+        self._was_visible = False  # 框選中（或正要截圖）關主視窗：取消，面板不再叫出來
+        if self._overlay is not None:
+            self._overlay.cancel()
+        elif self._pending_grab:
+            self._pending_grab = False
+            self._ocr_busy = False
         self.hide()  # hideEvent 會停監聽剪貼簿
         self.speech_timer.stop()
         if self._speaker is not None:
