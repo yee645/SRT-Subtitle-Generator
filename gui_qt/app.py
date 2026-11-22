@@ -151,7 +151,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCornerWidget(self.lookup_btn, Qt.TopRightCorner)
         self.setCentralWidget(self.tabs)
         self.statusBar().showMessage(
-            "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、直式短片）、音訊轉影片與批次一鍵完成、②字幕頁、③健檢中心、"
+            "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、直式短片）、音訊轉影片與批次一鍵完成、②字幕頁、③健檢中心（含系列一致性）、"
             "④的匯出、燒錄與品牌套版、右上角的即時查譯，其餘請先用一般版。")
 
     def _subtitle_page(self):
