@@ -323,6 +323,9 @@ if old_app_src is not None:
         # 3.0 第 11 項第三十五階段：Qt 版首次啟動導覽的內容與「該不該跳」（一般版「新版介面速覽」的 Qt 版）。
         # 記在自己的 qt_guide_seen、不跟一般版的 whatsnew_seen 共用（全新檔案，零 GUI 依賴、不 import config；一般版不改）。
         "subtitle/qtguide.py",
+        # 3.0 第 12 項 12-2：資料夾版（onedir）的自動更新核心——挑 zip、下載、安全解壓、帶上設定與 tools、切換腳本。
+        # 一般版的 updater.py 只會就地換單一 exe，不能用也不能改（改它會觸發發版）（全新檔案，零 GUI 依賴、不 import config）。
+        "subtitle/onedirupdate.py",
         # 3.0 第 2 項：某一刻該顯示哪一句字幕。播放器疊加層與之後的時間軸
         # 共用，放核心層才不會兩邊各寫一份（全新檔案，零 GUI 依賴）。
         "subtitle/cuetime.py",
