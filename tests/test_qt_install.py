@@ -200,7 +200,8 @@ else:
         check("寫明辨識在本機、只從 GitHub 下載", "畫面不會被傳出去" in idlg.OCR_INTRO and "GitHub" in idlg.OCR_SENDS
               and ocr.sends_label.text() == idlg.OCR_SENDS)
         check("沒裝引擎：引擎勾著、寫大小", ocr.engine_box.isChecked() and "約 50~60 MB" in ocr.engine_box.text())
-        check("講明自動裝引擎只支援 Windows", "只支援 Windows" in ocr.engine_note.text())
+        check("講明自動裝引擎只支援 Windows（畫面上看得到）", "只支援 Windows" in ocr.engine_note.text()
+              and ocr.engine_note.isVisibleTo(ocr) and ocr.isAncestorOf(ocr.engine_note))
         check("語言檔清單跟一般版一樣", list(ocr.lang_boxes) == [c for c, _l in ts.LANGUAGE_LABELS])
         check("已安裝的標出來而且不勾；預設勾日文、繁中", "（已安裝）" in ocr.lang_boxes["eng"].text()
               and not ocr.lang_boxes["eng"].isChecked() and ocr.lang_boxes["jpn"].isChecked()
@@ -232,6 +233,16 @@ else:
 
         ocrengine.tesseract_available = lambda: True
         ts.installed_languages = lambda: {"eng", "jpn"}
+        got.clear()
+        only = idlg.TesseractInstallDialog()
+        only._show_done = lambda text: None
+        only.engine_box.setChecked(False)
+        for code, cb in only.lang_boxes.items():
+            cb.setChecked(code == "chi_tra")
+        only.start()
+        check("只補語言檔：交給核心的引擎是不裝", wait_until(lambda: got == [(False, ["chi_tra"])]), str(got))
+        wait_until(lambda: not only.installing())
+        only.deleteLater()
         have = idlg.TesseractInstallDialog()
         check("已裝引擎：引擎不勾、寫「已安裝，可略過」", not have.engine_box.isChecked()
               and have.engine_box.text() == "辨識引擎（已安裝，可略過）")
