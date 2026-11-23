@@ -32,8 +32,8 @@
 `screentranslate.capture_and_recognize`（在這台電腦用 tesseract 辨識，**畫面不送出去**，截圖用完就刪）→ 辨識結果
 放進原文框（可以改錯字）→ 照 `screentranslate.decide` 決定：讀不到字、像密碼就擋下（仍可朗讀、複製）；其餘等使用者
 按〔翻譯辨識結果〕才送（送之前用 `may_send` 對改過的原文再檢查一次）；設定裡打開了自動送出、又辨識得清楚才直接送。
-**會送出去的**：只有使用者確認後的那段辨識文字（送到 OpenAI）。沒裝 tesseract：Qt 預覽版還沒有一鍵安裝（第 19 列），
-講怎麼裝。
+**會送出去的**：只有使用者確認後的那段辨識文字（送到 OpenAI）。沒裝 tesseract：直接打開主視窗的
+「安裝文字辨識」視窗（第二十九階段，跟一般版一樣）。
 
 第二十六階段加上 **全域熱鍵**（預設關，預設組合鍵 Ctrl+Alt+F8）：按了就叫出框選（面板沒開也行）。核心
 `subtitle/hotkey.py` 沿用（三種狀態、每一種都講一句話）；Qt 的接線在 `gui_qt/hotkey_qt.py`——Windows 用
@@ -66,8 +66,8 @@ TITLE = "即時查譯（選字即翻）"
 CLIP_HINT = ("開啟後，在任何軟體按 Ctrl+C 複製外文就會自動翻譯——本程式之外也能用。"
              "會送出去的只有複製的那段文字（送到 OpenAI）；密碼、金鑰、檔案路徑、網址與程式碼會自動跳過，不會送出。"
              "關掉這個面板就停止監聽。")
-NEED_TESSERACT = ("螢幕翻譯要先安裝文字辨識引擎（tesseract）。Qt 預覽版還沒有一鍵安裝：請先用一般版"
-                  "「即時查譯」面板裡的一鍵安裝，或自行安裝後加入系統 PATH，裝完再按一次「框選螢幕翻譯」。")
+NEED_TESSERACT = ("螢幕翻譯要先安裝文字辨識引擎（tesseract）：已經打開「安裝文字辨識」視窗（也可以自行安裝後加入"
+                  "系統 PATH），裝完再按一次「框選螢幕翻譯」。")
 CLIP_WATCHING = "監聽中——複製外文即翻譯。"
 CLIP_STOPPED = "已停止監聽。"
 SPEECH_POLL_MS = 300
@@ -684,6 +684,17 @@ class QuickLookupDialog(QDialog):
         from gui_qt.region_overlay import grab_screen
         return grab_screen(screen)
 
+    def _open_ocr_install(self):
+        """開安裝文字辨識的視窗：主視窗那一個（只建一個）；單獨用這個面板時自己建一個。"""
+        host = self.parent()
+        if host is not None and hasattr(host, "open_ocr_install"):
+            return host.open_ocr_install()
+        from gui_qt.install_dialog import TesseractInstallDialog
+        if getattr(self, "_ocr_install", None) is None:
+            self._ocr_install = TesseractInstallDialog(self)
+        self._ocr_install.show()
+        return self._ocr_install
+
     def start_screen_capture(self):
         """框選一塊螢幕 → 本機辨識 → 放進原文框。框之前先把面板收起來（不然面板自己會被框進去）。"""
         if self._ocr_busy:
@@ -691,8 +702,10 @@ class QuickLookupDialog(QDialog):
             self.screen_status.setText(ql.C38_OCR_BUSY)
             return False
         if not ocrengine.tesseract_available():
+            # 沒裝引擎就直接開安裝視窗（跟一般版一樣），不要讓人先框一次才被告知
             self.open()
             self.screen_status.setText(NEED_TESSERACT)
+            self._open_ocr_install()
             return False
         self._ocr_busy = True
         self.screen_btn.setEnabled(False)

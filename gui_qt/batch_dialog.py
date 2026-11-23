@@ -40,7 +40,7 @@ MODE_LABELS = (("transcribe", "語音轉寫（Whisper 聽聲音）"),
 MEDIA_FILTER = ("影片或音訊 (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mp3 *.wav *.m4a *.aac *.flac *.ogg);;"
                 "所有檔案 (*)")
 NO_FILES = "先加入要處理的影片或音訊（可以一次選好幾個）。"
-NO_FFMPEG = "勾了「燒錄硬字幕影片」但找不到 ffmpeg：請先在一般版按「自動安裝 ffmpeg」（兩版共用），或到④取消燒錄。"
+NO_FFMPEG = "勾了「燒錄硬字幕影片」但找不到 ffmpeg：請先按主視窗上方的「自動安裝 ffmpeg」，或到④取消燒錄。"
 NO_KEY = "轉寫設定是用 OpenAI，但還沒有金鑰：請先在一般版（不加 --qt）的「轉寫設定」填好，或改回本地 Whisper。"
 DECLINED = "沒有開始：沒有同意把聲音送到 OpenAI。"
 SETTINGS_NOTE = "模型、提示詞與金鑰照一般版的「轉寫設定」；輸出格式、燒錄與輸出資料夾照④的「輸出設定」，要改請到④。"

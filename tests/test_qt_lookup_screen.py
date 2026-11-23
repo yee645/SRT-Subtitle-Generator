@@ -168,9 +168,15 @@ else:
 
     real_available = ocrengine.tesseract_available
     ocrengine.tesseract_available = lambda: False
+    opened_install = []
+    real_open_install = dlg._open_ocr_install
+    dlg._open_ocr_install = lambda: opened_install.append(1)
     check("沒裝 tesseract：不開框選層、講怎麼裝", dlg.start_screen_capture() is False and dlg._overlay is None
           and not dlg.ocr_busy() and dlg.screen_status.text() == qd.NEED_TESSERACT and dlg.isVisible())
-    check("怎麼裝：指向一般版的一鍵安裝或自行安裝", "一般版" in qd.NEED_TESSERACT and "PATH" in qd.NEED_TESSERACT)
+    check("怎麼裝：直接打開安裝文字辨識的視窗（也可以自行安裝）", opened_install == [1]
+          and "已經打開「安裝文字辨識」視窗" in qd.NEED_TESSERACT and "PATH" in qd.NEED_TESSERACT
+          and "一般版" not in qd.NEED_TESSERACT)
+    dlg._open_ocr_install = real_open_install
     ocrengine.tesseract_available = lambda: True
 
     # ----- 2. 框選層與取消 -----

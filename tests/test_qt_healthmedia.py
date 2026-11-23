@@ -146,8 +146,9 @@ else:
     real_available = burner.ffmpeg_available
     burner.ffmpeg_available = lambda: False
     try:
-        check("找不到 ffmpeg：不修、講原因（一般版的自動安裝兩版共用）", health.apply_fix() is False
-              and health.status_label.text() == hp.FIX_NO_FFMPEG and not health.busy())
+        check("找不到 ffmpeg：不修、講原因（指向主視窗上方的一鍵安裝）", health.apply_fix() is False
+              and health.status_label.text() == hp.FIX_NO_FFMPEG and not health.busy()
+              and "主視窗上方的「自動安裝 ffmpeg」" in hp.FIX_NO_FFMPEG)
     finally:
         burner.ffmpeg_available = real_available
     saved_media = panel.media_path

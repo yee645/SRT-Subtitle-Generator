@@ -447,6 +447,34 @@ def install_engine(progress_cb: Optional[Callable] = None,
     return target
 
 
+def install_selected(want_engine: bool, langs, progress_cb: Optional[Callable] = None) -> list:
+    """
+    依勾選安裝引擎與語言檔，回傳每一項裝好的位置（照安裝順序）。
+
+    **引擎先裝**：語言檔沒有引擎也用不了，順序反過來的話引擎失敗時使用者會以為「至少語言檔裝好了」。
+    進度：兩樣都裝時引擎佔前 80%、語言檔佔後 20%；只裝一樣就佔全部。一般版 `gui/tesseract_dialog.py`
+    是同一個順序與比例（3.0 第 11 項第二十九階段抽出來給 Qt 版用；一般版只修錯，沒改它）。
+    兩樣都沒勾拋 ValueError。
+    """
+    langs = list(langs or [])
+    if not want_engine and not langs:
+        raise ValueError("請至少勾選一項要安裝的東西。")
+
+    def report(ratio, message):
+        if progress_cb:
+            progress_cb(ratio, message)
+
+    done = []
+    if want_engine:
+        span = 0.8 if langs else 1.0
+        done.append(install_engine(progress_cb=lambda r, m: report(r * span, m)))
+    if langs:
+        base = 0.8 if want_engine else 0.0
+        span = 0.2 if want_engine else 1.0
+        done.append(install_languages(langs, progress_cb=lambda r, m: report(base + r * span, m)))
+    return done
+
+
 def describe_state(lang: str = "eng") -> str:
     """一句話說明現在缺什麼（給介面的狀態列）。"""
     from subtitle import ocrengine
