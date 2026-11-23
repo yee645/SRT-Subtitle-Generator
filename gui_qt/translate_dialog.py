@@ -6,7 +6,7 @@
 解析失敗的句子沿用原文）。這裡只多做一般版沒有的幾件事：
 
 * **送出前寫清楚會送什麼**：幾句、幾個字的字幕文字；時間、檔名、影片與聲音都不送。
-  沒有金鑰就不能按開始，說去哪裡填（預覽版沒有設定頁）。
+  沒有金鑰就不能按開始，說去哪裡填（第三十二階段起：主視窗右上角〔轉寫與金鑰…〕）。
 * **翻到一半可以停**：每一批送出前看一下有沒有按「停止」，停了就什麼都不改。
 * **翻完整份是一步復原**（Ctrl+Z 一次退回，逐字時間軸也回來）。翻的時候字幕若被改過（照理
   視窗擋著改不了，這裡再保險一次），就不套用、說原因，免得蓋掉。
@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from subtitle import multilang, translator
 
 MODE_LABELS = (("bilingual", "雙語（原文在上、譯文在下）"), ("replace", "只留譯文（取代原文）"))
-NO_KEY = "還沒有 OpenAI API 金鑰：請先在一般版（不加 --qt）的「轉寫設定」填好，再回來翻譯。"
+NO_KEY = "還沒有 OpenAI API 金鑰：請先按主視窗右上角的〔轉寫與金鑰…〕填好，再回來翻譯。"
 
 
 class _Stopped(Exception):
@@ -240,7 +240,7 @@ class TranslateDialog(QDialog):
         else:
             self.notice.setText(
                 f"按「開始翻譯」會把這 {summary['lines']} 句字幕的文字（約 {summary['chars']} 個字）送到 "
-                "OpenAI 翻譯；時間、檔名、影片和聲音都不會送出。用的是一般版「轉寫設定」裡的金鑰，"
+                "OpenAI 翻譯；時間、檔名、影片和聲音都不會送出。用的是「轉寫與金鑰」裡的金鑰，"
                 "OpenAI 會照用量收費。譯文是 AI 產生的，建議抽查幾句；翻完按 Ctrl+Z 可以一次退回。")
         ready = bool(self.player.cues) and bool(self.api_key())
         self.start_btn.setEnabled(ready and not busy)

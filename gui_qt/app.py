@@ -149,6 +149,7 @@ class MainWindow(QMainWindow):
         self.lookup_dialog = None
         self.ffmpeg_dialog = None
         self.ocr_dialog = None
+        self.transcription_dialog = None
         for name, summary in STAGES:
             if name == "② 字幕":
                 self.tabs.addTab(self._subtitle_page(), name)
@@ -166,7 +167,16 @@ class MainWindow(QMainWindow):
         self.lookup_btn = QPushButton("即時查譯…")
         self.lookup_btn.setToolTip("選取文字就翻譯；會送出去的只有選取的那段文字（送到 OpenAI）")
         self.lookup_btn.clicked.connect(lambda _c=False: self.open_lookup())
-        self.tabs.setCornerWidget(self.lookup_btn, Qt.TopRightCorner)
+        # 轉寫與金鑰設定（第三十二階段）：生成、翻譯、即時查譯、批次共用的那一份，也放右上角
+        self.transcription_btn = QPushButton("轉寫與金鑰…")
+        self.transcription_btn.setToolTip("Whisper 模型、語言、OpenAI API 金鑰、提示詞（跟一般版「轉寫設定」同一份）")
+        self.transcription_btn.clicked.connect(lambda _c=False: self.open_transcription_settings())
+        corner = QWidget()
+        corner_layout = QHBoxLayout(corner)
+        corner_layout.setContentsMargins(0, 0, 0, 0)
+        corner_layout.addWidget(self.transcription_btn)
+        corner_layout.addWidget(self.lookup_btn)
+        self.tabs.setCornerWidget(corner, Qt.TopRightCorner)
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
@@ -367,6 +377,27 @@ class MainWindow(QMainWindow):
         self.ocr_dialog.raise_()
         self.ocr_dialog.activateWindow()
         return self.ocr_dialog
+
+    def open_transcription_settings(self):
+        """打開轉寫與金鑰設定（只建一個；每次打開照這次開啟的設定重擺、金鑰回到遮住）。"""
+        from gui_qt.transcribe_dialog import TranscriptionDialog
+
+        if self.transcription_dialog is None:
+            self.transcription_dialog = TranscriptionDialog(self.config_data, self)
+            self.transcription_dialog.applied.connect(self._on_transcription_applied)
+        if not self.transcription_dialog.isVisible():
+            self.transcription_dialog.reload()
+        self.transcription_dialog.show()
+        self.transcription_dialog.raise_()
+        self.transcription_dialog.activateWindow()
+        return self.transcription_dialog
+
+    def _on_transcription_applied(self, message):
+        """套用了：狀態列講一句；開著的生成視窗重寫說明（能不能開始可能變了）。"""
+        self.statusBar().showMessage(message, 8000)
+        dialog = getattr(self.player_panel, "generate_dialog", None) if self.player_panel else None
+        if dialog is not None and dialog.isVisible():
+            dialog.refresh()
 
     def open_lookup(self):
         """打開即時查譯面板（收起來過就原地打開，快取與生字本都留著）。"""

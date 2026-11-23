@@ -314,6 +314,9 @@ if old_app_src is not None:
         # 3.0 第 11 項第三十一階段：習慣設定與斷句設定的規則（斷句夾限、另存名字、刪除至少留一組），從 gui/app.py
         # 抽出給 Qt 版用，規則一樣（全新檔案，零 GUI 依賴、不 import config；一般版不改）。
         "subtitle/profiles.py",
+        # 3.0 第 11 項第三十二階段：轉寫設定的整理規則、金鑰遮罩、「會送什麼」那一句。Qt 版以前沒有轉寫設定
+        # （金鑰要到一般版填），切預設前補上（全新檔案，零 GUI 依賴、不 import config；一般版不改）。
+        "subtitle/transcribecfg.py",
         # 3.0 第 2 項：某一刻該顯示哪一句字幕。播放器疊加層與之後的時間軸
         # 共用，放核心層才不會兩邊各寫一份（全新檔案，零 GUI 依賴）。
         "subtitle/cuetime.py",
