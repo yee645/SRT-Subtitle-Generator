@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 import config
 from subtitle.configmerge import changed_sections, merge_for_save
+from subtitle import qtguide
 from updater import APP_VERSION
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,9 @@ FFMPEG_BANNER = ("⚠ 找不到 ffmpeg：時間軸的波形與縮圖、燒錄、
                  "按右邊一鍵安裝（不需要管理員權限，兩版共用）。")
 
 UPDATE_CHECK_DELAY_MS = 1500  # 跟一般版一樣：開好視窗 1.5 秒後才查新版本
+# 狀態列的開場白：一般版的功能都搬過來了（第 11 項做完），指向導覽
+STATUS_INTRO = ("3.0 預覽版：一般版的功能都搬過來了，四個頁籤照①→④的順序做。"
+                "第一次用可以按右下角的〔新介面導覽…〕看東西在哪。")
 CLOSE_WHILE_INSTALLING = "一鍵安裝還在下載。現在關掉程式，下載會中斷，下次要再安裝一次。還是要關嗎？"
 
 # (頁籤名稱, 還沒搬過來時頁面上的說明)。名稱必須與 gui/app.py 的
@@ -190,9 +194,13 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self._build_update_banner())
         central_layout.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
-        self.statusBar().showMessage(
-            "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、直式短片）、音訊轉影片與批次一鍵完成、②字幕頁、③健檢中心（含系列一致性）、"
-            "④的匯出、燒錄與品牌套版、右上角的即時查譯，其餘請先用一般版。")
+        self.statusBar().showMessage(STATUS_INTRO)
+        # 首次啟動導覽（第三十五階段）：一般版的「新版介面速覽」；第一次打開跳一次，這顆按鈕隨時再打開
+        self.guide_dialog = None
+        self.guide_btn = QPushButton("新介面導覽…")
+        self.guide_btn.setToolTip("一般版的東西在 Qt 版的哪裡、這一版多了什麼、還有哪裡不一樣")
+        self.guide_btn.clicked.connect(lambda _c=False: self.open_guide())
+        self.statusBar().addPermanentWidget(self.guide_btn)
         # 深淺色切換（第三十四階段）：一般版主視窗的〔切換為深色〕；放狀態列右邊，每一頁都看得到
         self.theme_btn = QPushButton(theme_button_text(self.config_data.get("theme", "light")))
         self.theme_btn.setToolTip("整個視窗換成深色或淺色；記進設定，下次打開（一般版也是）就是這個")
@@ -397,6 +405,28 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"已切換為{'深色' if new == 'dark' else '淺色'}主題。", 5000)
         return new
 
+    def open_guide(self):
+        """打開新介面導覽（不擋主視窗）；已經開著就叫到前面。"""
+        from gui_qt.guide_dialog import GuideDialog
+        if self.guide_dialog is None:
+            self.guide_dialog = GuideDialog(self)
+            self.guide_dialog.closedWith.connect(self._on_guide_closed)
+        self.guide_dialog.show()
+        self.guide_dialog.raise_()
+        self.guide_dialog.activateWindow()
+        return self.guide_dialog
+
+    def _on_guide_closed(self, never):
+        """關掉導覽：記進這次開啟的設定（關掉 Qt 版時存）；勾了「不再顯示」就永遠不跳。"""
+        self.config_data[qtguide.CONFIG_KEY] = qtguide.remember(never)
+
+    def maybe_show_guide(self):
+        """啟動時呼叫：沒看過這一版的導覽、也沒勾過「不再顯示」才跳。回傳有沒有跳。"""
+        if not qtguide.should_show(self.config_data.get(qtguide.CONFIG_KEY)):
+            return False
+        self.open_guide()
+        return True
+
     def open_transcription_settings(self):
         """打開轉寫與金鑰設定（只建一個；每次打開照這次開啟的設定重擺、金鑰回到遮住）。"""
         from gui_qt.transcribe_dialog import TranscriptionDialog
@@ -541,4 +571,5 @@ def main(argv=None):
     win.show()
     from PySide6.QtCore import QTimer
     QTimer.singleShot(UPDATE_CHECK_DELAY_MS, win.start_update_check)  # 啟動後再查，不拖慢開視窗
+    QTimer.singleShot(0, win.maybe_show_guide)  # 主視窗畫好再跳導覽（自檢模式上面已經 return，不會跳）
     return app.exec()

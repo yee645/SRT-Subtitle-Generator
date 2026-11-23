@@ -105,7 +105,8 @@ else:
     labels = " ".join(w.text() for w in health.findChildren(type(health.status_label)))
     check("說明另開視窗的理由（比的是多支影片彼此之間）", "系列一致性比的是「多支影片彼此之間」" in labels
           and "所以另開一個視窗、不併進下面的報告" in labels)
-    check("狀態列提到③含系列一致性", "③健檢中心（含系列一致性）、" in win.statusBar().currentMessage())
+    check("狀態列：一般版的功能都搬過來了（第三十五階段起不逐頁列舉；系列一致性在導覽裡）",
+          win.statusBar().currentMessage() == qt_app.STATUS_INTRO)
     check("按之前還沒有視窗", health.series_dialog is None)
     QTest.mouseClick(health.series_btn, Qt.LeftButton)
     wait(50)

@@ -117,7 +117,8 @@ else:
     check("開起來停在①", win.tabs.currentIndex() == 0)
     check("頁面寫明不重新轉錄、不送出去", "不重新轉錄" in rp.PAGE_NOTE and "不送任何東西出去" in rp.PAGE_NOTE)
     check("頁面不再寫「還在一般版」（第二十階段起一般版審片助手的功能都搬過來了）", "還在一般版" not in rp.PAGE_NOTE)
-    check("狀態列提到①的審片助手", "①的審片助手（" in win.statusBar().currentMessage())
+    check("狀態列：一般版的功能都搬過來了（第三十五階段起不逐頁列舉；①的審片助手在導覽裡）",
+          win.statusBar().currentMessage() == qt_app.STATUS_INTRO)
 
     # ----- 2. 偵測設定 -----
     check("偵測設定照設定填", panel.spins["silence_gap"].value() == 3.0

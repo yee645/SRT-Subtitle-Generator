@@ -134,8 +134,8 @@ else:
                                           "按封面圖下面的「系列一致性比對…」", "所以另開一個視窗"))
           and "封面圖、系列一致性" not in labels and "還在一般版" not in labels
           and health.series_btn.text() == "系列一致性比對…")
-    check("狀態列：有②與③", "③健檢中心" in win.statusBar().currentMessage()
-          and "②字幕頁" in win.statusBar().currentMessage(), win.statusBar().currentMessage())
+    check("狀態列：一般版的功能都搬過來了（第三十五階段起不逐頁列舉；③健檢中心在導覽裡）",
+          win.statusBar().currentMessage() == qt_app.STATUS_INTRO)
     check("開始前先套用逐句校對改到一半的", health.before_scan == win.cue_panel.commit)
 
     # ----- 3. 不跑的情況 -----

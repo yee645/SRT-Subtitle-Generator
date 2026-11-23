@@ -557,7 +557,7 @@ class HealthPanel(QWidget):
 
     # ----- 修復此項 -----
     def _update_fix(self):
-        """右下的修復鈕：字幕類可以按；影音類寫明還在一般版；沒有修復的灰掉。"""
+        """右下的修復鈕：字幕類直接改字幕、影音類另外輸出修復版、章節類改章節文字；沒有修復的灰掉。"""
         key = (self._current_row or {}).get("fix_key")
         self.fix_btn.setText(hc.FIX_LABELS.get(key, FIX_DEFAULT) if key else FIX_DEFAULT)
         self.fix_btn.setEnabled((key in hc.CUE_FIX_KEYS or key in hc.MEDIA_FIX_KEYS or key in hc.TEXT_FIX_KEYS)

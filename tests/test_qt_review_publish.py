@@ -157,7 +157,8 @@ else:
         w in rp.PUBLISH_NOTE for w in ("③健檢中心", "Ctrl+Z", "8 分鐘", "不送任何東西出去")))
     check("頁面說明：章節、發佈包、廣告插入點在「輸出」的「發佈」那一頁",
           "「發佈」產章節草稿、發佈包與廣告插入點" in rp.PAGE_NOTE)
-    check("狀態列提到章節與發佈包", "粗剪與匯出、章節與發佈包、" in win.statusBar().currentMessage())
+    check("狀態列：一般版的功能都搬過來了（第三十五階段起不逐頁列舉；章節與發佈包在導覽裡）",
+          win.statusBar().currentMessage() == qt_app.STATUS_INTRO)
     check("還沒分析：按了不做事", panel.copy_chapters() == "" and panel.export_publish_pack() == ""
           and panel.copy_ad_breaks() == "")
     check("③的發佈文字那一塊一開始收著、是空的", not health.publish_body.isVisibleTo(health)

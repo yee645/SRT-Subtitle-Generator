@@ -320,6 +320,9 @@ if old_app_src is not None:
         # 3.0 第 11 項第三十三階段：自動修正詞庫的增刪（存一條、刪一條、清單上的寫法），一般版尋找取代視窗下面那一框
         # 搬到 Qt；多一個「滿了不再加」的檢查（全新檔案，零 GUI 依賴、不 import config；一般版不改）。
         "subtitle/correctionrules.py",
+        # 3.0 第 11 項第三十五階段：Qt 版首次啟動導覽的內容與「該不該跳」（一般版「新版介面速覽」的 Qt 版）。
+        # 記在自己的 qt_guide_seen、不跟一般版的 whatsnew_seen 共用（全新檔案，零 GUI 依賴、不 import config；一般版不改）。
+        "subtitle/qtguide.py",
         # 3.0 第 2 項：某一刻該顯示哪一句字幕。播放器疊加層與之後的時間軸
         # 共用，放核心層才不會兩邊各寫一份（全新檔案，零 GUI 依賴）。
         "subtitle/cuetime.py",
