@@ -57,6 +57,10 @@ check("頁面不是 GitHub 的：不開它，改用固定網址",
       and uc.newer_release(dict(release, html_url="http://github.com/x"), "2.3.6")["page"] == uc.RELEASES_PAGE)
 check("沒有 Qt zip：空字串（只有 exe 不算）", uc.newer_release(dict(release, assets=[{"name": "SRT-Subtitle-Generator.exe"}]),
                                               "2.3.6")["qt_zip"] == "")
+check("Qt 開頭但不是 .zip（例如校驗檔）不算", uc.newer_release(dict(release, assets=[
+    {"name": "SRT-Subtitle-Generator-Qt-preview-v2.4.0.zip.sha256"},
+    {"name": "SRT-Subtitle-Generator-Qt-preview-v2.4.0.zip"}]), "2.3.6")["qt_zip"]
+    == "SRT-Subtitle-Generator-Qt-preview-v2.4.0.zip")
 check("固定網址是這個 repo 的", uc.RELEASES_PAGE == "https://github.com/yee645/SRT-Subtitle-Generator/releases/latest"
       and uc.API_URL == "https://api.github.com/repos/yee645/SRT-Subtitle-Generator/releases/latest")
 
