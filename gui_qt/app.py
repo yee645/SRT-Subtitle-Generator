@@ -31,6 +31,11 @@ from updater import APP_VERSION
 
 logger = logging.getLogger(__name__)
 
+FFMPEG_BANNER = ("⚠ 找不到 ffmpeg：時間軸的波形與縮圖、燒錄、輸出影片、健檢的影音項目都需要它。"
+                 "按右邊一鍵安裝（不需要管理員權限，兩版共用）。")
+
+CLOSE_WHILE_INSTALLING = "一鍵安裝還在下載。現在關掉程式，下載會中斷，下次要再安裝一次。還是要關嗎？"
+
 # (頁籤名稱, 還沒搬過來時頁面上的說明)。名稱必須與 gui/app.py 的
 # notebook.add(..., text=...) 相同。
 STAGES = [
@@ -141,6 +146,8 @@ class MainWindow(QMainWindow):
         self.audiovis_dialog = None
         self.batch_dialog = None
         self.lookup_dialog = None
+        self.ffmpeg_dialog = None
+        self.ocr_dialog = None
         for name, summary in STAGES:
             if name == "② 字幕":
                 self.tabs.addTab(self._subtitle_page(), name)
@@ -159,7 +166,13 @@ class MainWindow(QMainWindow):
         self.lookup_btn.setToolTip("選取文字就翻譯；會送出去的只有選取的那段文字（送到 OpenAI）")
         self.lookup_btn.clicked.connect(lambda _c=False: self.open_lookup())
         self.tabs.setCornerWidget(self.lookup_btn, Qt.TopRightCorner)
-        self.setCentralWidget(self.tabs)
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        central_layout.addWidget(self._build_ffmpeg_banner())
+        central_layout.addWidget(self.tabs, 1)
+        self.setCentralWidget(central)
         self.statusBar().showMessage(
             "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、直式短片）、音訊轉影片與批次一鍵完成、②字幕頁、③健檢中心（含系列一致性）、"
             "④的匯出、燒錄與品牌套版、右上角的即時查譯，其餘請先用一般版。")
@@ -240,6 +253,57 @@ class MainWindow(QMainWindow):
         self.batch_dialog.activateWindow()
         return self.batch_dialog
 
+    # ----- 一鍵安裝（第 11 項第二十九階段） -----
+    def _build_ffmpeg_banner(self):
+        """沒有 ffmpeg 時頁籤上方一條提示＋〔自動安裝 ffmpeg〕；裝好就收起來。各處「找不到 ffmpeg」都指向這裡。"""
+        from subtitle.burner import ffmpeg_available
+
+        self.ffmpeg_banner = QWidget()
+        self.ffmpeg_banner.setObjectName("ffmpegBanner")
+        self.ffmpeg_banner.setStyleSheet("#ffmpegBanner { background: #fdf3d7; } #ffmpegBanner QLabel { color: #8a5a00; }")
+        row = QHBoxLayout(self.ffmpeg_banner)
+        row.setContentsMargins(10, 4, 10, 4)
+        label = QLabel(FFMPEG_BANNER)
+        label.setWordWrap(True)
+        row.addWidget(label, 1)
+        self.ffmpeg_install_btn = QPushButton("自動安裝 ffmpeg")
+        self.ffmpeg_install_btn.clicked.connect(lambda _c=False: self.open_ffmpeg_install())
+        row.addWidget(self.ffmpeg_install_btn)
+        self.ffmpeg_banner.setVisible(not ffmpeg_available())
+        return self.ffmpeg_banner
+
+    def _ask_close_while_installing(self):  # 測試換掉
+        from PySide6.QtWidgets import QMessageBox
+        return QMessageBox.question(self, "還在安裝", CLOSE_WHILE_INSTALLING) == QMessageBox.Yes
+
+    def refresh_ffmpeg_banner(self):
+        from subtitle.burner import ffmpeg_available
+
+        self.ffmpeg_banner.setVisible(not ffmpeg_available())
+
+    def open_ffmpeg_install(self):
+        """開「自動安裝 ffmpeg」（只建一個；不擋住主視窗）。裝好就收起上方的提示。"""
+        from gui_qt.install_dialog import FfmpegInstallDialog
+
+        if self.ffmpeg_dialog is None:
+            self.ffmpeg_dialog = FfmpegInstallDialog(self)
+            self.ffmpeg_dialog.installed.connect(lambda _r: self.refresh_ffmpeg_banner())
+        self.ffmpeg_dialog.show()
+        self.ffmpeg_dialog.raise_()
+        self.ffmpeg_dialog.activateWindow()
+        return self.ffmpeg_dialog
+
+    def open_ocr_install(self):
+        """開「安裝文字辨識（OCR）」（只建一個；不擋住主視窗）。"""
+        from gui_qt.install_dialog import TesseractInstallDialog
+
+        if self.ocr_dialog is None:
+            self.ocr_dialog = TesseractInstallDialog(self)
+        self.ocr_dialog.show()
+        self.ocr_dialog.raise_()
+        self.ocr_dialog.activateWindow()
+        return self.ocr_dialog
+
     def open_lookup(self):
         """打開即時查譯面板（收起來過就原地打開，快取與生字本都留著）。"""
         from gui_qt.quicklookup_dialog import QuickLookupDialog
@@ -300,6 +364,10 @@ class MainWindow(QMainWindow):
                 and not self.output_panel.ask_close_while_burning()):  # ④的硬字幕影片還在燒錄
             event.ignore()
             return
+        for dialog in (self.ffmpeg_dialog, self.ocr_dialog):  # 一鍵安裝還在下載：關掉程式下載就斷了
+            if dialog is not None and dialog.installing() and not self._ask_close_while_installing():
+                event.ignore()
+                return
         if self.cue_panel is not None:
             self.cue_panel.commit()  # 編輯框裡改到一半的先套用，下面才問得到要不要存
         if self.player_panel is not None and not self.player_panel.maybe_close():

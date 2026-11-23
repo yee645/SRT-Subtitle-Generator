@@ -105,7 +105,7 @@ TRACK_NAMES = {"overlays": "疊加", "music": "音樂"}
 
 CACHE_ROOT = ""  # 空字串＝程式工作目錄
 
-FFMPEG_MISSING = "需要 ffmpeg——在一般版按「自動安裝 ffmpeg」即可，兩版共用"
+FFMPEG_MISSING = "需要 ffmpeg——按主視窗上方的「自動安裝 ffmpeg」即可"
 
 MIN_PX_PER_SEC = 2.0
 MAX_PX_PER_SEC = 400.0
