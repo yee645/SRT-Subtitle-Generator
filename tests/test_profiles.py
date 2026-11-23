@@ -80,6 +80,8 @@ check("清單照名字排", pf.preset_names({"b": 1, "a": 2, "預設": 3}) == ["
 remaining, chosen, error = pf.after_delete(presets, "預設")
 check("刪掉後改用名字排第一的", remaining == {"直式": {}} and chosen == "直式" and error == "")
 check("不改傳入的", presets == {"預設": {}, "直式": {}})
+check("三組刪中間那組：改用排第一的（不是最後一個）",
+      pf.after_delete({"c": {}, "a": {}, "b": {}}, "b")[1:] == ("a", ""))
 check("只剩一組：不能刪", pf.after_delete({"預設": {}}, "預設") == ({"預設": {}}, None, pf.KEEP_ONE))
 check("沒有這組：原樣", pf.after_delete(presets, "沒有") == (presets, None, ""))
 

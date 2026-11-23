@@ -37,7 +37,6 @@ def ensure_presets(cfg):
         cfg["presets"] = {"預設": app_config.make_profile(
             exporter.clean_style(cfg.get("subtitle_style")),
             profiles.clean_segmentation(cfg.get("segmentation")))}
-        cfg["active_preset"] = "預設"
     if cfg.get("active_preset") not in cfg["presets"]:
         cfg["active_preset"] = profiles.preset_names(cfg["presets"])[0]
     return cfg["presets"]

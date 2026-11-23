@@ -154,6 +154,9 @@ else:
           and box.selected() == "直式短片" and cfg["active_preset"] == "直式短片")
 
     # ----- 5 -----
+    dlg.size_spin.setValue(51)
+    check("改字幕外觀：狀態行說已改過字幕外觀", "已改過字幕外觀" in box.state.text(), box.state.text())
+    dlg.size_spin.setValue(50)
     seg_box.spins["pause_gap"].setValue(0.7)
     check("改了：狀態行說還沒存進去", "還沒存進「直式短片」" in box.state.text())
     QTest.mouseClick(box.update_btn, Qt.LeftButton)
@@ -203,6 +206,9 @@ else:
           and bare["presets"]["預設"]["segmentation"] == profiles.SEGMENTATION_DEFAULTS
           and dlg2.preset_box.state.text() == "目前的值與「預設」一致。")
     dlg2.close()
+    empty = {"subtitle_style": dict(base_style), "presets": {}, "active_preset": "不見了"}
+    check("習慣設定是空的：一樣補「預設」並選它", pb.ensure_presets(empty) is empty["presets"]
+          and list(empty["presets"]) == ["預設"] and empty["active_preset"] == "預設")
     bare["segmentation"] = dict(profiles.SEGMENTATION_DEFAULTS, max_chars_cjk=30)
     bare["presets"]["另一組"] = config.make_profile(bare["subtitle_style"], bare["segmentation"])
     bare["active_preset"] = "另一組"
