@@ -114,7 +114,11 @@ def run(zip_path):
         if not _running_from(app_dir):
             break
         time.sleep(0.25)
-    check("新版啟動時刪掉 .old", odu.cleanup_backup(app_dir) and not os.path.exists(old))
+    cleaned = odu.cleanup_backup(app_dir, attempts=40, delay=0.5)  # 防毒軟體掃描剛寫下的檔，最多等 20 秒
+    left = []
+    for root, _dirs, files in os.walk(old):
+        left += [os.path.relpath(os.path.join(root, f), old) for f in files]
+    check("新版啟動時刪掉 .old", cleaned and not os.path.exists(old), f"刪不掉 {len(left)} 個檔：{left[:10]}")
     shutil.rmtree(work, ignore_errors=True)
     return checks, round(elapsed, 2)
 
