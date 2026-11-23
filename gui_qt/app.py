@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 FFMPEG_BANNER = ("⚠ 找不到 ffmpeg：時間軸的波形與縮圖、燒錄、輸出影片、健檢的影音項目都需要它。"
                  "按右邊一鍵安裝（不需要管理員權限，兩版共用）。")
 
+UPDATE_CHECK_DELAY_MS = 1500  # 跟一般版一樣：開好視窗 1.5 秒後才查新版本
 CLOSE_WHILE_INSTALLING = "一鍵安裝還在下載。現在關掉程式，下載會中斷，下次要再安裝一次。還是要關嗎？"
 
 # (頁籤名稱, 還沒搬過來時頁面上的說明)。名稱必須與 gui/app.py 的
@@ -171,6 +172,7 @@ class MainWindow(QMainWindow):
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setSpacing(0)
         central_layout.addWidget(self._build_ffmpeg_banner())
+        central_layout.addWidget(self._build_update_banner())
         central_layout.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
         self.statusBar().showMessage(
@@ -271,6 +273,68 @@ class MainWindow(QMainWindow):
         row.addWidget(self.ffmpeg_install_btn)
         self.ffmpeg_banner.setVisible(not ffmpeg_available())
         return self.ffmpeg_banner
+
+    # ----- 有新版本的提示（第 11 項第三十階段） -----
+    def _build_update_banner(self):
+        """查到新版時頁籤上方一條提示：〔開啟下載頁〕〔這版不再提醒〕〔關閉提示〕。平常收著。"""
+        from gui_qt.update_notice import UpdateWorker
+        from subtitle import updatecheck
+
+        self.update_info = None
+        self.update_banner = QWidget()
+        self.update_banner.setObjectName("updateBanner")
+        self.update_banner.setStyleSheet("#updateBanner { background: #e3effd; } #updateBanner QLabel { color: #1a4f8a; }")
+        self.update_banner.setToolTip(updatecheck.SENDS)
+        row = QHBoxLayout(self.update_banner)
+        row.setContentsMargins(10, 4, 10, 4)
+        self.update_label = QLabel()
+        self.update_label.setWordWrap(True)
+        row.addWidget(self.update_label, 1)
+        self.update_open_btn = QPushButton("開啟下載頁")
+        self.update_open_btn.clicked.connect(lambda _c=False: self.open_update_page())
+        self.update_skip_btn = QPushButton("這版不再提醒")
+        self.update_skip_btn.clicked.connect(lambda _c=False: self.skip_update())
+        self.update_close_btn = QPushButton("關閉提示")
+        self.update_close_btn.clicked.connect(lambda _c=False: self.update_banner.setVisible(False))
+        for btn in (self.update_open_btn, self.update_skip_btn, self.update_close_btn):
+            row.addWidget(btn)
+        self.update_banner.setVisible(False)
+        self.update_worker = UpdateWorker(self)
+        self.update_worker.finished.connect(self.show_update)
+        return self.update_banner
+
+    def start_update_check(self):
+        """背景查一次 GitHub 最新版本（`main()` 開的視窗啟動後才查；測試、自檢不查）。"""
+        self.update_worker.start(APP_VERSION)
+
+    def show_update(self, info):
+        """查到的結果：有比目前新、而且不是按過「這版不再提醒」的那一版，就出現提示。回傳有沒有出現。"""
+        from subtitle import updatecheck
+
+        skipped = str((self.config_data.get("qt_update") or {}).get("skipped_version") or "")
+        if not updatecheck.should_notify(info, skipped):
+            return False
+        self.update_info = info
+        self.update_label.setText(updatecheck.notice_text(info, APP_VERSION))
+        self.update_banner.setVisible(True)
+        return True
+
+    def _open_url(self, url):  # 測試換掉
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        return QDesktopServices.openUrl(QUrl(url))
+
+    def open_update_page(self):
+        if self.update_info:
+            self._open_url(self.update_info["page"])
+
+    def skip_update(self):
+        """這一版不再提醒（記在設定裡，關掉 Qt 版時存回；更新的版本還是會提醒）。"""
+        if self.update_info:
+            data = dict(self.config_data.get("qt_update") or {})
+            data["skipped_version"] = self.update_info["version"]
+            self.config_data["qt_update"] = data
+        self.update_banner.setVisible(False)
 
     def _ask_close_while_installing(self):  # 測試換掉
         from PySide6.QtWidgets import QMessageBox
@@ -425,4 +489,6 @@ def main(argv=None):
         from gui_qt import selftest
         return selftest.run(app, win, argv[at + 1], argv[at + 2])
     win.show()
+    from PySide6.QtCore import QTimer
+    QTimer.singleShot(UPDATE_CHECK_DELAY_MS, win.start_update_check)  # 啟動後再查，不拖慢開視窗
     return app.exec()
