@@ -3397,7 +3397,27 @@ Windows 工作加一步實測：解一份舊版、跑腳本、看新版開得起
 **容器裡驗不到**：Windows 上真的跑切換（12-4 在 CI 實測）。另外，現在的 Release 附的是
 `…-Qt-preview-v<版本>-win64.zip`，名稱規則對得上：裝了含這段程式的預覽版之後，下一次發版就能用這顆按鈕更新。
 
-**下一步**：12-4——`release.yml` 的 Qt 工作改成正式產出物，並在 CI 的 Windows 工作實測切換腳本。
+**下一步**：12-4——`release.yml` 的 Qt 工作改成正式產出物，並在 CI 的 Windows 工作實測切換腳本。（✅ 2026-11-24，見下一節）
+
+### 第 12 項 12-4：打包流程與 Windows 上的切換實測（2026-11-24）
+
+- `packaging/switch_selftest.py`（新，只在 Windows 跑）：拿**這次 CI 剛打好的真 zip**走一遍 `onedirupdate` 的完整流程——
+  在含中文、空白、單引號的路徑放一份舊版（同一份成品加記號檔）、設定、工具；起一個工作目錄在舊版資料夾裡的行程
+  （模擬還開著的程式，Windows 上它在資料夾就不能改名），4 秒後自己結束；解壓、帶過去、寫腳本、用 `script_command`
+  同一套命令列跑 PowerShell。驗：等那個行程結束才換、舊的變 `.old`、新的換上原本的名字、暫存資料夾不見、設定與
+  工具在、**新版的 exe 真的從換上的資料夾開起來**；最後關掉它、刪 `.old`。結果寫進報告與工作流程摘要。
+- `qt-preview.yml`（PR）：打好 zip 之後跑切換實測，報告放進 artifact。
+- `release.yml`（發版）：切換實測放在**上傳 zip 之前**——沒過就不附 zip（Qt 版會用這個 zip 自己更新，換不過去的
+  成品不能交出去；2.x 的 exe 早已上傳，不受影響）。Release 說明換掉過時的「目前只有外框」，改講資料夾版可以在程式裡
+  〔下載並安裝〕。
+- zip 名稱（`qt_preview.zip_name`）：3.0 之前照舊帶 `preview`，3.0.0 起是 `SRT-Subtitle-Generator-Qt-v<版本>-win64.zip`；
+  兩種名稱 `pick_zip` 都認得。上傳與 artifact 改成兩種都收的 `SRT-Subtitle-Generator-Qt-*.zip`。
+
+Qt 工作的 `continue-on-error` 先留著：3.0.0 之前一般版的 exe 才是主要產出物；12-7 切預設時再決定要不要拿掉。
+
+測試：`tests/test_switch_selftest.py`（新）；`test_qt_preview_pack.py` 的「只上傳預覽版 zip」換成兩種名稱都收的新斷言。
+
+**下一步**：12-5——一般版的橋。
 
 ### 螢幕畫面翻譯搬到 Qt 時的參考（2026-09-23 實測）
 
