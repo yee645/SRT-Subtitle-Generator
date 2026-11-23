@@ -165,6 +165,11 @@ else:
     check("套用後：設定換掉、生成視窗的語言與說明跟著換", cfg["transcription"]["language"] == "en"
           and cfg["transcription"]["use_api"] is True and gen.language_box.currentData() == "en"
           and "用 OpenAI 轉寫" in gen.notice.text() and "轉寫設定已套用" in gen.status.text(), gen.notice.text())
+    QTest.mouseClick(gen.settings_btn, Qt.LeftButton)
+    sub.use_api_box.click()  # 只改 OpenAI（語言不變）：說明也要重寫
+    QTest.mouseClick(sub.apply_btn, Qt.LeftButton)
+    check("只改 OpenAI：生成視窗的說明也跟著換", cfg["transcription"]["use_api"] is False
+          and gen.language_box.currentData() == "en" and "在這台電腦上用 Whisper" in gen.notice.text(), gen.notice.text())
     gen.worker.busy = True
     gen.refresh()
     check("生成中：〔轉寫設定…〕灰掉", not gen.settings_btn.isEnabled())

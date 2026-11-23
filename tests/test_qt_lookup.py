@@ -110,7 +110,10 @@ else:
 
     # ----- 1. 按鈕與小視窗 -----
     btn = win.lookup_btn
-    check("頁籤列右上角有〔即時查譯…〕", win.tabs.cornerWidget(Qt.TopRightCorner) is btn and btn.text() == "即時查譯…")
+    # 第三十二階段起右上角是一組（〔轉寫與金鑰…〕〔即時查譯…〕），〔即時查譯…〕在最右邊
+    corner = win.tabs.cornerWidget(Qt.TopRightCorner)
+    check("頁籤列右上角有〔即時查譯…〕（最右邊）", btn.parent() is corner and btn.text() == "即時查譯…"
+          and corner.layout().itemAt(corner.layout().count() - 1).widget() is btn)
     for i in range(win.tabs.count()):
         win.tabs.setCurrentIndex(i)
         wait(10)

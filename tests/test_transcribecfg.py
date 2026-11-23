@@ -43,6 +43,7 @@ check("去頭尾空白、語言空白＝auto、勾選是布林、其他鍵留著
     "model": "small", "language": "auto", "use_api": True, "use_cache": False, "api_key": "sk-abc",
     "python_path": "C:/py/python.exe", "prompt": "剪映 達文西", "自訂": "留著"}, str(out))
 check("不改傳入的", raw["model"] == " small " and raw["api_key"] == "  sk-abc  ")
+check("勾選真的是 bool（不是 1／0）", out["use_api"] is True and out["use_cache"] is False)
 check("不認得的模型：退回原本的", tc.clean_transcription({"model": "huge"}, {"model": "medium"})["model"] == "medium")
 check("原本的也不認得：base", tc.clean_transcription({"model": "huge"}, {"model": "xl"})["model"] == "base"
       and tc.clean_transcription({"model": None})["model"] == "base")
