@@ -16,7 +16,7 @@ import threading
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton,
+    QCheckBox, QDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLayout, QMessageBox, QProgressBar, QPushButton,
     QVBoxLayout,
 )
 
@@ -40,6 +40,7 @@ FAILED = "安裝失敗，可重試或改手動安裝："
 RETRY = "重試安裝"
 DEFAULT_LANGS = ("eng", "jpn", "chi_tra")  # 跟一般版一樣：介面是中文的，來源語言最常見的是英文與日文
 LANG_COLUMNS = 3
+TEXT_WIDTH = 500  # 說明文字的最小寬度：太窄的話一行只剩幾個字
 
 
 def failure_text(exc):
@@ -94,14 +95,17 @@ class _InstallDialog(QDialog):
         self.layout_ = QVBoxLayout(self)
         intro_label = QLabel(intro)
         intro_label.setWordWrap(True)
+        intro_label.setMinimumWidth(TEXT_WIDTH)
         self.layout_.addWidget(intro_label)
         self.sends_label = QLabel(sends)
         self.sends_label.setWordWrap(True)
+        self.sends_label.setMinimumWidth(TEXT_WIDTH)
         self.layout_.addWidget(self.sends_label)
         self.body = QVBoxLayout()
         self.layout_.addLayout(self.body)
         self.status_label = QLabel(hint)
         self.status_label.setWordWrap(True)
+        self.status_label.setMinimumWidth(TEXT_WIDTH)
         self.layout_.addWidget(self.status_label)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1000)
@@ -120,7 +124,8 @@ class _InstallDialog(QDialog):
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
-        self.resize(500, 0)
+        # 換行的說明要照寬度算高度：版面一律以「最小需要的大小」為準，不會被擠到字疊在一起
+        self.layout_.setSizeConstraint(QLayout.SetMinimumSize)
 
     # 子類別提供
     def _job(self):
@@ -212,6 +217,7 @@ class TesseractInstallDialog(_InstallDialog):
         self.body.addWidget(self.engine_box)
         self.engine_note = QLabel(OCR_ENGINE_NOTE)
         self.engine_note.setWordWrap(True)
+        self.engine_note.setMinimumWidth(TEXT_WIDTH)
         self.body.addWidget(self.engine_note)
         box = QGroupBox("語言檔（每個約 2~4 MB）")
         grid = QGridLayout(box)
