@@ -24,6 +24,9 @@
 
 第四階段：「字幕樣式…」打開樣式的小視窗（gui_qt/style_panel.py），改了播放器上立刻看得到。
 
+第三十三階段：尋找取代多〔存為自動修正〕〔自動修正詞庫…〕（gui_qt/corrections_dialog.py）——一般版尋找取代視窗
+下面的「自動修正詞庫」，之後每次生成字幕自動改掉存過的慣性錯字。
+
 清單只是看與選；字幕本身只有播放器那一份（`PlayerPanel.cues`），改過就照 `cuesChanged` 重畫。
 """
 from PySide6.QtCore import QEvent, Qt, QTimer
@@ -99,6 +102,12 @@ class CueListPanel(QWidget):
         self.find_next_btn = QPushButton("找下一個")
         self.replace_one_btn = QPushButton("取代這句")
         self.replace_all_btn = QPushButton("全部取代")
+        # 自動修正詞庫（第三十三階段）：一般版尋找取代視窗下面那一框
+        self.save_rule_btn = QPushButton("存為自動修正")
+        self.save_rule_btn.setToolTip("把「尋找→取代」存成規則：之後每次生成字幕自動改掉這個慣性錯字（不動現在的字幕）")
+        self.rules_btn = QPushButton("自動修正詞庫…")
+        self.rules_btn.setToolTip("看全部規則、刪掉用不到的")
+        self.corrections_dialog = None
         grid = QGridLayout(self.find_bar)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.addWidget(QLabel("尋找"), 0, 0)
@@ -109,6 +118,8 @@ class CueListPanel(QWidget):
         grid.addWidget(self.find_next_btn, 3, 1)
         grid.addWidget(self.replace_one_btn, 3, 2)
         grid.addWidget(self.replace_all_btn, 3, 3)
+        grid.addWidget(self.save_rule_btn, 4, 1, 1, 2)
+        grid.addWidget(self.rules_btn, 4, 3)
         self.find_bar.setVisible(False)
 
         self.table = QTableWidget(0, 3)
@@ -160,6 +171,8 @@ class CueListPanel(QWidget):
         self.find_next_btn.clicked.connect(self.find_next)
         self.replace_one_btn.clicked.connect(self.replace_current)
         self.replace_all_btn.clicked.connect(self.replace_all)
+        self.save_rule_btn.clicked.connect(lambda _c=False: self.save_correction())
+        self.rules_btn.clicked.connect(lambda _c=False: self.open_corrections())
         self.find_edit.returnPressed.connect(self.find_next)
         self.find_edit.textChanged.connect(self._update_buttons)
         self.table.itemSelectionChanged.connect(self._on_selection)
@@ -369,6 +382,35 @@ class CueListPanel(QWidget):
         self.note.setText("".join(parts))
         return count
 
+    def save_correction(self):
+        """〔存為自動修正〕：把現在的「尋找→取代」存成一條規則（同一個「尋找」再存＝換掉舊的）。回傳是否存了。"""
+        from subtitle import correctionrules as cr
+
+        cfg = self.player._config
+        rules, error = cr.save_rule(cfg.get("corrections"), self.find_edit.text(), self.replace_edit.text(),
+                                    self.case_box.isChecked())
+        if error:
+            self.note.setText(error)
+            return False
+        # 寫進這次開啟的設定；關掉 Qt 版時存回 config.json
+        cfg["corrections"] = rules
+        self.note.setText(f"已存為自動修正規則（共 {len(rules)} 條），之後每次生成字幕自動套用；現在的字幕沒有改，"
+                          "要改請按〔全部取代〕。")
+        if self.corrections_dialog is not None:
+            self.corrections_dialog.reload()
+        return True
+
+    def open_corrections(self):
+        """〔自動修正詞庫…〕：看全部規則、刪掉用不到的（不擋住主視窗）。"""
+        if self.corrections_dialog is None:
+            from gui_qt.corrections_dialog import CorrectionsDialog
+            self.corrections_dialog = CorrectionsDialog(self.player._config, self)
+            self.corrections_dialog.changed.connect(self.note.setText)
+        self.corrections_dialog.reload()
+        self.corrections_dialog.show()
+        self.corrections_dialog.raise_()
+        return self.corrections_dialog
+
     # ---- 內部 ----------------------------------------------------------
 
     def _commit_add(self):
@@ -420,6 +462,7 @@ class CueListPanel(QWidget):
         has_term = bool(self.find_edit.text())
         for button in (self.find_next_btn, self.replace_one_btn, self.replace_all_btn):
             button.setEnabled(has_cues and has_term)
+        self.save_rule_btn.setEnabled(bool(self.find_edit.text().strip()))  # 存規則不必有字幕
 
     def _on_find_toggled(self, shown):
         self.find_bar.setVisible(shown)
