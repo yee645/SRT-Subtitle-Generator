@@ -63,6 +63,11 @@ def theme_scheme(theme):
     return Qt.ColorScheme.Dark if theme == "dark" else Qt.ColorScheme.Light
 
 
+def theme_button_text(theme):
+    """切換按鈕上的字（同一般版）：現在是深色就寫「切換為淺色」，反之亦然。"""
+    return "切換為淺色" if theme == "dark" else "切換為深色"
+
+
 def dark_palette():
     """Fusion 樣式用的深色調色盤（顏色取自 Qt 官方範例的常見深色配置）。"""
     base, window, text = QColor(35, 35, 35), QColor(53, 53, 53), QColor(230, 230, 230)
@@ -188,6 +193,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             "3.0 預覽版：目前有①的審片助手（分析、段落清單、粗剪與匯出、章節與發佈包、封面候選、直式短片）、音訊轉影片與批次一鍵完成、②字幕頁、③健檢中心（含系列一致性）、"
             "④的匯出、燒錄與品牌套版、右上角的即時查譯，其餘請先用一般版。")
+        # 深淺色切換（第三十四階段）：一般版主視窗的〔切換為深色〕；放狀態列右邊，每一頁都看得到
+        self.theme_btn = QPushButton(theme_button_text(self.config_data.get("theme", "light")))
+        self.theme_btn.setToolTip("整個視窗換成深色或淺色；記進設定，下次打開（一般版也是）就是這個")
+        self.theme_btn.clicked.connect(lambda _c=False: self.toggle_theme())
+        self.statusBar().addPermanentWidget(self.theme_btn)
 
     def _subtitle_page(self):
         """② 字幕：播放器面板（第 2 項）＋一行說明其餘功能在哪。"""
@@ -377,6 +387,15 @@ class MainWindow(QMainWindow):
         self.ocr_dialog.raise_()
         self.ocr_dialog.activateWindow()
         return self.ocr_dialog
+
+    def toggle_theme(self):
+        """深色↔淺色：馬上換（時間軸、審片清單照調色盤重畫），記進這次開啟的設定。回傳換成的主題。"""
+        new = "light" if self.config_data.get("theme", "light") == "dark" else "dark"
+        self.config_data["theme"] = new  # 關掉 Qt 版時存回 config.json；一般版也讀這一格
+        apply_theme(QApplication.instance(), new)
+        self.theme_btn.setText(theme_button_text(new))
+        self.statusBar().showMessage(f"已切換為{'深色' if new == 'dark' else '淺色'}主題。", 5000)
+        return new
 
     def open_transcription_settings(self):
         """打開轉寫與金鑰設定（只建一個；每次打開照這次開啟的設定重擺、金鑰回到遮住）。"""

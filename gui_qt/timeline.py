@@ -695,9 +695,9 @@ class TimelineView(QGraphicsView):
         super().changeEvent(event)
         if event.type() == QEvent.Type.PaletteChange:
             self.colors = _palette_colors(self)
-            self._build_cues()
-            self._build_cut_marks()
-            self._build_tracks()
+            # 整個重排：字幕列的底色（cue_bg）與播放頭的筆是在 _relayout 設的，只重畫字幕塊會留著舊的顏色
+            # （第三十四階段加了執行中切換深淺色才看到）
+            self._relayout()
             self.scene_.update()
 
     def wheelEvent(self, event):  # noqa: N802
