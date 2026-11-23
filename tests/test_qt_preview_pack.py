@@ -185,8 +185,9 @@ check("Release 已存在、跳過建置時 Qt 工作也跳過",
       "needs.build-and-release.outputs.created == 'true'" in qt_job
       and "created: ${{ steps.resolve.outputs.exists != 'true' }}" in main_job
       and "id: resolve" in main_job and 'fp.write(f"exists={exists}\\n")' in main_job)
-check("Qt 工作只上傳預覽版 zip，不碰 exe",
-      "SRT-Subtitle-Generator-Qt-preview-*.zip" in qt_job
+# 第 12 項 12-4 起：zip 名稱 3.0 起不帶 preview（qt_preview.zip_name），上傳改成兩種名稱都收的 Qt-*.zip
+check("Qt 工作只上傳 Qt 的 zip（預覽版或 3.0 起的正式名稱），不碰 exe",
+      'Get-ChildItem "SRT-Subtitle-Generator-Qt-*.zip"' in qt_job
       and "SRT-Subtitle-Generator.exe" not in qt_job)
 check("自動更新只認 exe（Release 上多一個 zip 不會被誤抓）",
       'ASSET_NAME = "SRT-Subtitle-Generator.exe"' in _read("updater.py"))

@@ -136,6 +136,17 @@ def dir_size(path):
                for r, _d, files in os.walk(path) for f in files)
 
 
+def zip_name(version, suffix):
+    """
+    發版附的 zip 檔名。3.0 之前是預覽版（名稱帶 preview）；3.0.0 起 Qt 版是正式版（第 12 項 12-4）。
+    兩種名稱都以 `SRT-Subtitle-Generator-Qt` 開頭、`-win64.zip` 結尾，資料夾版自動更新
+    （`subtitle/onedirupdate.pick_zip`）都認得。
+    """
+    major = str(version).lstrip("vV").split(".")[0]
+    preview = not (major.isdigit() and int(major) >= 3)
+    return f"SRT-Subtitle-Generator-Qt-{'preview-' if preview else ''}v{str(version).lstrip('vV')}-{suffix}.zip"
+
+
 def make_zip(dist, zip_path):
     base = os.path.basename(os.path.normpath(dist))
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -162,7 +173,7 @@ def main(argv):
     report["after_mb"] = round(dir_size(dist) / 1e6, 2)
     if passed:
         suffix = "win64" if os.name == "nt" else sys.platform
-        zip_path = f"SRT-Subtitle-Generator-Qt-preview-v{APP_VERSION}-{suffix}.zip"
+        zip_path = zip_name(APP_VERSION, suffix)
         report["zip"] = zip_path
         report["zip_mb"] = round(make_zip(dist, zip_path) / 1e6, 2)
 

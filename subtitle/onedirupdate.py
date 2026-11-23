@@ -320,13 +320,34 @@ def self_update_dir(frozen, executable: str, platform: str) -> Optional[str]:
     return os.path.dirname(os.path.abspath(executable))
 
 
-def cleanup_backup(app_dir: str) -> bool:
-    """新版啟動時呼叫：刪掉切換留下的舊資料夾（`.old`）。回傳有沒有刪到；刪不掉（被占用）就下次再試。"""
+def _make_writable_and_retry(func, path, _exc_info):
+    """rmtree 刪不掉時：唯讀的檔先改成可寫再試一次（Windows 上唯讀檔不能刪）；還是不行就放著。"""
+    try:
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+        func(path)
+    except OSError:
+        pass
+
+
+def cleanup_backup(app_dir: str, attempts: int = 3, delay: float = 0.5) -> bool:
+    """
+    新版啟動時呼叫：刪掉切換留下的舊資料夾（`.old`）。回傳有沒有刪乾淨。
+
+    Windows 上剛寫下的 exe／dll 常被防毒軟體掃描、暫時占住（12-4 在 CI 實測遇到），所以唯讀的先改可寫、
+    刪不乾淨就隔一下再試幾次；還是不行就留著，下次啟動再刪（不影響使用）。
+    """
+    import time
+
     old = backup_path(app_dir)
     if not os.path.isdir(old):
         return False
-    shutil.rmtree(old, ignore_errors=True)
-    return not os.path.exists(old)
+    for i in range(max(1, attempts)):
+        shutil.rmtree(old, onerror=_make_writable_and_retry)
+        if not os.path.exists(old):
+            return True
+        if i + 1 < attempts:
+            time.sleep(delay)
+    return False
 
 
 def _remove(path: str) -> None:

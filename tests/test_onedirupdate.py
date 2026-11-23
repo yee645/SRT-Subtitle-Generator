@@ -73,11 +73,13 @@ check("大小寫不出數字：當 0", u.pick_zip({"assets": [{"name": "SRT-Subt
                                                    "browser_download_url": GOOD_URL, "size": "壞"}]})["size"] == 0)
 release_yml = open(os.path.join(ROOT, ".github", "workflows", "release.yml"), encoding="utf-8").read()
 check("exe 名稱跟打包流程一樣", f"--name {u.EXE_NAME[:-4]} " in release_yml)
-zip_name = f"SRT-Subtitle-Generator-Qt-preview-v{qt_preview.APP_VERSION}-win64.zip"
-check("打包流程現在打的 zip 名稱也挑得到（名稱規則對得上）", 'zip_path = f"SRT-Subtitle-Generator-Qt-preview-v{APP_VERSION}-{suffix}.zip"'
-      in open(qt_preview.__file__, encoding="utf-8").read() and 'suffix = "win64" if os.name == "nt"' in open(
-          qt_preview.__file__, encoding="utf-8").read()
-      and u.pick_zip({"assets": [{"name": zip_name, "browser_download_url": u.DOWNLOAD_PREFIX + "v1/" + zip_name}]}))
+# 12-4 起打包用 qt_preview.zip_name（3.0 之前帶 preview、3.0.0 起不帶）：兩種名稱、以及打包時真的用的那個都要挑得到
+pack_src = open(qt_preview.__file__, encoding="utf-8").read()
+names = [qt_preview.zip_name(v, "win64") for v in (qt_preview.APP_VERSION, "2.9.9", "3.0.0", "3.1.0")]
+check("打包流程打的 zip 名稱都挑得到（名稱規則對得上）", "zip_path = zip_name(APP_VERSION, suffix)" in pack_src
+      and 'suffix = "win64" if os.name == "nt"' in pack_src
+      and all(u.pick_zip({"assets": [{"name": n, "browser_download_url": u.DOWNLOAD_PREFIX + "v1/" + n}]}) for n in names),
+      str(names))
 
 
 # ----- 2 -----
@@ -282,6 +284,41 @@ os.makedirs(os.path.join(app_dir + ".old", "_internal"))
 open(os.path.join(app_dir + ".old", u.EXE_NAME), "wb").write(b"MZ old")
 check("新版啟動：刪掉 .old", u.cleanup_backup(app_dir) is True and not os.path.exists(app_dir + ".old")
       and os.path.isdir(app_dir))
+ro = os.path.join(tmp, "readonly.dll")
+open(ro, "wb").write(b"x")
+os.chmod(ro, stat.S_IREAD)
+modes = []
+u._make_writable_and_retry(lambda path: modes.append(os.stat(path).st_mode), ro, None)
+check("刪不掉時：唯讀的先改成可寫、再刪一次（Windows 上唯讀檔不能刪；容器是 root，直接驗這一步）",
+      len(modes) == 1 and modes[0] & stat.S_IWRITE, str(modes))
+u._make_writable_and_retry(lambda path: (_ for _ in ()).throw(OSError("還是被占住")), ro, None)
+check("改了還是刪不掉：不丟例外（留著下次再刪）", True)
+os.remove(ro)
+real_rmtree = u.shutil.rmtree
+tries = []
+
+
+def flaky_rmtree(path, onerror=None):
+    tries.append(path)
+    if len(tries) >= 3:
+        real_rmtree(path, onerror=onerror)
+
+
+os.makedirs(app_dir + ".old")
+u.shutil.rmtree = flaky_rmtree
+try:
+    ok = u.cleanup_backup(app_dir, attempts=3, delay=0)
+finally:
+    u.shutil.rmtree = real_rmtree
+check("暫時被占住（防毒掃描）：隔一下再試，第三次刪掉", ok is True and len(tries) == 3)
+os.makedirs(app_dir + ".old")
+u.shutil.rmtree = lambda path, onerror=None: tries.append(path)
+try:
+    gave_up = u.cleanup_backup(app_dir, attempts=2, delay=0)
+finally:
+    u.shutil.rmtree = real_rmtree
+check("一直刪不掉：試完就放著、回 False（下次啟動再刪）", gave_up is False and os.path.isdir(app_dir + ".old"))
+real_rmtree(app_dir + ".old")
 
 exe = os.path.join(app_dir, u.EXE_NAME)
 check("打包好的 Windows 資料夾版：可以自己更新（回傳程式資料夾）", u.self_update_dir(True, exe, "win32") == app_dir)

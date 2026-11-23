@@ -125,10 +125,10 @@ jobs:
               "本 Release 由自動化流程建置（exe 於 GitHub Actions "
               "windows-latest 打包）。維護者驗證 exe 無誤後，將本 Release "
               "由 pre-release 轉為正式版，既有使用者即會收到自動更新。"
-              "\n\n若附有 `SRT-Subtitle-Generator-Qt-preview-*.zip`：那是 3.0 "
-              "預覽版（Qt 介面，開發中，目前只有外框），解開後執行資料夾裡的 "
-              "exe；一般使用請下載 `SRT-Subtitle-Generator.exe`。自動更新只會"
-              "更新 exe，不會動到預覽版。"
+              "\n\n若附有 `SRT-Subtitle-Generator-Qt-*-win64.zip`：那是 Qt 介面"
+              "（新介面，資料夾版），解開後執行資料夾裡的 "
+              "`SRT-Subtitle-Generator-Qt.exe`；之後有新版可以在程式裡按「下載並安裝」更新。"
+              "`SRT-Subtitle-Generator.exe` 是一般版（單一 exe），它的自動更新只會更新 exe。"
           )
           pathlib.Path("RELEASE_NOTES.md").write_text(notes, encoding="utf-8")
 
@@ -204,12 +204,17 @@ jobs:
       - name: Slim, licenses, self-test, zip
         run: python packaging/qt_preview.py dist/SRT-Subtitle-Generator-Qt SRT-Subtitle-Generator-Qt.exe research/qt_probe/probe_clip.mp4
 
+      # 資料夾版自動更新的切換實測（3.0 第 12 項 12-4）：沒過就不附 zip——Qt 版會用這個 zip 自己更新，
+      # 換不過去的成品不能交出去（2.x 的 exe 早已上傳，不受影響）。
+      - name: Switch self-test (onedir auto-update)
+        run: python packaging/switch_selftest.py "SRT-Subtitle-Generator-Qt-*.zip"
+
       - name: Upload Qt preview zip to the release (retry on transient upload errors)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Continue"
-          $zip = Get-ChildItem "SRT-Subtitle-Generator-Qt-preview-*.zip" | Select-Object -First 1
+          $zip = Get-ChildItem "SRT-Subtitle-Generator-Qt-*.zip" | Select-Object -First 1
           if (-not $zip) { Write-Error "找不到 Qt 預覽版 zip（自檢沒過就不會打 zip）。"; exit 1 }
           $delays = @(20, 40)
           for ($i = 0; $i -le $delays.Length; $i++) {
