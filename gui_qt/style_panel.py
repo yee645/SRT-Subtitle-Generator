@@ -16,14 +16,18 @@
 
 字型可以從清單選或自己打（按 Enter 或離開就套用）；電腦上沒有的字型，畫面用替代字型畫，
 燒錄時也一樣是替代字型。
+
+第三十一階段（第 19 列（四））：上面加「習慣設定（樣式組合）」、右邊加「斷句設定」（`gui_qt/preset_box.py`）。
+一組習慣設定＝左邊的字幕外觀＋右邊的斷句設定，選一組兩邊一起換。
 """
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFontDatabase
 from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QSlider, QSpinBox, QVBoxLayout,
+    QGroupBox, QSlider, QSpinBox, QVBoxLayout,
 )
 
+from gui_qt.preset_box import PresetBox, SegmentationBox
 from subtitle import exporter
 
 FONT_CHOICES = (
@@ -38,6 +42,7 @@ ZONE_NOTES = {
     "middle": "中段（34～65）：一律放在正中間",
     "bottom": "下段：字的底邊對齊這條線",
 }
+MIN_WIDTH, MIN_HEIGHT = 780, 640
 COLOR_KEYS = (("text_color", "文字顏色"), ("stroke_color", "邊框顏色"), ("emphasis_color", "重點字顏色"))
 
 
@@ -94,8 +99,8 @@ class StyleDialog(QDialog):
         self.dynamic_combo = QComboBox()
         for value, label in DYNAMIC_LABELS:
             self.dynamic_combo.addItem(label, value)
-        self.note = QLabel("改了馬上在播放器畫面上看得到。存專案時會一起存進專案檔，下次開專案就是這組；"
-                           "關掉 Qt 版時也會存進設定，一般版下次開啟用的就是這組。"
+        self.note = QLabel("改了馬上在播放器畫面上看得到。存專案時字幕外觀會一起存進專案檔，下次開專案就是這組；"
+                           "關掉 Qt 版時也會存進設定（含習慣設定與斷句設定），一般版下次開啟用的就是這組。"
                            "燒錄時字幕一律水平置中，所以這裡沒有水平位置。")
         self.note.setWordWrap(True)
         self.reset_btn = QPushButton("還原成打開時的樣式")
@@ -132,11 +137,28 @@ class StyleDialog(QDialog):
         buttons.addWidget(self.reset_btn)
         buttons.addStretch(1)
         buttons.addWidget(self.close_btn)
+        self.look_box = QGroupBox("字幕外觀")
+        self.look_box.setLayout(grid)
+        self.segmentation_box = SegmentationBox(player._config)
+        self.preset_box = PresetBox(player._config, self.profile, self.apply_profile)
+        columns = QHBoxLayout()
+        columns.addWidget(self.look_box, 3)
+        side = QVBoxLayout()
+        side.addWidget(self.segmentation_box)
+        side.addStretch(1)
+        columns.addLayout(side, 2)
         layout = QVBoxLayout(self)
-        layout.addLayout(grid)
+        layout.addWidget(self.preset_box)
+        layout.addLayout(columns)
         layout.addWidget(self.note)
         layout.addLayout(buttons)
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(MIN_WIDTH)
+        self.resize(MIN_WIDTH, max(self.sizeHint().height(), MIN_HEIGHT))  # 換行的提示不要被擠扁
+        self.segmentation_box.changed.connect(self.preset_box.refresh_state)
+        # 在字詞欄、字型欄按 Enter 是「套用這一格」，不能順便按到某個按鈕（例如〔另存新樣式〕）
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
+            button.setDefault(False)
 
         self.y_slider.valueChanged.connect(self._send)
         self.size_spin.valueChanged.connect(self._send)
@@ -150,6 +172,7 @@ class StyleDialog(QDialog):
         self.close_btn.clicked.connect(self.close)
         player.styleApplied.connect(self._on_project_style)
         self.fill(self.current())
+        self.preset_box.refresh_state()
 
     # ---- 對外 ----------------------------------------------------------
 
@@ -189,6 +212,25 @@ class StyleDialog(QDialog):
         out.update(self._colors)
         return exporter.clean_style(out)
 
+    def reload(self):
+        """重新打開時：三塊都照這次開啟的設定擺好（不送出）。"""
+        self.fill(self.current())
+        self.segmentation_box.fill()
+        self.preset_box.reload()
+
+    def profile(self):
+        """畫面上現在的一組：字幕外觀＋斷句設定（習慣設定比對、存檔用）。"""
+        return {"subtitle_style": self.style(), "segmentation": self.segmentation_box.values()}
+
+    def apply_profile(self, profile):
+        """套用一組習慣設定：字幕外觀與斷句設定都換掉，播放器上立刻看得到。"""
+        self.fill(profile["subtitle_style"])
+        self._send()
+        seg = dict(self.player._config.get("segmentation") or {})
+        seg.update(profile["segmentation"])
+        self.player._config["segmentation"] = seg
+        self.segmentation_box.fill(seg)
+
     def choose_color(self, key):
         """選色（文字／邊框／重點字）；取消就不變。回傳選到的顏色或 None。"""
         color = self._ask_color(self._colors[key], dict(COLOR_KEYS)[key])
@@ -214,6 +256,7 @@ class StyleDialog(QDialog):
         """開了有記樣式的專案：「還原」改成回到專案裡的樣式，控件照它擺。"""
         self.opened_with = self.current()
         self.fill(self.opened_with)
+        self.preset_box.refresh_state()
 
     def _send(self, *_args):
         if self._filling:
@@ -223,6 +266,7 @@ class StyleDialog(QDialog):
         self.player._config["subtitle_style"] = style
         self.player.set_style(style)
         self._refresh_labels(style)
+        self.preset_box.refresh_state()
 
     def _refresh_labels(self, style):
         self.y_value.setText(str(int(round(style["position_y"] * 100))))
