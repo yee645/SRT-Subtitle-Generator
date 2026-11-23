@@ -12,7 +12,7 @@
    設定檔在別處時新版的工作目錄設在那裡。
 5. switch_script：順序對（先等程式關掉、再改舊的、再換新的、最後開）；路徑裡的單引號、中文、空白照樣對；
    失敗會換回來；存成 UTF-8 加 BOM、CRLF；執行命令列不開視窗。
-6. cleanup_backup：刪掉 .old；沒有就說沒有。
+6. cleanup_backup：刪掉 .old；沒有就說沒有。self_update_dir：只有打包好的 Windows 資料夾版（exe 是 Qt 版的）能自己更新。
 7. 零 GUI 依賴、不 import config。
 """
 import io
@@ -282,6 +282,14 @@ os.makedirs(os.path.join(app_dir + ".old", "_internal"))
 open(os.path.join(app_dir + ".old", u.EXE_NAME), "wb").write(b"MZ old")
 check("新版啟動：刪掉 .old", u.cleanup_backup(app_dir) is True and not os.path.exists(app_dir + ".old")
       and os.path.isdir(app_dir))
+
+exe = os.path.join(app_dir, u.EXE_NAME)
+check("打包好的 Windows 資料夾版：可以自己更新（回傳程式資料夾）", u.self_update_dir(True, exe, "win32") == app_dir)
+check("exe 名稱大小寫不同也認得（Windows 不分大小寫）", u.self_update_dir(True, exe.upper(), "win32") is not None)
+check("從原始碼跑、不是 Windows、一般版的單一 exe：都不行",
+      u.self_update_dir(False, exe, "win32") is None and u.self_update_dir(True, exe, "linux") is None
+      and u.self_update_dir(True, os.path.join(app_dir, "SRT-Subtitle-Generator.exe"), "win32") is None
+      and u.self_update_dir(True, "", "win32") is None)
 
 # ----- 7 -----
 src = open(u.__file__, encoding="utf-8").read()

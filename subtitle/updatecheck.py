@@ -22,6 +22,8 @@ import json
 import urllib.request
 from typing import Callable, Optional
 
+from subtitle import onedirupdate
+
 GITHUB_OWNER = "yee645"
 GITHUB_REPO = "SRT-Subtitle-Generator"
 API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
@@ -43,10 +45,11 @@ def parse_version(text) -> tuple:
 
 def newer_release(data, current: str) -> Optional[dict]:
     """
-    GitHub「最新 Release」的回應比目前新的話，回傳 {"version", "page", "notes", "qt_zip"}；不比較新、格式不對回 None。
+    GitHub「最新 Release」的回應比目前新的話，回傳 {"version", "page", "notes", "qt_zip", "qt_asset"}；不比較新、格式不對回 None。
 
     `page` 是那一版的 Release 頁面（回應裡沒有就用「最新 Release」的固定網址）；`qt_zip` 是 Qt 預覽版 zip 的檔名
-    （那一版有附的話），讓提示可以講「下載哪一個」。
+    （那一版有附的話），讓提示可以講「下載哪一個」；`qt_asset` 是資料夾版自動更新能下載的 zip
+    （`onedirupdate.pick_zip`：Windows 版、網址是這個專案自己的 Release 附件；沒有就 None）。
     """
     if not isinstance(data, dict):
         return None
@@ -64,7 +67,8 @@ def newer_release(data, current: str) -> Optional[dict]:
         if name.startswith(QT_ZIP_PREFIX) and name.endswith(".zip"):
             qt_zip = name
             break
-    return {"version": tag, "page": page, "notes": str(data.get("body") or ""), "qt_zip": qt_zip}
+    return {"version": tag, "page": page, "notes": str(data.get("body") or ""), "qt_zip": qt_zip,
+            "qt_asset": onedirupdate.pick_zip(data)}
 
 
 def fetch_latest(current: str, timeout: float = 8,
@@ -93,3 +97,25 @@ def notice_text(info: dict, current: str) -> str:
     return (f"有新版本 {info['version']}（目前 v{str(current).lstrip('vV')}）。Qt 預覽版還不能自動更新："
             f"按「開啟下載頁」到 GitHub {where}，解壓到新的資料夾，再把舊資料夾裡的 config.json（設定）與 tools"
             "（一鍵安裝的 ffmpeg、文字辨識）搬過去。")
+
+
+def auto_notice_text(info: dict, current: str) -> str:
+    """能自動更新時（打包好的 Windows 資料夾版、這一版有附 zip）提示列那一句。"""
+    size = int((info.get("qt_asset") or {}).get("size") or 0)
+    about = f"（約 {size / 1e6:.0f} MB）" if size else ""
+    return (f"有新版本 {info['version']}（目前 v{str(current).lstrip('vV')}）。按「下載並安裝」會從 GitHub 下載新版{about}，"
+            "準備好之後，關掉程式時自動換上新版並重新開啟；設定、生字本與一鍵安裝的工具會一起帶過去，"
+            "舊版留到新版開起來才刪。")
+
+
+def progress_text(done: int, total: int) -> str:
+    """下載中的提示：有總數講百分比與 MB，沒有就只講 MB。"""
+    if total > 0:
+        pct = min(100, int(done * 100 / total))
+        return f"正在下載新版 {pct}%（{done / 1e6:.1f}／{total / 1e6:.1f} MB）…可以按「取消下載」。"
+    return f"正在下載新版（{done / 1e6:.1f} MB）…可以按「取消下載」。"
+
+
+READY_TEXT = ("新版已經準備好：關掉程式時會自動換上新版並重新開啟（也可以按「現在重新開啟」）。"
+              "換上之前會先等程式完全關掉；換不過去會照樣開回目前這一版。")
+PREPARING_TEXT = "下載完成，正在解壓並帶上設定與工具…"
