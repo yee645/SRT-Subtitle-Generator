@@ -142,7 +142,8 @@ else:
                                                            panel.thumb_highlight_box, panel.thumb_strip)))
     check("頁面說明：封面候選在「輸出」的「封面候選」那一頁",
           "「封面候選」挑清晰、有內容的畫面輸出 PNG，帶進③的「封面圖」" in rp.PAGE_NOTE)
-    check("狀態列提到封面候選", "章節與發佈包、封面候選、" in win.statusBar().currentMessage())
+    check("狀態列：一般版的功能都搬過來了（第三十五階段起不逐頁列舉；封面候選在導覽裡）",
+          win.statusBar().currentMessage() == qt_app.STATUS_INTRO)
 
     # ----- 2. 封面候選那一頁 -----
     check("鈕的文字跟一般版一樣", btn.text() == "擷取封面候選圖")

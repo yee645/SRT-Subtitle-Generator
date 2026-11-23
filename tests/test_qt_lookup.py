@@ -120,7 +120,8 @@ else:
         if not btn.isVisible():
             break
     check("每一頁都看得到這顆鈕", btn.isVisible())
-    check("狀態列提到即時查譯", "、右上角的即時查譯，其餘" in win.statusBar().currentMessage())
+    check("狀態列：一般版的功能都搬過來了（第三十五階段起不逐頁列舉；即時查譯在導覽裡）",
+          win.statusBar().currentMessage() == qt_app.STATUS_INTRO)
     win.tabs.setCurrentIndex(1)
     check("按之前沒有建小視窗", win.lookup_dialog is None)
     btn.click()

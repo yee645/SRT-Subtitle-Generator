@@ -189,7 +189,8 @@ else:
         w in rp.SHORTS_NOTE for w in ("②現在的字幕與樣式", "不覆蓋", "不能停", "本機", "1080×1920")))
     check("頁面說明提到直式短片、不再寫「還在一般版」", "「直式短片」把選取的段落（或自動選段）輸出成 9:16 短片" in rp.PAGE_NOTE
           and "還在一般版" not in rp.PAGE_NOTE)
-    check("狀態列提到直式短片", "封面候選、直式短片）" in win.statusBar().currentMessage())
+    check("狀態列：一般版的功能都搬過來了（第三十五階段起不逐頁列舉；直式短片在導覽裡）",
+          win.statusBar().currentMessage() == qt_app.STATUS_INTRO)
     check("還沒分析：鈕灰著、按了不做事", not any(b.isEnabled() for b in buttons.values())
           and panel.start_shorts("selected") is False and panel.start_shorts("auto") is False)
     try:

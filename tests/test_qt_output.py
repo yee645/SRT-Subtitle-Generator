@@ -4,7 +4,8 @@
 
 輸出本身跟一般版同一份（subtitle/pipeline.export_and_burn、subtitle/exporter.export）。這裡在真的視窗裡驗：
 
-1. ④頁籤是輸出頁（不是「還沒搬」的說明）；勾選照目前的設定；頁面寫明燒在原始影片上、哪些還在一般版。
+1. ④頁籤是輸出頁（不是「還沒搬」的說明）；勾選照目前的設定；頁面寫明燒在原始影片上、配樂與發佈資料在哪一頁
+   （第三十五階段起不再寫「還在一般版」）。
 2. 「這次會輸出什麼」＝describe_output_plan，勾選一改立刻跟著變、同時寫進這次開啟的設定；
    響度正規化只有勾了燒錄才能調；輸出資料夾可以選。
 3. 不輸出的情況：沒字幕、沒影片、什麼都沒勾、要燒錄但沒有 ffmpeg——都講原因、不開始。
@@ -98,10 +99,13 @@ else:
     check("勾選照目前的設定：只勾 SRT、沒勾燒錄", [n for n, cb in out.format_boxes.items() if cb.isChecked()] == ["srt"]
           and list(out.format_boxes) == ["srt", "vtt", "ass", "txt"] and not out.burn_box.isChecked())
     labels = " ".join(w.text() for w in out.findChildren(type(out.status_label)))
-    check("頁面寫明：燒在原始影片上（剪點、素材軌不算）、不問存哪裡不覆蓋、單獨匯出會問、哪些還在一般版",
+    check("頁面寫明：燒在原始影片上（剪點、素材軌不算）、不問存哪裡不覆蓋、單獨匯出會問、配樂與發佈資料在哪一頁",
           all(w in labels for w in ("原始影片", "剪點、素材軌、轉場、畫面調整不會算進去", "同名就加編號、不覆蓋",
-                                    "會另外問你要存到哪裡", "配樂助手、發佈資料還在一般版")))
-    check("狀態列提到④的匯出、燒錄與品牌套版", "④的匯出、燒錄與品牌套版" in win.statusBar().currentMessage())
+                                    "會另外問你要存到哪裡", "〔配樂設定…〕", "章節與發佈包、封面候選在①審片助手"))
+          and "還在一般版" not in labels, labels)
+    check("狀態列：一般版的功能都搬過來了、指向導覽（第三十五階段換掉逐頁列舉）",
+          win.statusBar().currentMessage() == qt_app.STATUS_INTRO and "〔新介面導覽…〕" in qt_app.STATUS_INTRO
+          and "還在一般版" not in qt_app.STATUS_INTRO and "先用一般版" not in qt_app.STATUS_INTRO)
     check("開始前先套用逐句校對改到一半的", out.before_output == win.cue_panel.commit)
     check("還沒字幕：單獨匯出的鈕灰掉", not any(b.isEnabled() for b in out.export_btns.values()))
 

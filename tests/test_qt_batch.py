@@ -126,8 +126,8 @@ else:
     page = win.tabs.widget(0)
     check("①「素材準備」一列有〔批次一鍵完成（多支）…〕", page.isAncestorOf(win.batch_btn)
           and win.batch_btn.text() == "批次一鍵完成（多支）…" and page.isAncestorOf(win.audiovis_btn))
-    check("狀態列提到批次一鍵完成", "音訊轉影片與批次一鍵完成" in win.statusBar().currentMessage(),
-          win.statusBar().currentMessage())
+    check("狀態列：一般版的功能都搬過來了（第三十五階段起不逐頁列舉；批次一鍵完成在導覽裡）",
+          win.statusBar().currentMessage() == qt_app.STATUS_INTRO)
     QTest.mouseClick(win.batch_btn, Qt.LeftButton)
     wait(50)
     dlg = win.batch_dialog
