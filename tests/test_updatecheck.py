@@ -11,6 +11,8 @@
    JSON、API 異常一律 None。
 4. should_notify：沒新版不提示；按過「這版不再提醒」的那一版（或更舊）不提示；更新的版本照樣提示。
 5. notice_text：講新舊版本、下載哪個、不能自動更新、要把 config.json 與 tools 搬過去。
+   （第 12 項 12-3 起）newer_release 多回傳 qt_asset（資料夾版自動更新能下載的 zip，沒有就 None）；
+   auto_notice_text／progress_text：能自動更新時的提示、下載中的進度。
 6. 零 GUI 依賴、不 import config、不 import updater（改 updater.py 會觸發發版）。
 """
 import io
@@ -43,9 +45,19 @@ release = {"tag_name": "v2.4.0", "html_url": "https://github.com/yee645/SRT-Subt
            "body": "新功能", "assets": [{"name": "SRT-Subtitle-Generator.exe"},
                                        {"name": "SRT-Subtitle-Generator-Qt-preview-v2.4.0.zip"}]}
 info = uc.newer_release(release, "2.3.6")
-check("比目前新：回傳版本、頁面、說明、Qt zip", info == {
+check("比目前新：回傳版本、頁面、說明、Qt zip（附件沒有下載網址：不能自動更新）", info == {
     "version": "v2.4.0", "page": release["html_url"], "notes": "新功能",
-    "qt_zip": "SRT-Subtitle-Generator-Qt-preview-v2.4.0.zip"}, str(info))
+    "qt_zip": "SRT-Subtitle-Generator-Qt-preview-v2.4.0.zip", "qt_asset": None}, str(info))
+url = "https://github.com/yee645/SRT-Subtitle-Generator/releases/download/v3.0.0/SRT-Subtitle-Generator-Qt-v3.0.0-win64.zip"
+auto = uc.newer_release(dict(release, tag_name="v3.0.0", assets=[
+    {"name": "SRT-Subtitle-Generator.exe", "browser_download_url": url.replace("Qt-v3.0.0-win64.zip", ".exe")},
+    {"name": "SRT-Subtitle-Generator-Qt-v3.0.0-win64.zip", "browser_download_url": url, "size": 52_000_000}]), "2.3.6")
+check("（12-3）有 Windows 資料夾版的 zip：qt_asset 是挑出來的附件（跟 onedirupdate.pick_zip 同一套）",
+      auto["qt_asset"] == {"name": "SRT-Subtitle-Generator-Qt-v3.0.0-win64.zip", "url": url, "size": 52_000_000},
+      str(auto))
+check("（12-3）網址不是這個專案的：qt_asset 是 None", uc.newer_release(dict(release, assets=[
+    {"name": "SRT-Subtitle-Generator-Qt-v3.0.0-win64.zip", "browser_download_url": "https://evil.example/x-win64.zip"}]),
+    "2.3.6")["qt_asset"] is None)
 check("一樣、比較舊：None", uc.newer_release(release, "2.4.0") is None and uc.newer_release(release, "v2.5") is None)
 check("草稿、預先發行：None", uc.newer_release(dict(release, draft=True), "2.3.6") is None
       and uc.newer_release(dict(release, prerelease=True), "2.3.6") is None)
@@ -114,6 +126,18 @@ check("提示：講明還不能自動更新、要搬 config.json 與 tools", "�
       and "tools" in text and "開啟下載頁" in text)
 check("沒有 zip：講下載新版", "下載新版" in uc.notice_text(dict(info, qt_zip=""), "v2.3.6")
       and "目前 v2.3.6" in uc.notice_text(dict(info, qt_zip=""), "v2.3.6"))
+auto_text = uc.auto_notice_text(auto, "2.3.6")
+check("（12-3）能自動更新：講版本、大小、關掉時換上、設定與工具一起帶、舊版留到新版開起來",
+      "v3.0.0" in auto_text and "目前 v2.3.6" in auto_text and "約 52 MB" in auto_text and "下載並安裝" in auto_text
+      and "關掉程式時自動換上新版" in auto_text and "設定、生字本與一鍵安裝的工具" in auto_text
+      and "還不能自動更新" not in auto_text, auto_text)
+check("（12-3）不知道大小：不講 MB", "MB" not in uc.auto_notice_text(dict(auto, qt_asset=dict(auto["qt_asset"], size=0)), "2.3.6"))
+check("（12-3）進度：百分比與 MB；不知道總數只講 MB；不超過 100%",
+      uc.progress_text(26_000_000, 52_000_000).startswith("正在下載新版 50%（26.0／52.0 MB）")
+      and uc.progress_text(3_000_000, 0).startswith("正在下載新版（3.0 MB）")
+      and "100%" in uc.progress_text(60, 50) and "取消下載" in uc.progress_text(1, 2))
+check("（12-3）準備好：講關掉時換上、可以現在重新開啟、換不過去開回目前這一版",
+      "現在重新開啟" in uc.READY_TEXT and "關掉程式時會自動換上新版" in uc.READY_TEXT and "開回目前這一版" in uc.READY_TEXT)
 check("寫明會送出去的只有查版本的連線請求", "GitHub" in uc.SENDS and "不含任何檔案、字幕、設定或帳號資訊" in uc.SENDS)
 
 # ----- 6 -----

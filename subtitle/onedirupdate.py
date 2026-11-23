@@ -307,6 +307,19 @@ def script_command(script: str) -> list:
             "-ExecutionPolicy", "Bypass", "-File", script]
 
 
+def self_update_dir(frozen, executable: str, platform: str) -> Optional[str]:
+    """
+    這次執行能不能自己更新：打包好的（frozen）Windows 資料夾版、執行檔就是 Qt 版的 exe，回傳程式資料夾；否則 None。
+
+    從原始碼跑（開發中）、Linux／macOS、一般版的單一 exe 都不行（一般版有自己的 `updater.py`）。
+    """
+    if not frozen or not str(platform).startswith("win"):
+        return None
+    if os.path.basename(str(executable or "")).lower() != EXE_NAME.lower():
+        return None
+    return os.path.dirname(os.path.abspath(executable))
+
+
 def cleanup_backup(app_dir: str) -> bool:
     """新版啟動時呼叫：刪掉切換留下的舊資料夾（`.old`）。回傳有沒有刪到；刪不掉（被占用）就下次再試。"""
     old = backup_path(app_dir)

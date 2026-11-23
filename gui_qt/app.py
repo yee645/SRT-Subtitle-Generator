@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 import config
 from subtitle.configmerge import changed_sections, merge_for_save
 from subtitle import qtguide
+from subtitle.onedirupdate import SENDS as _ONEDIR_SENDS
 from updater import APP_VERSION
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ UPDATE_CHECK_DELAY_MS = 1500  # 跟一般版一樣：開好視窗 1.5 秒後才�
 STATUS_INTRO = ("3.0 預覽版：一般版的功能都搬過來了，四個頁籤照①→④的順序做。"
                 "第一次用可以按右下角的〔新介面導覽…〕看東西在哪。")
 CLOSE_WHILE_INSTALLING = "一鍵安裝還在下載。現在關掉程式，下載會中斷，下次要再安裝一次。還是要關嗎？"
+CLOSE_WHILE_UPDATING = "新版還在下載或準備中。現在關掉程式，這次的下載會作廢，下次要再按一次「下載並安裝」。還是要關嗎？"
 
 # (頁籤名稱, 還沒搬過來時頁面上的說明)。名稱必須與 gui/app.py 的
 # notebook.add(..., text=...) 相同。
@@ -304,8 +306,13 @@ class MainWindow(QMainWindow):
 
     # ----- 有新版本的提示（第 11 項第三十階段） -----
     def _build_update_banner(self):
-        """查到新版時頁籤上方一條提示：〔開啟下載頁〕〔這版不再提醒〕〔關閉提示〕。平常收著。"""
-        from gui_qt.update_notice import UpdateWorker
+        """
+        查到新版時頁籤上方一條提示：〔開啟下載頁〕〔這版不再提醒〕〔關閉提示〕。平常收著。
+
+        第 12 項 12-3 起：打包好的 Windows 資料夾版、新版有附 zip 時多一顆〔下載並安裝〕（下載中變〔取消下載〕，
+        準備好變〔現在重新開啟〕）；關掉程式時跑切換腳本換上新版。
+        """
+        from gui_qt.update_notice import InstallWorker, UpdateWorker
         from subtitle import updatecheck
 
         self.update_info = None
@@ -324,11 +331,26 @@ class MainWindow(QMainWindow):
         self.update_skip_btn.clicked.connect(lambda _c=False: self.skip_update())
         self.update_close_btn = QPushButton("關閉提示")
         self.update_close_btn.clicked.connect(lambda _c=False: self.update_banner.setVisible(False))
-        for btn in (self.update_open_btn, self.update_skip_btn, self.update_close_btn):
+        self.update_install_btn = QPushButton("下載並安裝")
+        self.update_install_btn.setToolTip(updatecheck.SENDS + "\n" + "下載新版：" + _ONEDIR_SENDS)
+        self.update_install_btn.clicked.connect(lambda _c=False: self.install_update())
+        self.update_cancel_btn = QPushButton("取消下載")
+        self.update_cancel_btn.clicked.connect(lambda _c=False: self.cancel_update_install())
+        self.update_restart_btn = QPushButton("現在重新開啟")
+        self.update_restart_btn.clicked.connect(lambda _c=False: self.close())
+        for btn in (self.update_install_btn, self.update_cancel_btn, self.update_restart_btn, self.update_open_btn,
+                    self.update_skip_btn, self.update_close_btn):
             row.addWidget(btn)
+        for btn in (self.update_install_btn, self.update_cancel_btn, self.update_restart_btn):
+            btn.setVisible(False)
         self.update_banner.setVisible(False)
         self.update_worker = UpdateWorker(self)
         self.update_worker.finished.connect(self.show_update)
+        self.install_worker = InstallWorker(self)
+        self.install_worker.progress.connect(self._on_update_progress)
+        self.install_worker.preparing.connect(self._on_update_preparing)
+        self.install_worker.finished.connect(self._on_update_installed)
+        self.pending_switch = None  # 準備好的切換腳本：關掉程式時執行
         return self.update_banner
 
     def start_update_check(self):
@@ -343,9 +365,82 @@ class MainWindow(QMainWindow):
         if not updatecheck.should_notify(info, skipped):
             return False
         self.update_info = info
-        self.update_label.setText(updatecheck.notice_text(info, APP_VERSION))
+        auto = bool(info.get("qt_asset")) and self._self_update_dir() is not None and self.pending_switch is None
+        self.update_label.setText(updatecheck.auto_notice_text(info, APP_VERSION) if auto
+                                  else updatecheck.notice_text(info, APP_VERSION))
+        self.update_install_btn.setVisible(auto)
         self.update_banner.setVisible(True)
         return True
+
+    # ----- 資料夾版自動更新（第 12 項 12-3） -----
+    def _self_update_dir(self):  # 測試換掉
+        """能自己更新的話回傳程式資料夾（打包好的 Windows 資料夾版）；從原始碼跑、其他平台回 None。"""
+        from subtitle import onedirupdate
+        return onedirupdate.self_update_dir(getattr(sys, "frozen", False), sys.executable, sys.platform)
+
+    def _config_dir(self):
+        return os.path.dirname(os.path.abspath(config.CONFIG_PATH))
+
+    def updating(self):
+        """新版還在下載或準備中。"""
+        return self.install_worker.busy
+
+    def install_update(self):
+        """〔下載並安裝〕：背景下載、解到旁邊、帶上設定與工具、寫好切換腳本。回傳有沒有開始。"""
+        from subtitle import updatecheck
+        app_dir = self._self_update_dir()
+        asset = (self.update_info or {}).get("qt_asset")
+        if not app_dir or not asset or self.pending_switch:
+            return False
+        if not self.install_worker.start(asset, self.update_info["version"], app_dir, self._config_dir(), os.getpid()):
+            return False
+        self.update_label.setText(updatecheck.progress_text(0, int(asset.get("size") or 0)))
+        self.update_install_btn.setVisible(False)
+        self.update_cancel_btn.setVisible(True)
+        self.update_cancel_btn.setEnabled(True)
+        for btn in (self.update_open_btn, self.update_skip_btn, self.update_close_btn):
+            btn.setEnabled(False)
+        return True
+
+    def cancel_update_install(self):
+        self.install_worker.cancel()
+        self.update_cancel_btn.setEnabled(False)
+
+    def _on_update_progress(self, done, total):
+        from subtitle import updatecheck
+        self.update_label.setText(updatecheck.progress_text(done, total))
+
+    def _on_update_preparing(self):
+        from subtitle import updatecheck
+        self.update_label.setText(updatecheck.PREPARING_TEXT)
+        self.update_cancel_btn.setEnabled(False)  # 解壓、複製不能停一半
+
+    def _on_update_installed(self, result):
+        from subtitle import updatecheck
+        self.update_cancel_btn.setVisible(False)
+        for btn in (self.update_open_btn, self.update_skip_btn, self.update_close_btn):
+            btn.setEnabled(True)
+        if "error" in result:
+            self.update_label.setText(f"{result['error']}（可以再按一次「下載並安裝」，或到下載頁自己下載。）")
+            self.update_install_btn.setVisible(True)
+            return
+        self.pending_switch = result["script"]
+        self.update_label.setText(updatecheck.READY_TEXT)
+        self.update_restart_btn.setVisible(True)
+        self.update_skip_btn.setVisible(False)
+
+    def _ask_close_while_updating(self):  # 測試換掉
+        from PySide6.QtWidgets import QMessageBox
+        return QMessageBox.question(self, "還在下載新版", CLOSE_WHILE_UPDATING) == QMessageBox.Yes
+
+    def _spawn_switch(self, script):  # 測試換掉
+        """關掉程式時：另開一個不跟著結束的行程跑切換腳本（等這個程式關掉才換資料夾）。"""
+        import subprocess
+        from subtitle import onedirupdate
+        flags = 0
+        for name in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP", "CREATE_NO_WINDOW"):
+            flags |= getattr(subprocess, name, 0)
+        subprocess.Popen(onedirupdate.script_command(script), creationflags=flags, close_fds=True)
 
     def _open_url(self, url):  # 測試換掉
         from PySide6.QtCore import QUrl
@@ -508,6 +603,11 @@ class MainWindow(QMainWindow):
                 and not self.output_panel.ask_close_while_burning()):  # ④的硬字幕影片還在燒錄
             event.ignore()
             return
+        if self.updating():  # 新版還在下載或解壓
+            if not self._ask_close_while_updating():
+                event.ignore()
+                return
+            self.install_worker.cancel()
         for dialog in (self.ffmpeg_dialog, self.ocr_dialog):  # 一鍵安裝還在下載：關掉程式下載就斷了
             if dialog is not None and dialog.installing() and not self._ask_close_while_installing():
                 event.ignore()
@@ -523,6 +623,12 @@ class MainWindow(QMainWindow):
             self.player_panel.shutdown()
         self.save_settings()
         super().closeEvent(event)
+        if self.pending_switch:  # 走到這裡就是真的要關了（關不掉的上面都 return 了）；準備好的新版：程式關掉後由切換腳本換上並重新開啟
+            script, self.pending_switch = self.pending_switch, None
+            try:
+                self._spawn_switch(script)
+            except OSError:
+                logging.getLogger(__name__).exception("無法執行更新切換腳本：%s", script)
 
     def save_settings(self):
         """
@@ -546,6 +652,14 @@ class MainWindow(QMainWindow):
 SELFTEST_FLAG = "--selftest"
 
 
+def _cleanup_previous_update():
+    """上一次自動更新換下來的舊資料夾（`<程式資料夾>.old`）：新版開得起來了才刪（第 12 項 12-3）。"""
+    from subtitle import onedirupdate
+    app_dir = onedirupdate.self_update_dir(getattr(sys, "frozen", False), sys.executable, sys.platform)
+    if app_dir:
+        onedirupdate.cleanup_backup(app_dir)
+
+
 def main(argv=None):
     """
     建立並執行 Qt 版。回傳事件迴圈的結束碼。
@@ -558,6 +672,7 @@ def main(argv=None):
     from subtitle.ffmpeg_setup import ensure_ffmpeg_on_path
     ensure_ffmpeg_on_path()
     app = QApplication.instance() or QApplication(argv[:1])
+    _cleanup_previous_update()
     data = config.load_config()
     apply_theme(app, data.get("theme", "light"))
     win = MainWindow(data, persist=SELFTEST_FLAG not in argv)  # 自檢模式不碰使用者的設定檔

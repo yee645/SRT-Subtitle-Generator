@@ -64,7 +64,7 @@ TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
  "test_correctionrules.py", "test_qt_corrections.py",
  "test_qt_theme_toggle.py",
  "test_qtguide.py", "test_qt_guide.py",
- "test_onedirupdate.py"]
+ "test_onedirupdate.py", "test_qt_selfupdate.py"]
 
 
 def main() -> int:
