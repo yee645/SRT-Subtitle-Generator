@@ -9,7 +9,8 @@
 2. 起一個工作目錄在舊版資料夾裡的行程（模擬還開著的程式：Windows 上它在就不能改名），4 秒後自己結束。
 3. 解壓新版、帶上設定與工具、寫切換腳本、用 `script_command` 的同一套命令列跑 PowerShell。
 4. 驗：腳本等到那個行程結束才換；舊的變成 `.old`、新的換上原本的名字、暫存資料夾不見；設定與工具在；
-   新版的 exe 真的被開起來（從換上的資料夾，工作目錄就是那裡）。最後關掉它、刪 `.old`。
+   新版的 exe 真的被開起來（從換上的資料夾，工作目錄就是那裡）、而且**新版自己**把 `.old` 刪掉
+   （`gui_qt/app.py` 的 `_cleanup_previous_update`，不是由這裡代刪）。最後關掉它。
 
 用法：`python packaging/switch_selftest.py <zip>`。結果寫進 `switch_selftest_report.json` 與工作流程摘要；
 有一項不對就回傳 1。不是 Windows 就印一行略過、回傳 0（本機的單元測試在 tests/test_onedirupdate.py）。
@@ -106,6 +107,16 @@ def run(zip_path):
         if pids:
             break
         time.sleep(0.5)
+    # 新版的 main() 一開始就刪上一次換下來的 .old（gui_qt/app.py 的 _cleanup_previous_update）：
+    # 等它自己刪（剛寫下的檔可能被防毒掃描占住一下），不是由這裡代刪
+    for _ in range(40):
+        if not os.path.exists(old):
+            break
+        time.sleep(0.5)
+    left = []
+    for root, _dirs, files in os.walk(old):
+        left += [os.path.relpath(os.path.join(root, f), old) for f in files]
+    check("新版開起來時自己刪掉 .old", not os.path.exists(old), f"還在，剩 {len(left)} 個檔：{left[:10]}")
     check("新版真的被開起來（從換上的資料夾）", pids, _ps(f"Get-Process -Name '{odu.EXE_NAME[:-4]}' "
                                                    "-ErrorAction SilentlyContinue | Select-Object Id,Path | Out-String"))
     for pid in pids:
@@ -114,11 +125,6 @@ def run(zip_path):
         if not _running_from(app_dir):
             break
         time.sleep(0.25)
-    cleaned = odu.cleanup_backup(app_dir, attempts=40, delay=0.5)  # 防毒軟體掃描剛寫下的檔，最多等 20 秒
-    left = []
-    for root, _dirs, files in os.walk(old):
-        left += [os.path.relpath(os.path.join(root, f), old) for f in files]
-    check("新版啟動時刪掉 .old", cleaned and not os.path.exists(old), f"刪不掉 {len(left)} 個檔：{left[:10]}")
     shutil.rmtree(work, ignore_errors=True)
     return checks, round(elapsed, 2)
 

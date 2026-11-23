@@ -70,12 +70,13 @@ check("release 說明不再寫「目前只有外框」、講得到程式裡可�
 # ----- 4 -----
 src = read("packaging/switch_selftest.py")
 check("走 onedirupdate 的同一套", all(f"odu.{fn}(" in src for fn in (
-    "check_zip", "extract", "carry_over", "switch_script", "write_script", "script_command", "cleanup_backup",
+    "check_zip", "extract", "carry_over", "switch_script", "write_script", "script_command",
     "work_dir", "backup_path")))
 check("路徑含中文、空白、單引號", "更新 測試 O'Brien" in src)
 check("有「還開著的程式」佔住舊資料夾、驗等它關掉才換", "cwd=app_dir" in src and "等程式關掉才換" in src
       and "HOLD_SECONDS" in src)
 check("驗新版真的開起來、從換上的資料夾", "新版真的被開起來" in src and "_running_from(app_dir)" in src)
+check("驗 .old 是新版自己刪的（不是實測代刪）", "新版開起來時自己刪掉 .old" in src and "cleanup_backup" not in src.split("def run(")[1])
 
 print()
 if failures:
