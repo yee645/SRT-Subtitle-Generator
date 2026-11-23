@@ -317,6 +317,9 @@ if old_app_src is not None:
         # 3.0 第 11 項第三十二階段：轉寫設定的整理規則、金鑰遮罩、「會送什麼」那一句。Qt 版以前沒有轉寫設定
         # （金鑰要到一般版填），切預設前補上（全新檔案，零 GUI 依賴、不 import config；一般版不改）。
         "subtitle/transcribecfg.py",
+        # 3.0 第 11 項第三十三階段：自動修正詞庫的增刪（存一條、刪一條、清單上的寫法），一般版尋找取代視窗下面那一框
+        # 搬到 Qt；多一個「滿了不再加」的檢查（全新檔案，零 GUI 依賴、不 import config；一般版不改）。
+        "subtitle/correctionrules.py",
         # 3.0 第 2 項：某一刻該顯示哪一句字幕。播放器疊加層與之後的時間軸
         # 共用，放核心層才不會兩邊各寫一份（全新檔案，零 GUI 依賴）。
         "subtitle/cuetime.py",
