@@ -3,7 +3,8 @@
 生成字幕（3.0 第 11 項第六階段）：播放列的「生成字幕…」打開這個小視窗。
 
 生成本身跟一般版同一套（`subtitle/pipeline.generate_cues`：Whisper 語音轉寫或文字稿對齊 → 智慧斷句 →
-自動修正詞庫），用一般版「轉寫設定」裡的模型、提示詞、金鑰與快取。這裡多做的幾件事：
+自動修正詞庫），用「轉寫設定」裡的模型、提示詞、金鑰與快取（第三十二階段起 Qt 版自己能改：
+〔轉寫設定…〕，跟主視窗右上角〔轉寫與金鑰…〕同一個視窗）。這裡多做的幾件事：
 
 * **開始前寫清楚會不會送出去**（`pipeline.generation_plan`）：本地 Whisper 什麼都不送；OpenAI 模式寫明
   送聲音（文字稿對齊時文字稿也會當提示詞送）、照用量收費。OpenAI 模式沒有金鑰就不能按開始。
@@ -26,7 +27,7 @@ from subtitle.errors import describe_exception
 from subtitle.transcriber import LANGUAGE_LABELS
 
 MODE_LABELS = (("transcribe", "語音轉寫（Whisper 聽聲音）"), ("align", "文字稿對齊（已有講稿，只對時間）"))
-NO_KEY = "轉寫設定是用 OpenAI，但還沒有金鑰：請先在一般版（不加 --qt）的「轉寫設定」填好，或改回本地 Whisper。"
+NO_KEY = "轉寫設定是用 OpenAI，但還沒有金鑰：請先按下面的〔轉寫設定…〕填好，或改回本地 Whisper。"
 
 
 class GenerateWorker(QObject):
@@ -114,6 +115,9 @@ class GenerateDialog(QDialog):
         self.start_btn.setDefault(True)
         self.cancel_btn = QPushButton("取消")
         self.close_btn = QPushButton("關閉")
+        self.settings_btn = QPushButton("轉寫設定…")
+        self.settings_btn.setToolTip("Whisper 模型、OpenAI API 與金鑰、提示詞（跟主視窗右上角〔轉寫與金鑰…〕同一份）")
+        self.settings_dialog = None
 
         form = QFormLayout()
         form.addRow("做法：", modes)
@@ -122,6 +126,7 @@ class GenerateDialog(QDialog):
         buttons.addWidget(self.start_btn)
         buttons.addWidget(self.cancel_btn)
         buttons.addStretch(1)
+        buttons.addWidget(self.settings_btn)
         buttons.addWidget(self.close_btn)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
@@ -137,6 +142,7 @@ class GenerateDialog(QDialog):
         self.language_box.currentIndexChanged.connect(lambda *_a: self.refresh())
         self.transcript_edit.textChanged.connect(self.refresh)
         self.start_btn.clicked.connect(self.start)
+        self.settings_btn.clicked.connect(lambda _c=False: self.open_settings())
         self.cancel_btn.clicked.connect(self.cancel)
         self.close_btn.clicked.connect(self.close)
         self.worker.progress.connect(self._on_progress)
@@ -204,7 +210,7 @@ class GenerateDialog(QDialog):
                          "第一次用這個模型要先下載；影片越長、模型越大越久。")
         if self.player.cues:
             lines.append(f"生成完會換掉目前的 {len(self.player.cues)} 句字幕。")
-        lines.append("斷句照②「字幕樣式…」裡的斷句設定。模型、提示詞與金鑰照一般版的「轉寫設定」，要改請到一般版。")
+        lines.append("斷句照②「字幕樣式…」裡的斷句設定。模型、提示詞與金鑰照〔轉寫設定…〕（主視窗右上角的〔轉寫與金鑰…〕是同一份）。")
         self.notice.setText("\n".join(lines))
 
         ready = bool(self.player.media_path) and (plan["has_key"] or not plan["api"])
@@ -216,6 +222,7 @@ class GenerateDialog(QDialog):
         self.transcript_edit.setReadOnly(busy)
         for button in self.mode_buttons.values():
             button.setEnabled(not busy)
+        self.settings_btn.setEnabled(not busy)  # 生成中改設定沒有用（這次已經照舊的跑）
 
     def start(self):
         """開始生成（背景跑）。回傳是否開始了。"""
@@ -233,6 +240,25 @@ class GenerateDialog(QDialog):
         self.worker.start(self.player.media_path, config, self.mode(), self.transcript_edit.toPlainText())
         self.refresh()
         return True
+
+    def open_settings(self):
+        """〔轉寫設定…〕：蓋在這個視窗上打開轉寫與金鑰設定；套用後語言照設定擺、說明重寫。"""
+        from gui_qt.transcribe_dialog import TranscriptionDialog
+
+        if self.settings_dialog is None:
+            self.settings_dialog = TranscriptionDialog(self.player._config, self)
+            self.settings_dialog.applied.connect(self._on_settings_applied)
+        self.settings_dialog.reload()
+        self.settings_dialog.open()
+        return self.settings_dialog
+
+    def _on_settings_applied(self, message):
+        language = str((self.player._config.get("transcription") or {}).get("language") or "auto")
+        index = self.language_box.findData(language)
+        if index >= 0:
+            self.language_box.setCurrentIndex(index)
+        self.status.setText(message)
+        self.refresh()
 
     def cancel(self):
         """取消：結果不套用。Whisper 沒辦法從中間打斷，背景跑完才真的停。"""

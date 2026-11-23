@@ -7,7 +7,7 @@
 
 1. 頁籤列右上角有〔即時查譯…〕，每一頁都看得到；開小視窗（不擋主視窗、只建一個）；關＝收起來，快取與生字本留著。
 2. 說明寫明送什麼（只有選取的文字、送到 OpenAI）、不送什麼。
-3. 沒金鑰：自動翻譯灰掉、說明指向一般版「轉寫設定」，選字、按鈕都不送；這次開啟的設定填了金鑰，重新打開就能用。
+3. 沒金鑰：自動翻譯灰掉、說明指向主視窗右上角〔轉寫與金鑰…〕，選字、按鈕都不送；這次開啟的設定填了金鑰，重新打開就能用。
 4. 選字即翻：②的編輯框、①的搜尋框選字、放開滑鼠 → 去抖動後送出；面板收起來就不看；密碼欄位不拿；
    像密碼的內容不送；太短、已經是中文、太長各講原因；同一句不重送；快取命中不再送。
 5. 〔翻譯選取內容〕：最近選到的字；沒選字翻②字幕清單選中那一句；都沒有講原因。
@@ -110,7 +110,10 @@ else:
 
     # ----- 1. 按鈕與小視窗 -----
     btn = win.lookup_btn
-    check("頁籤列右上角有〔即時查譯…〕", win.tabs.cornerWidget(Qt.TopRightCorner) is btn and btn.text() == "即時查譯…")
+    # 第三十二階段起右上角是一組（〔轉寫與金鑰…〕〔即時查譯…〕），〔即時查譯…〕在最右邊
+    corner = win.tabs.cornerWidget(Qt.TopRightCorner)
+    check("頁籤列右上角有〔即時查譯…〕（最右邊）", btn.parent() is corner and btn.text() == "即時查譯…"
+          and corner.layout().itemAt(corner.layout().count() - 1).widget() is btn)
     for i in range(win.tabs.count()):
         win.tabs.setCurrentIndex(i)
         wait(10)
@@ -139,8 +142,10 @@ else:
 
     # ----- 3. 沒金鑰 -----
     check("沒金鑰：自動翻譯灰掉", not dlg.auto_box.isEnabled())
-    check("沒金鑰：說明指向一般版「轉寫設定」", "轉寫設定" in dlg.dst_text.toPlainText()
-          and "一般版" in dlg.dst_text.toPlainText() and dlg.status_label.text() == qd.NOKEY_STATUS)
+    # 第三十二階段起 Qt 版自己有轉寫與金鑰設定：改成指向主視窗右上角〔轉寫與金鑰…〕
+    check("沒金鑰：說明指向〔轉寫與金鑰…〕", dlg.dst_text.toPlainText() == qd.NOKEY_BODY
+          and "〔轉寫與金鑰…〕" in qd.NOKEY_BODY and "一般版" not in qd.NOKEY_BODY
+          and dlg.status_label.text() == qd.NOKEY_STATUS)
     editor = win.cue_panel.editor
     editor.setPlainText("The quick brown fox jumps over the lazy dog")
     editor.setFocus()

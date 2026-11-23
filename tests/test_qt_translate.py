@@ -5,7 +5,7 @@
 翻譯走一般版同一套 subtitle/translator.py；openai 用替身（不連網、可以卡住或出錯）。QTest 真的點：
 
 1. 按鈕：沒字幕灰掉；有字幕可以按。編輯框裡改到一半的先套用，翻的是套用後的。
-2. 沒金鑰：說去一般版「轉寫設定」填，「開始翻譯」灰掉。有金鑰：寫清楚會送幾句、幾個字、什麼不送。
+2. 沒金鑰：說去主視窗右上角〔轉寫與金鑰…〕填（第三十二階段前是一般版「轉寫設定」），「開始翻譯」灰掉。有金鑰：寫清楚會送幾句、幾個字、什麼不送。
    預設的語言與做法照設定。
 3. 翻譯（雙語）：清單、時間軸、畫面上的字幕都換；逐字時間軸拿掉；狀態列「文字改過 3 處」；
    下面寫翻成什麼、改了幾句；視窗關掉。送出去的只有文字。選的語言只記在這次開啟的設定裡，
@@ -83,6 +83,7 @@ else:
     import config  # noqa: E402
     from gui_qt import app as qt_app  # noqa: E402
     from gui_qt import timeline as tl  # noqa: E402
+    from gui_qt import translate_dialog as td  # noqa: E402
 
     app = QApplication.instance() or QApplication([])
     tmp = tempfile.mkdtemp()
@@ -136,7 +137,9 @@ else:
     dlg = cp.translate_dialog
     check("打開翻譯視窗（擋住主視窗）", dlg is not None and dlg.isVisible()
           and dlg.windowModality() == Qt.WindowModal)
-    check("沒金鑰：說去一般版「轉寫設定」填、開始灰掉", "轉寫設定" in dlg.notice.text() and "金鑰" in dlg.notice.text()
+    # 第三十二階段起 Qt 版自己有轉寫與金鑰設定：改成指向主視窗右上角〔轉寫與金鑰…〕
+    check("沒金鑰：說去〔轉寫與金鑰…〕填、開始灰掉", dlg.notice.text() == td.NO_KEY
+          and "〔轉寫與金鑰…〕" in dlg.notice.text() and "一般版" not in dlg.notice.text()
           and not dlg.start_btn.isEnabled(), dlg.notice.text())
     check("預設的語言與做法照設定（日文、只留譯文）", dlg.language_box.currentText() == "日文"
           and dlg.mode_buttons["replace"].isChecked())
