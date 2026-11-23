@@ -81,7 +81,8 @@ class CueListPanel(QWidget):
         self.translate_btn.setToolTip("用 OpenAI 把整份字幕翻成別的語言（送出前會先說送什麼）")
         self.translate_dialog = None
         self.style_btn = QPushButton("字幕樣式…")
-        self.style_btn.setToolTip("字型、字級、顏色、上下位置、重點字、動態字幕；播放器上立刻看得到")
+        self.style_btn.setToolTip("字型、字級、顏色、上下位置、重點字、動態字幕；播放器上立刻看得到。"
+                                  "也有習慣設定（樣式組合）與斷句設定")
         self.style_dialog = None
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
@@ -297,7 +298,7 @@ class CueListPanel(QWidget):
         if self.style_dialog is None:
             from gui_qt.style_panel import StyleDialog
             self.style_dialog = StyleDialog(self.player, self)
-        self.style_dialog.fill(self.style_dialog.current())
+        self.style_dialog.reload()
         self.style_dialog.show()
         self.style_dialog.raise_()
         return self.style_dialog

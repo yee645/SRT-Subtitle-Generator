@@ -311,6 +311,9 @@ if old_app_src is not None:
         # 3.0 第 11 項第三十階段：Qt 版的「有新版本」提示——查 GitHub 最新 Release、比版本、組提示文字。
         # 不改 updater.py（改它會觸發 release.yml 發版），Qt 版 onedir 也不能用 exe 就地替換（全新檔案，零 GUI 依賴）。
         "subtitle/updatecheck.py",
+        # 3.0 第 11 項第三十一階段：習慣設定與斷句設定的規則（斷句夾限、另存名字、刪除至少留一組），從 gui/app.py
+        # 抽出給 Qt 版用，規則一樣（全新檔案，零 GUI 依賴、不 import config；一般版不改）。
+        "subtitle/profiles.py",
         # 3.0 第 2 項：某一刻該顯示哪一句字幕。播放器疊加層與之後的時間軸
         # 共用，放核心層才不會兩邊各寫一份（全新檔案，零 GUI 依賴）。
         "subtitle/cuetime.py",
