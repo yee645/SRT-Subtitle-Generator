@@ -308,6 +308,9 @@ if old_app_src is not None:
         # 3.0 第 11 項第二十八階段：Qt 版存設定時只寫這次改過的最上層區塊（三方合併），一般版同時開著
         # 存的東西才不會被蓋掉。純計算、讀寫檔由呼叫端做（全新檔案，零 GUI 依賴、不 import config）。
         "subtitle/configmerge.py",
+        # 3.0 第 11 項第三十階段：Qt 版的「有新版本」提示——查 GitHub 最新 Release、比版本、組提示文字。
+        # 不改 updater.py（改它會觸發 release.yml 發版），Qt 版 onedir 也不能用 exe 就地替換（全新檔案，零 GUI 依賴）。
+        "subtitle/updatecheck.py",
         # 3.0 第 2 項：某一刻該顯示哪一句字幕。播放器疊加層與之後的時間軸
         # 共用，放核心層才不會兩邊各寫一份（全新檔案，零 GUI 依賴）。
         "subtitle/cuetime.py",

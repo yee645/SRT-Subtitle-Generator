@@ -2358,7 +2358,7 @@ Python 的那條路（跟一般版同一段程式，一般版用了很久，但 
 | 16 | ✅ **①其餘**（✅（一）音訊轉影片 2026-11-21；✅（二）批次一鍵完成 2026-11-21——這一列完成）：音訊轉影片、批次（多檔一鍵完成） | ①「素材準備」、動作列 | `audiovis`、`pipeline` | 匯入字幕、剪停頓、剪重複 Qt 已有 |
 | 17 | ✅ **即時查譯＋螢幕畫面翻譯**（✅（一）查譯面板與生字本 2026-11-21；✅（二）朗讀與剪貼簿監聽 2026-11-21；✅（三）框選螢幕翻譯 2026-11-22；✅（四）全域熱鍵 2026-11-22——這一列完成）（含生字本、朗讀、全域熱鍵、剪貼簿監聽） | `quicktranslate_panel`、`region_overlay` | `quicktranslate`、`screentranslate`、`ocrengine`、`speech`、`hotkey`、`clipwatch` | 搬法見下面「螢幕畫面翻譯搬到 Qt 時的參考」；隱私規則原樣沿用 |
 | 18 | ✅ **系列一致性**（2026-11-23 完成） | `series_dialog` | `seriescheck` | 獨立小工具；入口在③健檢頁，清單只放在比對視窗裡 |
-| 19 | **雜項**（進行中：✅（一）Qt 版寫 config.json 2026-11-23；✅（二）ffmpeg／tesseract 一鍵安裝 2026-11-23）：ffmpeg／tesseract 一鍵安裝視窗、自動更新提示、習慣設定（樣式組合）、Qt 版寫 config.json、首次啟動導覽 | 各對話框 | `ffmpeg_setup`、`tesseract_setup`、`updater` | Qt 版到這裡才開始寫設定檔（之前刻意不寫，避免預覽版弄壞一般版的設定） |
+| 19 | **雜項**（進行中：✅（一）Qt 版寫 config.json 2026-11-23；✅（二）ffmpeg／tesseract 一鍵安裝 2026-11-23；✅（三）新版本提示 2026-11-23）：ffmpeg／tesseract 一鍵安裝視窗、自動更新提示、習慣設定（樣式組合）、Qt 版寫 config.json、首次啟動導覽 | 各對話框 | `ffmpeg_setup`、`tesseract_setup`、`updater` | Qt 版到這裡才開始寫設定檔（之前刻意不寫，避免預覽版弄壞一般版的設定） |
 
 全部做完才進第 12 項（切換預設＋四個產出物＝3.0.0）。順序可以因為實際做下去的發現再調，調的時候在這裡寫原因。
 
@@ -3172,6 +3172,32 @@ Ctrl／Command 的對應；在別的程式（遊戲）裡按。
 tesseract 安裝檔。
 
 **下一步**：第 19 列（三）——自動更新提示（`updater`）。
+
+### 第 11 項第三十階段：雜項（三）——新版本提示（2026-11-23）
+
+題目與範圍：第 19 列第三段。一般版啟動 1.5 秒後背景查 GitHub 最新 Release，有新版就問要不要下載並**就地替換單一 exe**。
+Qt 版是 onedir（一整個資料夾，第 0 項的決定），那套替換不能用；第 0 項就寫了「資料夾版的自動更新延到切換預設（3.0.0）
+前再解」。所以這一階段**只做提示**：查到新版就在頁籤上方講、給 Release 頁面，自動下載與切換留到第 12 項跟四個產出物
+一起設計（**第 12 項的待辦**：onedir 的自動更新——下載 zip、解到旁邊、下次啟動切換、保留 config.json 與 tools）。
+
+做法：
+
+- `subtitle/updatecheck.py`（新，零 GUI 依賴）：自己解析同一個 GitHub API 的回應。**不 import、不改 `updater.py`**：
+  `updater.check_for_update` 找不到 exe 附件就當沒有新版；改 `updater.py` 會觸發 `release.yml` 發版。版本比較規則跟
+  `updater._parse_version` 一樣（測試逐一比對）。草稿、預先發行不算；Release 頁面只開 GitHub 自己的網址；認得 Qt 預覽版 zip。
+- `gui_qt/update_notice.py`（新）：背景查（UpdateWorker）。`main()` 開的視窗啟動 1.5 秒後查一次（同一般版）；測試建的
+  視窗、自檢模式不查。
+- 提示列在 ffmpeg 提示下面：講新舊版本、下載哪個 zip、**還不能自動更新**、解壓到新資料夾後要把舊資料夾的 config.json
+  與 tools（一鍵安裝的 ffmpeg、文字辨識）搬過去；〔開啟下載頁〕〔這版不再提醒〕（記進設定 `qt_update.skipped_version`，
+  更新的版本照樣提醒）〔關閉提示〕。
+- **會送出去的**：一個查最新 Release 的一般連線請求（GET、固定 User-Agent），不含任何檔案、字幕、設定或帳號資訊；
+  寫在提示列的說明裡。查不到（離線、被擋）一律當作沒有新版。
+
+測試：`tests/test_updatecheck.py`（新，不連網：換掉 opener）、`tests/test_qt_update_notice.py`（新，換掉 fetch_latest）。
+
+**容器裡驗不到**：真的連 GitHub API（測試不連網）；Windows 上用預設瀏覽器開下載頁。
+
+**下一步**：第 19 列（四）——習慣設定（樣式組合，`config.make_profile`／`presets`）。
 
 ### 螢幕畫面翻譯搬到 Qt 時的參考（2026-09-23 實測）
 
