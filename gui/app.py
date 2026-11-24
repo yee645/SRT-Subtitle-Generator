@@ -31,6 +31,7 @@ except ImportError:
 from config import describe_preset_state, load_config, make_profile, save_config
 from updater import (APP_VERSION, check_for_update, cleanup_old_version,
                      download_and_apply)
+from subtitle import qtbridge
 from subtitle.aligner import align_transcript
 from subtitle.burner import burn_subtitles, ffmpeg_available
 from subtitle.exporter import FORMAT_FILETYPES, export, format_srt_timestamp
@@ -55,6 +56,7 @@ from gui.autotrim_dialog import (TAB_GAPS, TAB_RETAKES,
 from gui.music_dialog import MusicDuckingDialog
 from gui.preview_panel import PreviewPanel
 from gui.quicktranslate_panel import QuickTranslatePanel
+from gui.qtbridge_dialog import QtBridgeDialog
 from gui.replace_dialog import ReplaceDialog
 from gui.review_window import ReviewWindow
 from gui.scrollable import ScrollableFrame
@@ -2269,6 +2271,8 @@ class SrtApp(tk.Tk):
                     self._on_burn_error(payload)
                 elif kind == "update":
                     self._prompt_update(payload)
+                elif kind == "qt_bridge":
+                    self._offer_qt_bridge(*payload)
                 elif kind == "update_done":
                     self._on_update_done()
                 elif kind == "update_error":
@@ -2308,10 +2312,33 @@ class SrtApp(tk.Tk):
         threading.Thread(target=self._update_check_worker, daemon=True).start()
 
     def _update_check_worker(self):
-        """背景執行緒：查詢 GitHub 最新版本。"""
+        """
+        背景執行緒：查詢 GitHub 最新版本。
+
+        沒有新的一般版時，再看要不要提示「3.0 新介面」（3.0 第 12 項 12-5 的橋）：打包好的 Windows 一般版、
+        exe 旁邊還沒裝、沒勾過不再提醒，而且最新 Release 是附了資料夾版 zip 的 3.0 以後正式版。有新的一般版時
+        先更新一般版（更新後重開，下次再提示），不同時跳兩個視窗。
+        """
         info = check_for_update()
         if info:
             self.result_queue.put(("update", info))
+            return
+        exe_dir = qtbridge.bridge_dir(getattr(sys, "frozen", False), sys.executable, sys.platform)
+        if not qtbridge.should_offer(exe_dir, self.config_data.get(qtbridge.CONFIG_KEY)):
+            return
+        offer = qtbridge.fetch_offer()
+        if offer:
+            self.result_queue.put(("qt_bridge", (offer, exe_dir)))
+
+    def _offer_qt_bridge(self, offer, exe_dir):
+        """跳「3.0 新介面」提示；勾了不再提醒就記進設定。"""
+        def remember(never):
+            if never:
+                self.config_data[qtbridge.CONFIG_KEY] = qtbridge.NEVER
+                self._save_config_silently()
+
+        self._qt_bridge_dialog = QtBridgeDialog(
+            self, offer, exe_dir, os.getcwd(), on_remember=remember)
 
     def _prompt_update(self, info):
         """偵測到新版本時詢問使用者是否更新。"""

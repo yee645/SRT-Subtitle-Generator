@@ -222,6 +222,9 @@ else:
         # 個不存檔的版本，比對時才不會每按一下就寫一次設定檔。
         "_watch_preset_state", "_refresh_preset_state",
         "_read_segmentation_from_ui",
+        # 3.0 第 12 項 12-5：一般版到 3.0 新介面的橋——查到能裝新介面時跳提示視窗（規則在
+        # subtitle/qtbridge.py、畫面在 gui/qtbridge_dialog.py，這裡只開窗與記「不再提醒」）。
+        "_offer_qt_bridge",
     }
     unexpected = added_methods - expected_new_methods
     check("新增的方法都在本版白名單內，沒有夾帶計畫外的新邏輯",
@@ -326,6 +329,10 @@ if old_app_src is not None:
         # 3.0 第 12 項 12-2：資料夾版（onedir）的自動更新核心——挑 zip、下載、安全解壓、帶上設定與 tools、切換腳本。
         # 一般版的 updater.py 只會就地換單一 exe，不能用也不能改（改它會觸發發版）（全新檔案，零 GUI 依賴、不 import config）。
         "subtitle/onedirupdate.py",
+        # 3.0 第 12 項 12-5：一般版到 3.0 新介面的橋——要不要提示、挑哪個 Release、用 onedirupdate 下載解壓到一般版
+        # exe 旁邊、複製設定與工具。舊使用者的 exe 只會換單一 exe，沒有這座橋就接不到 Qt 版（全新檔案，零 GUI 依賴、
+        # 不 import config）。
+        "subtitle/qtbridge.py",
         # 3.0 第 2 項：某一刻該顯示哪一句字幕。播放器疊加層與之後的時間軸
         # 共用，放核心層才不會兩邊各寫一份（全新檔案，零 GUI 依賴）。
         "subtitle/cuetime.py",
