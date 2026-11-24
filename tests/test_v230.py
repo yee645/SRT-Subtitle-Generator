@@ -58,9 +58,12 @@ import gui.whatsnew_dialog as wd  # noqa: E402
 v23_features = [(t, d) for t, d in wd.NEW_FEATURES if "v2.3" in t]
 dialog_text = "\n".join(t + d for t, d in v23_features)
 check("程式內速覽有 v2.3 的條目", len(v23_features) >= 1)
-check("速覽裡 v2.3 排在最前面（從 v2.1.0 跳上來的人最大的新東西）",
-      bool(wd.NEW_FEATURES) and "v2.3" in wd.NEW_FEATURES[0][0],
-      wd.NEW_FEATURES[0][0] if wd.NEW_FEATURES else "")
+# 3.0 第 12 項 12-6 起最前面是 v3.0 的條目（新介面）；v2.3 排在 v3.0 之後、其他之前（行為刻意改變，換新斷言）
+older = [t for t, _d in wd.NEW_FEATURES if "v3.0" not in t]
+check("速覽裡 v2.3 排在 v3.0 之後、其他之前（越新的越前面）",
+      bool(older) and "v2.3" in older[0]
+      and all("v3.0" in t for t, _d in wd.NEW_FEATURES[:len(wd.NEW_FEATURES) - len(older)]),
+      older[0] if older else "")
 
 # ===== 1. 版本與發佈政策 ================================================
 

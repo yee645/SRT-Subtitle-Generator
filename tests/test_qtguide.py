@@ -75,7 +75,45 @@ check("頁籤名稱跟主視窗一樣", all(f'"{t}"' in qt_src for t in ("① �
 
 # ----- 6 -----
 joined = "".join(g.DIFFERENT)
-check("照實講限制", "還不能自動更新" in joined and "關掉 Qt 版時才存" in joined and "一般版" in joined)
+# 12-6：12-3 起打包好的 Windows 版會自己更新，「還不能自動更新」那條改成講怎麼更新（行為刻意改變，換新斷言）
+check("照實講：怎麼更新、設定什麼時候存、一般版", g.UPDATE_NOTE in g.DIFFERENT and "〔下載並安裝〕" in g.UPDATE_NOTE
+      and "還不能自動更新" not in joined and "關掉 Qt 版時才存" in joined and "一般版" in joined)
+check("講到的〔下載並安裝〕在 Qt 版真的有", '"下載並安裝"' in qt_src)
+check("內容改了，預覽版導覽的版本往上加（看過舊的人會再看一次）", g.GUIDE_VERSION == "3.0-preview-2"
+      and g.should_show("3.0-preview-1"))
+
+# ----- 6b：正式版（3.0.0 起）-----
+check("哪一版算正式版：3.0.0 起；沒給、看不懂、3.0 之前都當預覽版", [g.is_formal(v) for v in (
+    None, "2.3.6", "v2.9.9", "abc", "3.0.0", "v3.0.0", "3.1", "10.0.0")] == [False] * 4 + [True] * 4)
+check("預覽版：預設值不變（不傳版本＝傳 3.0 之前的版本）", g.body_text() == g.body_text("2.3.6")
+      and g.remember(False) == g.remember(False, "2.9.9") == g.GUIDE_VERSION)
+F = "3.0.0"
+check("正式版的導覽版本不同：看過預覽版導覽的人升到 3.0 會再看一次", g.guide_version(F) == g.FORMAL_GUIDE_VERSION
+      != g.GUIDE_VERSION and g.should_show(g.GUIDE_VERSION, F) and not g.should_show(g.FORMAL_GUIDE_VERSION, F)
+      and not g.should_show(g.NEVER_SHOW, F) and g.remember(False, F) == g.FORMAL_GUIDE_VERSION
+      and g.remember(True, F) == g.NEVER_SHOW)
+ftext = g.body_text(F)
+fsections = ["【這一版多了什麼】", "【一般版的東西在哪裡】", g.FORMAL_DIFFERENT_TITLE]
+check("正式版全文：開頭換掉、三段照順序、沒有「預覽版」", ftext.startswith(g.FORMAL_INTRO)
+      and all(x in ftext for x in fsections) and ftext.index(fsections[0]) < ftext.index(fsections[1])
+      < ftext.index(fsections[2]) and "預覽版" not in ftext and "--qt" not in ftext, ftext[:200])
+check("正式版全文：每一條都在", all(t in ftext and d in ftext for t, d in g.NEW_IN_QT)
+      and all(o in ftext and n in ftext for o, n in g.WHERE) and all(i in ftext for i in g.FORMAL_DIFFERENT))
+fjoined = "".join(g.FORMAL_DIFFERENT)
+check("正式版照實講：怎麼更新、設定什麼時候存、一般版怎麼回去、兩邊設定各自一份", g.UPDATE_NOTE in g.FORMAL_DIFFERENT
+      and "關掉程式時才存" in fjoined and "SRT-Subtitle-Generator.exe" in fjoined and "--tk" in fjoined
+      and "各自一份" in fjoined)
+main_src = open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
+if g.is_formal(APP_VERSION):
+    check("正式版講的 --tk 在 main.py 真的有", '"--tk"' in main_src)
+else:
+    print("SKIP 正式版講的 --tk：12-7 切預設時才加進 main.py（到時 APP_VERSION 3.0.0 這一條就會驗）")
+app_src = open(os.path.join(ROOT, "gui_qt", "app.py"), encoding="utf-8").read()
+dlg_src = open(os.path.join(ROOT, "gui_qt", "guide_dialog.py"), encoding="utf-8").read()
+check("Qt 版把 APP_VERSION 傳進來挑版本（跳不跳、記什麼、顯示哪一套）",
+      "qtguide.remember(never, APP_VERSION)" in app_src
+      and "qtguide.should_show(self.config_data.get(qtguide.CONFIG_KEY), APP_VERSION)" in app_src
+      and "qtguide.body_text(APP_VERSION)" in dlg_src and "FORMAL = qtguide.is_formal(APP_VERSION)" in app_src)
 
 # ----- 7 -----
 src = open(g.__file__, encoding="utf-8").read()

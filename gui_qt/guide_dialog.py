@@ -14,6 +14,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QPlainTextEdit, QPushButton, QVBoxLayout
 
 from subtitle import qtguide
+from updater import APP_VERSION
 
 
 class GuideDialog(QDialog):
@@ -27,7 +28,7 @@ class GuideDialog(QDialog):
         self.setWindowTitle("新介面導覽")
         self.body = QPlainTextEdit()
         self.body.setReadOnly(True)
-        self.body.setPlainText(qtguide.body_text())
+        self.body.setPlainText(qtguide.body_text(APP_VERSION))
         self.never_box = QCheckBox("不再顯示這個導覽")
         self.start_btn = QPushButton("開始使用")
         self.start_btn.setDefault(True)
