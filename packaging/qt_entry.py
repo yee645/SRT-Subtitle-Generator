@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-3.0 預覽版打包用的進入點（PyInstaller 的入口腳本）。
+3.0 新介面打包用的進入點（PyInstaller 的入口腳本）。
 
-不用 `main.py`：那支的預設是 Tk 版，雙擊 Qt 預覽版的 exe 卻開出 Tk 版會
-讓人以為打包錯了；而且從 `main.py` 進來會把整個 Tk 版一起打包進去。這裡
-直接進 `gui_qt`，自檢模式（`--selftest`）照樣可用。
+不用 `main.py`：3.0.0 起它的預設雖然也是新介面，但沒有 PySide6 時會改開一般版，而且從 `main.py` 進來
+會把整個一般版（Tk）一起打包進去。這裡直接進 `gui_qt`，自檢模式（`--selftest`）照樣可用。
 """
 import os
 import sys
