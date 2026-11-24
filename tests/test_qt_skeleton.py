@@ -170,9 +170,11 @@ if PySide6 is not None:
     check("Tk 版四個頁籤名稱讀得到（比對的基準存在）", len(tk_tabs) == 4, str(tk_tabs))
     check("Qt 版四個頁籤名稱與 Tk 版一字不差、順序相同",
           seen.get("tabs") == tk_tabs, f"{seen.get('tabs')} != {tk_tabs}")
-    check("標題講明是 3.0 預覽版並帶版號",
-          "3.0 預覽版" in seen.get("title", "") and APP_VERSION in seen.get("title", ""),
-          seen.get("title", ""))
+    # 12-6 起標題跟著 APP_VERSION：3.0 之前講「3.0 預覽版」，3.0.0 起是正式版、不再講預覽版（qtguide.is_formal）
+    title = seen.get("title", "")
+    check("標題講明是 3.0（3.0.0 之前是預覽版）並帶版號",
+          title == qt_app.WINDOW_TITLE and APP_VERSION in title and "3.0" in title
+          and ("預覽版" in title) == (not qt_app.FORMAL), title)
     check("預設視窗大小 1280x800", seen.get("size") == qt_app.DEFAULT_SIZE, str(seen.get("size")))
     check("config 的 theme=dark → 視窗底色真的是深的（亮度 < 128）",
           seen.get("lightness", 255) < 128, str(seen.get("lightness")))

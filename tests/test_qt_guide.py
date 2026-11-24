@@ -88,7 +88,7 @@ else:
     dlg = win.guide_dialog
     check("導覽出現、不擋主視窗", dlg is not None and dlg.isVisible() and not dlg.isModal()
           and dlg.windowTitle() == "新介面導覽")
-    check("內容就是 qtguide.body_text()、唯讀", dlg.body.toPlainText() == qtguide.body_text() and dlg.body.isReadOnly())
+    check("內容就是 qtguide.body_text()、唯讀", dlg.body.toPlainText() == qtguide.body_text(qt_app.APP_VERSION) and dlg.body.isReadOnly())
     check("從頭看、「不再顯示」預設沒勾", dlg.body.verticalScrollBar().value() == 0 and not dlg.never_box.isChecked()
           and dlg.never_box.text() == "不再顯示這個導覽")
     check("開著時主視窗的按鈕點得到（不擋）", win.isEnabled() and win.theme_btn.isEnabled())
@@ -96,7 +96,7 @@ else:
     # ----- 3 -----
     QTest.mouseClick(dlg.start_btn, Qt.LeftButton)
     wait(50)
-    check("〔開始使用〕：關掉、記看過這一版", not dlg.isVisible() and cfg[qtguide.CONFIG_KEY] == qtguide.GUIDE_VERSION,
+    check("〔開始使用〕：關掉、記看過這一版", not dlg.isVisible() and cfg[qtguide.CONFIG_KEY] == qtguide.guide_version(qt_app.APP_VERSION),
           str(cfg.get(qtguide.CONFIG_KEY)))
     check("看過了：maybe_show_guide 不跳", win.maybe_show_guide() is False and not dlg.isVisible())
 
@@ -123,7 +123,7 @@ else:
     dlg.never_box.setChecked(False)
     QTest.keyClick(dlg, Qt.Key_Escape)
     wait(50)
-    check("按 Esc 關：也記下來（沒勾＝看過這一版）", not dlg.isVisible() and cfg[qtguide.CONFIG_KEY] == qtguide.GUIDE_VERSION
+    check("按 Esc 關：也記下來（沒勾＝看過這一版）", not dlg.isVisible() and cfg[qtguide.CONFIG_KEY] == qtguide.guide_version(qt_app.APP_VERSION)
           and reports == [True, False], f"{cfg[qtguide.CONFIG_KEY]!r} {reports}")
 
     # ----- 5 -----
@@ -132,7 +132,7 @@ else:
     dlg.never_box.setChecked(False)
     QTest.mouseClick(dlg.start_btn, Qt.LeftButton)
     wait(50)
-    check("沒勾就關：記這一版（不是 never）", cfg[qtguide.CONFIG_KEY] == qtguide.GUIDE_VERSION)
+    check("沒勾就關：記這一版（不是 never）", cfg[qtguide.CONFIG_KEY] == qtguide.guide_version(qt_app.APP_VERSION))
 
     # ----- 6 -----
     check("全程沒寫 config.json", not os.path.exists(config.CONFIG_PATH))
@@ -192,6 +192,24 @@ else:
         check("自檢模式：不跳導覽", rc == 2 and not visible_guides())
     finally:
         app.exec = real_exec
+
+    # ----- 8：3.0.0 發版時（APP_VERSION 一改）標題、開場白、導覽一起換成正式版 -----
+    import subprocess  # noqa: E402
+    probe = ("import sys, updater; updater.APP_VERSION = sys.argv[1]\n"
+             "from gui_qt import app as a; from gui_qt import guide_dialog as d; from subtitle import qtguide as g\n"
+             "print(a.WINDOW_TITLE); print(a.STATUS_INTRO); print(d.APP_VERSION == sys.argv[1]); print(a.FORMAL)\n")
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    outs = {}
+    for ver in ("3.0.0", "2.9.9"):
+        r = subprocess.run([sys.executable, "-B", "-c", probe, ver], cwd=root_dir, capture_output=True, text=True,
+                           encoding="utf-8", timeout=120, env=dict(os.environ, QT_QPA_PLATFORM="offscreen"))
+        outs[ver] = r.stdout.splitlines()
+    f, p = outs["3.0.0"], outs["2.9.9"]
+    check("APP_VERSION 3.0.0：標題、開場白不再講預覽版、導覽用正式版那一套",
+          len(f) == 4 and f[0] == "SRT 字幕生成器 3.0（v3.0.0）" and f[1].startswith("3.0 新介面：")
+          and "預覽版" not in f[1] and f[2] == "True" and f[3] == "True", str(f))
+    check("APP_VERSION 2.9.9：照舊是預覽版", len(p) == 4 and p[0] == "SRT 字幕生成器 3.0 預覽版（v2.9.9）"
+          and p[1].startswith("3.0 預覽版：") and p[3] == "False", str(p))
 
 print()
 if failures:

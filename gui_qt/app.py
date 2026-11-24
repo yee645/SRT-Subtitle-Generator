@@ -38,7 +38,9 @@ FFMPEG_BANNER = ("⚠ 找不到 ffmpeg：時間軸的波形與縮圖、燒錄、
 
 UPDATE_CHECK_DELAY_MS = 1500  # 跟一般版一樣：開好視窗 1.5 秒後才查新版本
 # 狀態列的開場白：一般版的功能都搬過來了（第 11 項做完），指向導覽
-STATUS_INTRO = ("3.0 預覽版：一般版的功能都搬過來了，四個頁籤照①→④的順序做。"
+# 3.0.0 起是正式版：標題與開場白跟著 APP_VERSION 換（規則跟導覽、打包的 zip 名稱同一條，見 qtguide.is_formal）
+FORMAL = qtguide.is_formal(APP_VERSION)
+STATUS_INTRO = (("3.0 新介面" if FORMAL else "3.0 預覽版") + "：一般版的功能都搬過來了，四個頁籤照①→④的順序做。"
                 "第一次用可以按右下角的〔新介面導覽…〕看東西在哪。")
 CLOSE_WHILE_INSTALLING = "一鍵安裝還在下載。現在關掉程式，下載會中斷，下次要再安裝一次。還是要關嗎？"
 CLOSE_WHILE_UPDATING = "新版還在下載或準備中。現在關掉程式，這次的下載會作廢，下次要再按一次「下載並安裝」。還是要關嗎？"
@@ -52,7 +54,7 @@ STAGES = [
     ("④ 輸出與發佈", "匯出、燒錄、發佈資料、成品加工。"),
 ]
 
-WINDOW_TITLE = f"SRT 字幕生成器 3.0 預覽版（v{APP_VERSION}）"
+WINDOW_TITLE = f"SRT 字幕生成器 {'3.0' if FORMAL else '3.0 預覽版'}（v{APP_VERSION}）"
 
 # 與 Tk 版的預設視窗同一個量級；之後放進時間軸時再依實測調整。
 DEFAULT_SIZE = (1280, 800)
@@ -513,11 +515,11 @@ class MainWindow(QMainWindow):
 
     def _on_guide_closed(self, never):
         """關掉導覽：記進這次開啟的設定（關掉 Qt 版時存）；勾了「不再顯示」就永遠不跳。"""
-        self.config_data[qtguide.CONFIG_KEY] = qtguide.remember(never)
+        self.config_data[qtguide.CONFIG_KEY] = qtguide.remember(never, APP_VERSION)
 
     def maybe_show_guide(self):
         """啟動時呼叫：沒看過這一版的導覽、也沒勾過「不再顯示」才跳。回傳有沒有跳。"""
-        if not qtguide.should_show(self.config_data.get(qtguide.CONFIG_KEY)):
+        if not qtguide.should_show(self.config_data.get(qtguide.CONFIG_KEY), APP_VERSION):
             return False
         self.open_guide()
         return True
