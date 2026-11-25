@@ -132,12 +132,24 @@ def ffmpeg_info(dist, timeout=60):
     if not avutil:
         return {}
     avcodec = _find_lib(dist, "avcodec") or ""
+    error = ""
     try:
         proc = subprocess.run([sys.executable, "-I", "-c", _PROBE, avutil, avcodec], capture_output=True,
                               text=True, encoding="utf-8", errors="replace", timeout=timeout)
-        info = json.loads(proc.stdout.strip().splitlines()[-1]) if proc.returncode == 0 else {}
-    except (subprocess.TimeoutExpired, ValueError, IndexError, OSError):
-        info = {}
+        if proc.returncode == 0:
+            info = json.loads(proc.stdout.strip().splitlines()[-1])
+        else:
+            info = {}
+            tail = (proc.stderr or "").strip().splitlines()
+            error = f"結束碼 {proc.returncode}：{tail[-1] if tail else '（沒有訊息）'}"
+    except subprocess.TimeoutExpired:
+        info, error = {}, f"逾時（{timeout} 秒）"
+    except (ValueError, IndexError, OSError) as exc:
+        info, error = {}, f"{type(exc).__name__}：{exc}"
+    if "version" not in info:
+        # 讀不到時把原因與找到的檔案記進打包報告（說明裡不寫），下次才查得到為什麼。
+        info["error"] = error or "沒有回報版本"
+        info["lib"] = os.path.relpath(avutil, dist)
     version = info.get("version", "")
     # 正式版號長得像 7.1.2；從 git 編的會是 n7.1-xxx 或一串雜湊，那種就不組下載網址。
     info["release"] = bool(re.fullmatch(r"\d+\.\d+(\.\d+)?", version))
@@ -358,7 +370,7 @@ def main(argv):
         + (f"，zip {report['zip_mb']} MB" if passed else ""),
         f"- 刪掉：{report['removed'] or '（無）'}",
         f"- 授權：{report['licenses']}",
-        f"- FFmpeg（函式庫自報）：{report['ffmpeg'].get('version', '讀不到')}，"
+        f"- FFmpeg（函式庫自報）：{report['ffmpeg'].get('version') or '讀不到（' + report['ffmpeg'].get('error', '沒有函式庫') + '）'}，"
         f"{report['ffmpeg'].get('license', '讀不到授權')}；Qt {report['qt'] or '讀不到'}",
         f"- 自檢（播放 {os.path.basename(clip)}，{SELFTEST_RUNS} 次）："
         f"{'通過' if passed else '**失敗**'}，每次解出畫格 {frames}",

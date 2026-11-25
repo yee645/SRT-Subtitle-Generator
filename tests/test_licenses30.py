@@ -104,7 +104,10 @@ empty = os.path.join(tmp, "empty")
 os.makedirs(empty)
 check("沒有 FFmpeg 函式庫：回傳空的", qp.ffmpeg_info(empty) == {})
 info = qp.ffmpeg_info(dist)  # 空檔案冒充的 DLL：載不起來
-check("函式庫載不起來：不丟例外、標成讀不到", info == {"release": False}, str(info))
+check("函式庫載不起來：不丟例外、標成讀不到，原因與檔案記進報告（說明裡不寫）",
+      info.get("release") is False and "version" not in info and info.get("error", "").startswith("結束碼")
+      and info.get("lib", "").replace("\\", "/") == "_internal/PySide6/avutil-59.dll"
+      and info["error"] not in qp.notices_text(dist, info), str(info))
 
 cc = shutil.which("cc") or shutil.which("gcc")
 if not cc or os.name == "nt":
@@ -137,7 +140,10 @@ else:
         fh.write('#include <stdlib.h>\nconst char *av_version_info(void){abort();}\n'
                  'const char *avutil_license(void){return "x";}\n')
     subprocess.run([cc, "-shared", "-fPIC", "-o", os.path.join(lib, "libavutil.so.59"), src], check=True)
-    check("函式庫一呼叫就當掉：打包照常、標成讀不到", qp.ffmpeg_info(lib) == {"release": False})
+    crash = qp.ffmpeg_info(lib)
+    check("函式庫一呼叫就當掉：打包照常、標成讀不到、記下結束碼",
+          crash.get("release") is False and "version" not in crash and crash.get("error", "").startswith("結束碼"),
+          str(crash))
 
 # ----- 6. CI 上連一次網址 -----
 
