@@ -51,8 +51,11 @@ tk_src = "".join(read(os.path.relpath(p, ROOT)) for p in glob.glob(os.path.join(
 # ----- 1 -----
 check("範圍從 v2.3.6 講起（3.0 之前最後一個正式版）", "v2.3.6" in doc.split("---")[0]
       and "## v2.3.6" in read("CHANGELOG.md"))
-zip_name = qt_preview.zip_name("3.0.0", "win64")
-check("zip 檔名跟打包流程 3.0.0 打出來的一樣", f"`{zip_name}`" in doc and "preview" not in zip_name, zip_name)
+# 3.0 之後 A-3 起：介紹不寫死某一版的 zip（v3.0.0 那一份有問題，照著下載會拿到舊的），改用 <版本>，格式跟打包流程一樣。
+zip_name = qt_preview.zip_name("3.0.0", "win64").replace("v3.0.0", "v<版本>")
+check("zip 檔名照打包流程的格式、不寫死某一版", f"`{zip_name}`" in doc and "preview" not in zip_name
+      and not re.search(r"Qt-v\d+\.\d+\.\d+-win64\.zip", doc), zip_name)
+check("介紹寫明 v3.0.0 的 zip 有問題、要換", "v3.0.0 附的新介面 zip 用久了會崩潰" in doc)
 check("兩個 exe、資料夾的名稱跟程式一樣", f"`{odu.EXE_NAME}`" in doc and f"`{updater.ASSET_NAME}`" in doc
       and f"`{qb.QT_FOLDER}`" in doc)
 buttons = sorted(set(re.findall(r"〔([^〕]+)〕", doc)))
