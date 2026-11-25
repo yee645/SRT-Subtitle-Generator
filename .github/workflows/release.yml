@@ -206,6 +206,11 @@ jobs:
       - name: Slim, licenses, self-test, zip
         run: python packaging/qt_preview.py dist/SRT-Subtitle-Generator-Qt SRT-Subtitle-Generator-Qt.exe research/qt_probe/probe_clip.mp4
 
+      # 第三方說明裡「同一版的原始碼」網址實際連一次（3.0 之後 A-2），結果記在摘要；網站一時不通不擋發版。
+      - name: Check third-party source links
+        continue-on-error: true
+        run: python packaging/qt_preview.py --check-links qt_preview_report.json
+
       # 資料夾版自動更新的切換實測（3.0 第 12 項 12-4）：沒過就不附 zip——Qt 版會用這個 zip 自己更新，
       # 換不過去的成品不能交出去（2.x 的 exe 早已上傳，不受影響）。
       - name: Switch self-test (onedir auto-update)

@@ -45,6 +45,12 @@ jobs:
       - name: Slim, licenses, self-test, zip
         run: python packaging/qt_preview.py dist/SRT-Subtitle-Generator-Qt SRT-Subtitle-Generator-Qt.exe research/qt_probe/probe_clip.mp4
 
+      - name: Check third-party source links
+        # 第三方說明裡「同一版的原始碼」網址實際連一次（3.0 之後 A-2）。開發容器連不到 download.qt.io／
+        # ffmpeg.org，只能在這裡驗；網站一時不通不該擋打包，所以只記在摘要裡。
+        continue-on-error: true
+        run: python packaging/qt_preview.py --check-links qt_preview_report.json
+
       - name: Switch self-test (onedir auto-update)
         # 用剛打好的 zip 實際跑一次資料夾版自動更新的切換（3.0 第 12 項 12-4）：中文／空白／單引號路徑、
         # 舊資料夾被占用時要等、換上之後新版真的開得起來。容器裡驗不到，只能在 Windows 上驗。
