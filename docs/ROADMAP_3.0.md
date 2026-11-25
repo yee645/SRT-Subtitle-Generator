@@ -3563,6 +3563,10 @@ None 的參照數多減一，用久了整個程式崩潰（`none_dealloc`）。�
      `avcodec_configuration`；載不起來或當掉都不拖垮打包）。這台 PySide6 6.12.0 附的是 **FFmpeg 9.0.1、
      自報 LGPL version 2.1 or later**，編譯設定沒有 `--enable-gpl`／`--enable-nonfree`。編譯設定也寫進說明。
   4. 3.0.0 起說明的標題、版本寫「新介面」，不再是「預覽版」（v3.0.0 的 zip 裡那份還寫預覽版，A-3 的 v3.0.1 起修正）。
+- **Windows 上實測**（#226 的 CI）：打包進去的也是 **FFmpeg 9.0.1、自報 LGPL version 2.1 or later**，MSVC 編、只連 zlib，
+  編譯設定一樣沒有 `--enable-gpl`／`--enable-nonfree`；四個原始碼網址（含 `ffmpeg-9.0.1.tar.xz`）都回 200。
+  第一輪讀不到版本：Windows 的 `os.add_dll_directory` 只收絕對路徑，CI 帶的是 `dist/…`（WinError 87）。改成一律絕對路徑，
+  讀不到時把原因與找到的檔案記進打包報告（說明裡不寫）。
 - 網址在 CI 的打包工作裡實際連一次（`--check-links`，結果寫進工作流程摘要；網站一時不通不擋打包）。
   開發容器連不到 download.qt.io／ffmpeg.org（代理拒絕，沒有繞過）。
 - §4(c)（執行時顯示版權聲明就要一併列出函式庫的）：新介面沒有顯示版權聲明的地方，不適用。
