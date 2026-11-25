@@ -193,7 +193,9 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # 3.12 起（跟 qt-preview.yml 同一個理由）：PySide6 6.12.0 在 Python 3.11 上會把 None 的參照數
+          # 多減，用久了整個程式崩潰。v3.0.0 的新介面 zip 就是在這裡用 3.11 打的（3.0 之後 A-1）。
+          python-version: "3.12"
 
       - name: Install PySide6 and PyInstaller
         run: pip install pyinstaller PySide6 openai
