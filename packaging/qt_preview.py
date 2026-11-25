@@ -99,7 +99,7 @@ _PROBE = r"""
 import ctypes, json, os, sys
 avutil, avcodec = sys.argv[1], sys.argv[2]
 if os.name == "nt":
-    os.add_dll_directory(os.path.dirname(avutil))
+    os.add_dll_directory(os.path.dirname(os.path.abspath(avutil)))
 else:
     for name in ("libcrypto.so.3", "libcrypto.so"):
         try:
@@ -131,7 +131,10 @@ def ffmpeg_info(dist, timeout=60):
     avutil = _find_lib(dist, "avutil")
     if not avutil:
         return {}
-    avcodec = _find_lib(dist, "avcodec") or ""
+    # 一律絕對路徑：Windows 的 os.add_dll_directory 收到相對路徑會丟 WinError 87（CI 帶的是 dist/…，
+    # 2026-11-25 #226 第一輪的 CI 就是這樣讀不到版本）。
+    avutil = os.path.abspath(avutil)
+    avcodec = os.path.abspath(_find_lib(dist, "avcodec") or "") if _find_lib(dist, "avcodec") else ""
     error = ""
     try:
         proc = subprocess.run([sys.executable, "-I", "-c", _PROBE, avutil, avcodec], capture_output=True,
@@ -149,7 +152,7 @@ def ffmpeg_info(dist, timeout=60):
     if "version" not in info:
         # 讀不到時把原因與找到的檔案記進打包報告（說明裡不寫），下次才查得到為什麼。
         info["error"] = error or "沒有回報版本"
-        info["lib"] = os.path.relpath(avutil, dist)
+        info["lib"] = os.path.relpath(avutil, os.path.abspath(dist))
     version = info.get("version", "")
     # 正式版號長得像 7.1.2；從 git 編的會是 n7.1-xxx 或一串雜湊，那種就不組下載網址。
     info["release"] = bool(re.fullmatch(r"\d+\.\d+(\.\d+)?", version))

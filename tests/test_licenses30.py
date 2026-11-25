@@ -125,6 +125,22 @@ else:
     check("真的載入函式庫讀版本：avutil 讀得到、avcodec 不在也不影響版本",
           real == {"version": "7.1.2", "license": "LGPL version 2.1 or later", "release": True}, str(real))
     subprocess.run([cc, "-shared", "-fPIC", "-o", os.path.join(lib, "libavcodec.so.61"), src], check=True)
+    seen = []
+    real_run = qp.subprocess.run
+
+    def spy(cmd, *a, **k):
+        seen.append(cmd)
+        return real_run(cmd, *a, **k)
+    cwd = os.getcwd()
+    os.chdir(tmp)
+    qp.subprocess.run = spy
+    try:
+        rel = qp.ffmpeg_info("lib")  # CI 帶的是相對路徑（dist/…）
+    finally:
+        qp.subprocess.run = real_run
+        os.chdir(cwd)
+    check("資料夾給相對路徑：交給載入行程的一律是絕對路徑（Windows 的 add_dll_directory 只收絕對路徑）",
+          rel.get("version") == "7.1.2" and seen and all(os.path.isabs(x) for x in seen[0][-2:]), str(seen[:1]))
     real = qp.ffmpeg_info(lib)
     check("avcodec 也在：連編譯設定一起讀", real.get("configuration") == "--enable-shared --disable-gpl"
           and real.get("version") == "7.1.2", str(real))
