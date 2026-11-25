@@ -96,9 +96,12 @@ import qt_preview  # noqa: E402
 import updater  # noqa: E402
 from subtitle import qtguide  # noqa: E402
 
-check("APP_VERSION 是 3.0.0", updater.APP_VERSION == "3.0.0")
+# 3.0 之後 A-3 起 APP_VERSION 往前走（3.0.1）：這兩條改成跟著版本走，3.0 系列都要成立。
+check("APP_VERSION 是 3.0 系列、3.0.0 以上",
+      re.fullmatch(r"3\.0\.\d+", updater.APP_VERSION) is not None and qtguide.is_formal(updater.APP_VERSION),
+      updater.APP_VERSION)
 check("打包的 zip 名稱不再帶 preview", qt_preview.zip_name(updater.APP_VERSION, "win64")
-      == "SRT-Subtitle-Generator-Qt-v3.0.0-win64.zip")
+      == f"SRT-Subtitle-Generator-Qt-v{updater.APP_VERSION}-win64.zip")
 check("Qt 版的導覽、標題、狀態列是正式版那一套", qtguide.is_formal(updater.APP_VERSION)
       and qtguide.guide_version(updater.APP_VERSION) == qtguide.FORMAL_GUIDE_VERSION)
 
@@ -110,13 +113,21 @@ version = updater.APP_VERSION
 pattern = m.group(1).replace("{re.escape(version)}", re.escape(version)) if m else ""
 notes_m = re.search(pattern, read("CHANGELOG.md"), re.M | re.S) if m else None
 notes = notes_m.group(1).strip() if notes_m else ""
-check("CHANGELOG 有 v3.0.0、排最上面", read("CHANGELOG.md").split("\n## ")[1].startswith("v3.0.0"))
+check(f"CHANGELOG 有 v{version}、排最上面", read("CHANGELOG.md").split("\n## ")[1].startswith(f"v{version}"))
 check("Release notes 講怎麼拿到新介面、檔名對", "〔下載並安裝新介面〕" in notes
       and qt_preview.zip_name(version, "win64") in notes and "SRT-Subtitle-Generator-Qt.exe" in notes
       and "一般版不會被刪掉" in notes, notes[:200])
 links = re.findall(r"\]\(([^)]+)\)", notes)
 check("Release notes 的連結都是完整網址（Release 頁面上相對連結會壞）", links and all(
     u.startswith("https://github.com/yee645/SRT-Subtitle-Generator/") for u in links), str(links))
+if version != "3.0.0":
+    # 3.0 之後 A-3：v3.0.0 沒轉正，從 v2.3.6 更新的人直接跳到這一版，只看得到這一版的 notes。
+    check("3.0.0 之後的版本：notes 講為什麼換掉 v3.0.0 的 zip、不再指向它",
+          "v3.0.0" in notes and "Python 3.12" in notes and "Qt-v3.0.0-win64.zip" not in notes
+          and "手動下載過 v3.0.0" in notes, notes[:300])
+    check("3.0.0 之後的版本：notes 照樣帶 3.0 的完整重點（不少於 v3.0.0 那一條的主題）",
+          all(w in notes for w in ("字幕疊在真的影片畫面上", "時間軸", "剪點看得見", "多段素材與多軌", "專案檔",
+                                    "在程式裡更新")))
 check("Release notes 照實講限制、會送什麼", "影音同步" in notes and "不送任何檔案、字幕、設定或帳號資訊" in notes
       and "--tk" in notes)
 

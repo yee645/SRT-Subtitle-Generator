@@ -19,8 +19,8 @@
 
 | 你現在用的是 | 怎麼做 |
 |---|---|
-| 一般版 exe（`SRT-Subtitle-Generator.exe`），開著自動更新 | 照常更新到 3.0.0。重開之後會跳「3.0 新介面」：按〔下載並安裝新介面〕，它會裝在 exe 旁邊的 `SRT-Subtitle-Generator-Qt` 資料夾，設定、生字本與一鍵安裝的工具會**複製**一份過去，裝好按〔開啟新介面〕。 |
-| 還沒裝過 | 到 [Releases](../../../releases) 下載 `SRT-Subtitle-Generator-Qt-v3.0.0-win64.zip`，解壓到任何資料夾，執行裡面的 `SRT-Subtitle-Generator-Qt.exe`。免安裝。 |
+| 一般版 exe（`SRT-Subtitle-Generator.exe`），開著自動更新 | 照常更新到 3.0（v3.0.1 起；v3.0.0 只發成預發佈、沒有轉正）。重開之後會跳「3.0 新介面」：按〔下載並安裝新介面〕，它會裝在 exe 旁邊的 `SRT-Subtitle-Generator-Qt` 資料夾，設定、生字本與一鍵安裝的工具會**複製**一份過去，裝好按〔開啟新介面〕。 |
+| 還沒裝過 | 到 [Releases](../../../releases) 下載**最新一版**的 `SRT-Subtitle-Generator-Qt-v<版本>-win64.zip`（3.0.1 起；不要用 v3.0.0 那一份，見下面「已知的限制」），解壓到任何資料夾，執行裡面的 `SRT-Subtitle-Generator-Qt.exe`。免安裝。 |
 | 從原始碼跑 | `pip install PySide6` 之後 `python main.py`（3.0.0 起預設就是新介面；要一般版加 `--tk`）。 |
 
 - 新介面是一整個資料夾（不是單一 exe）：zip 約 **56 MB**，解開約 **129 MB**（2026-11-23 Windows CI 實測）。
@@ -110,6 +110,8 @@
 - **播放器的影音同步沒有在有音效卡的機器上量過**（開發環境與 CI 都沒有音效裝置）。影像解碼、字幕位置都量過；
   如果你發現聲音和畫面對不上，請回報，輸出的影片不受影響（輸出走 ffmpeg，不經過播放器）。
 - 設定在關掉程式時才存回 `config.json`（只存這次改過的部分，一般版同時開著也不會互相蓋掉）。
+- **v3.0.0 附的新介面 zip 用久了會崩潰**（打包時用的 Python 3.11 跟 PySide6 6.12.0 不合），v3.0.1 已經換掉；
+  v3.0.0 只發成預發佈，自動更新不會拿到它。如果你手動下載過 v3.0.0 的 zip，換成新的一版。
 - 遇到問題隨時可以回一般版：打包版是 `SRT-Subtitle-Generator.exe`，從原始碼跑是 `python main.py --tk`。
 
 ---
