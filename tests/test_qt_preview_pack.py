@@ -200,7 +200,8 @@ def _run_lines(text):
 
 
 check("Release 的 Qt 打包與 PR 上驗過的 qt-preview.yml 逐字相同（不會出現兩套）",
-      len(_run_lines(qt_job)) == 3 and _run_lines(qt_job) == _run_lines(wf),
+      # 3.0 之後 A-2 起四步：多了原始碼網址檢查（--check-links），兩份照樣要逐字相同。
+      len(_run_lines(qt_job)) == 4 and _run_lines(qt_job) == _run_lines(wf),
       f"{_run_lines(qt_job)} != {_run_lines(wf)}")
 check("Qt 打包有裝 openai（逐句校對的「翻譯字幕」要用；沒裝的話打包版只會叫使用者 pip install）",
       all("pip install pyinstaller PySide6 openai" in text for text in (qt_job, wf)))
