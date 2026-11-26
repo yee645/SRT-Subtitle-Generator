@@ -164,10 +164,12 @@ else:
           f"{here} → {pl.position()}")
 
     # ----- 4 -----
-    win.play_tool.setFocus()
-    key(Qt.Key_Space)
+    t.select_cue(-1, seek=False)
+    t.setFocus()  # 焦點不在播放鍵上（不然 Space 只是「按下那顆按鈕」，量不到快捷鍵）
+    wait(30)
+    key(Qt.Key_Space, target=t)
     check("Space：播放", wait_until(lambda: pl.playbackState() == QMediaPlayer.PlayingState, 5000))
-    key(Qt.Key_Space)
+    key(Qt.Key_Space, target=t)
     check("再按 Space：暫停", wait_until(lambda: pl.playbackState() != QMediaPlayer.PlayingState, 5000))
     t.select_cue(0, seek=False)
     wait(30)

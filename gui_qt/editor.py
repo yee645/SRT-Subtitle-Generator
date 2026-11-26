@@ -469,8 +469,7 @@ class EditorWindow(MainWindow):
         col.addWidget(p.slider)
         row = QHBoxLayout()
         # E-6a：時間碼改成「時:分:秒.百分之一秒」（播放器原本那個「分:秒.十分之一秒」收起來，四頁籤照舊）
-        p.time_label.setParent(self.legacy_central)
-        p.time_label.hide()
+        p.time_label.setParent(self.legacy_central)  # 換父元件就藏起來了（收起來的外殼）
         self.timecode_label = QLabel()
         self.timecode_label.setObjectName("timecode")
         self.timecode_label.setToolTip("播放頭／片長（時:分:秒.百分之一秒）")
