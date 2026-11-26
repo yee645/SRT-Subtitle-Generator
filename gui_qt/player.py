@@ -1424,12 +1424,12 @@ class PlayerPanel(QWidget):
         self._tracks_shadow = copy.deepcopy(self.tracks)
         selected = self.timeline.track_selected
         if selected and not 0 <= selected[1] < len(self.tracks.get(selected[0], ())):
+            # 選的那段不在了：明著取消（送出 trackItemSelected，剪輯器的屬性面板跟著回專案頁；set_tracks 只會悄悄清掉）
             self.timeline.select_track_item(selected[0], -1, seek=False)
         if self.picture_dialog is not None and self.picture_dialog.target != "main":
             index = self.picture_dialog.target[1]
             self._set_picture_target(("overlays", index) if index < len(self.tracks["overlays"]) else "main")
-        self.refresh_tracks()
-        self._show_track_props()
+        self.refresh_tracks()  # 也會照選取重填屬性那一行
 
     def split_track_at_playhead(self):
         """

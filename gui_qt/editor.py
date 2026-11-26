@@ -699,7 +699,8 @@ class EditorWindow(MainWindow):
         回傳切的是第幾句（或第幾段素材；切不了是 -1）。
         """
         p = self.player_panel
-        if p.timeline.track_selected and p.timeline.last_pick == "track":
+        sel = p.timeline.track_selected
+        if sel and p.timeline.last_pick == "track" and 0 <= sel[1] < len(p.tracks.get(sel[0], ())):
             try:
                 kind, index = p.split_track_at_playhead()
             except ValueError as exc:
