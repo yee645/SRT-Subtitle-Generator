@@ -92,6 +92,16 @@ guide = read("docs", "USER_GUIDE.md")
 check("使用說明有 3.1 剪輯器版面一節", "### 3.1 剪輯器版面" in guide and "WHATS_NEW_3.1.md" in guide
       and "--tabs" in guide)
 
+# 一般版程式內速覽：改動都在新介面，不另開一條；v3.0 那一條（必須排最前面）講 3.1 起預設剪輯器版面
+try:
+    import gui.whatsnew_dialog as wd
+except ImportError as exc:  # 沒有 tkinter
+    print(f"SKIP 一般版速覽（{exc}）")
+else:
+    title, detail = wd.NEW_FEATURES[0]
+    check("一般版速覽第一條（v3.0）講 3.1 起預設剪輯器版面、指向 WHATS_NEW_3.1.md",
+          "v3.0" in title and "v3.1" in title and "剪輯器版面" in detail and "WHATS_NEW_3.1.md" in detail, title)
+
 print()
 if failures:
     print(f"失敗 {len(failures)} 項：{', '.join(failures)}")
