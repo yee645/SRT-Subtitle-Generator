@@ -15,7 +15,7 @@ E-1 只換外殼：**功能一個不少、也不另寫一份**。`EditorWindow` 
 播放器面板（`PlayerPanel`）本身不顯示，它的畫面、時間軸、按鈕分散到各區；它與逐句校對原本「焦點在面板裡才有效」
 的復原／重做／存字幕／尋找快捷鍵因此改掛在整個視窗上（同一組按鍵、同樣的動作）。
 
-在 E-7 之前用 `python main.py --qt --editor` 打開；不加 `--editor` 照舊是四頁籤。
+3.1 起（E-7b）新介面預設就是這個版面；`python main.py --qt --tabs`（或狀態列的〔改用四頁籤版面…〕）開回四頁籤。
 """
 import os
 
@@ -34,11 +34,15 @@ from gui_qt import timeline as timeline_mod
 from gui_qt.app import MainWindow, apply_theme
 from gui_qt.media_bin import MediaBin
 from gui_qt.places import EDITOR, LAYOUT_PROPERTY, relabel_tree
+from subtitle import editorguide
 from subtitle import playhead
 from updater import APP_VERSION
 
-EDITOR_FLAG = "--editor"
+EDITOR_FLAG = editorguide.EDITOR_FLAG
 EDITOR_TITLE = f"SRT 字幕生成器（v{APP_VERSION}）"
+# 狀態列的開場白（E-7b 起是預設版面，拿掉「試用」）
+STATUS_INTRO = "左邊選媒體、字幕、智慧剪輯、健檢；右上角〔匯出〕。第一次用可以按頂列的〔?〕看剪輯器版面介紹。"
+GUIDE_TITLE = "剪輯器版面介紹"
 EDITOR_SIZE = (1440, 900)
 EDITOR_MIN = (1100, 700)
 LEFT_WIDTH = 400
@@ -67,11 +71,12 @@ MENUS = (
               ("智慧剪輯", "@show_section:smart", ""), ("健檢", "@show_section:health", ""), None,
               ("拉近", "player_panel.zoom_in_btn", "Ctrl+="), ("拉遠", "player_panel.zoom_out_btn", "Ctrl+-"),
               ("整支", "player_panel.fit_btn", "Shift+Z"), None,
-              ("切換深淺色", "theme_tool", ""))),
+              ("切換深淺色", "theme_tool", ""), None,
+              ("切換下次開啟的版面（四頁籤／剪輯器）", "layout_btn", ""))),
     ("播放", (("播放／暫停", "play_tool", "Space"), ("上一格", "prev_frame_tool", "←"),
               ("下一格", "next_frame_tool", "→"), None,
               ("倒退 1 秒", "@jkl:J", "J"), ("暫停", "@jkl:K", "K"), ("播放／快轉", "@jkl:L", "L"))),
-    ("說明", (("新介面導覽", "guide_tool", ""), ("轉寫與金鑰", "transcription_tool", ""),
+    ("說明", (("剪輯器版面介紹", "guide_tool", ""), ("轉寫與金鑰", "transcription_tool", ""),
               ("即時查譯", "lookup_tool", ""))),
 )
 # 預覽放大（E-6b）：看字幕邊緣、畫面細節；放大時可以用滑鼠拖著看別的地方
@@ -112,7 +117,7 @@ FEATURE_MAP = (
     ("存專案", "player_panel.save_project_btn", "top"),
     ("轉寫與金鑰", "transcription_tool", "top"),
     ("即時查譯", "lookup_tool", "top"),
-    ("新介面導覽", "guide_tool", "top"),
+    ("新介面導覽（剪輯器裡打開的是剪輯器版面介紹，E-7b）", "guide_tool", "top"),
     ("深淺色", "theme_tool", "top"),
     ("匯出", "export_button", "top"),
     ("素材庫（匯入一批、縮圖、拖到時間軸、加到播放頭、開成主片；E-4）", "media_bin", "left:media"),
@@ -253,6 +258,8 @@ def _scroll(widget):
 class EditorWindow(MainWindow):
     """主流剪輯軟體排版的主視窗（E 系列）。"""
 
+    LAYOUT = editorguide.EDITOR
+
     def __init__(self, config_data=None, persist=None):
         super().__init__(config_data, persist)
         # 面板的說明文字照剪輯器的位置講（「②字幕頁」→「左邊「字幕」」…，gui_qt/places.py）；之後才顯示的字由 here() 換
@@ -329,7 +336,7 @@ class EditorWindow(MainWindow):
         self.show_section("media")
         self.apply_editor_theme(self.config_data.get("theme", "light"))
         self.refresh_project_name()
-        self.statusBar().showMessage("剪輯器版面（試用）：左邊選媒體、字幕、智慧剪輯、健檢；右上角〔匯出〕。")
+        self.statusBar().showMessage(STATUS_INTRO)
 
     # ----- 各區 -----
     def _tool(self, icon_name, tip, slot, checkable=False, text=""):
@@ -380,7 +387,7 @@ class EditorWindow(MainWindow):
         self.transcription_tool = self._tool("key", "轉寫與金鑰：" + self.transcription_btn.toolTip(),
                                              self.open_transcription_settings)
         self.lookup_tool = self._tool("translate", "即時查譯：" + self.lookup_btn.toolTip(), self.open_lookup)
-        self.guide_tool = self._tool("help", "新介面導覽：" + self.guide_btn.toolTip(), self.open_guide)
+        self.guide_tool = self._tool("help", "剪輯器版面介紹：版面、這一版多了什麼、四頁籤的東西在哪、快捷鍵", self.open_guide)
         self.theme_tool = self._tool("moon", "切換深色／淺色", self.toggle_theme)
         for btn in (self.transcription_tool, self.lookup_tool, self.guide_tool, self.theme_tool):
             row.addWidget(btn)
@@ -1235,14 +1242,36 @@ class EditorWindow(MainWindow):
         self.media_bin._refresh()  # 沒有縮圖的素材用圖示：照新的顏色重畫
         return self._theme
 
+    # ----- 剪輯器版面介紹（E-7b；四頁籤的導覽講的是①～④，這裡換成自己的一份、另外記看過沒） -----
+    def open_guide(self):
+        from gui_qt.guide_dialog import GuideDialog
+        if self.guide_dialog is None:
+            self.guide_dialog = GuideDialog(self, body=editorguide.body_text(), title=GUIDE_TITLE)
+            self.guide_dialog.closedWith.connect(self._on_guide_closed)
+        self.guide_dialog.show()
+        self.guide_dialog.raise_()
+        self.guide_dialog.activateWindow()
+        return self.guide_dialog
+
+    def _on_guide_closed(self, never):
+        self.config_data[editorguide.CONFIG_KEY] = editorguide.remember(never)
+
+    def maybe_show_guide(self):
+        """啟動時呼叫：沒看過這一版的剪輯器版面介紹、也沒勾過「不再顯示」才跳。回傳有沒有跳。"""
+        if not editorguide.should_show(self.config_data.get(editorguide.CONFIG_KEY)):
+            return False
+        self.open_guide()
+        return True
+
     def toggle_theme(self):
         new = super().toggle_theme()
         self.apply_editor_theme(new)
         return new
 
 
-def editor_requested(argv):
-    return EDITOR_FLAG in argv
+def editor_requested(argv, stored=None):
+    """開不開剪輯器版面：--editor／--tabs 優先，其次設定的 qt_layout，都沒有就是剪輯器（3.1 起的預設，E-7b）。"""
+    return editorguide.choose_layout(argv, stored) == editorguide.EDITOR
 
 
 def apply_initial_theme(app, theme_name):

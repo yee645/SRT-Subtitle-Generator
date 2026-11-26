@@ -22,13 +22,14 @@ class GuideDialog(QDialog):
 
     closedWith = Signal(bool)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, body=None, title=None):
+        """body／title 不給＝四頁籤的新介面導覽；剪輯器版面給自己的介紹（subtitle/editorguide.py，E-7b）。"""
         super().__init__(parent)
         self.setModal(False)
-        self.setWindowTitle("新介面導覽")
+        self.setWindowTitle(title or "新介面導覽")
         self.body = QPlainTextEdit()
         self.body.setReadOnly(True)
-        self.body.setPlainText(qtguide.body_text(APP_VERSION))
+        self.body.setPlainText(qtguide.body_text(APP_VERSION) if body is None else body)
         self.never_box = QCheckBox("不再顯示這個導覽")
         self.start_btn = QPushButton("開始使用")
         self.start_btn.setDefault(True)

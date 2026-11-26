@@ -13,6 +13,7 @@ Tkinter 為 Python 標準函式庫，無須額外安裝。
     python main.py                         # 開啟 GUI：3.0.0 起是新介面（Qt）；沒有 PySide6 就開一般版
     python main.py --tk                    # 一般版（Tk）
     python main.py --qt                    # 一定開新介面（沒有 PySide6 會講怎麼裝）
+    python main.py --tabs                  # 新介面的四頁籤版面（3.1 起預設是剪輯器版面；--editor 指名剪輯器）
     python main.py 影片1.mp4 影片2.mp4     # 命令列批次：生成 → 匯出 → 燒錄（詳見 cli.py）
     python main.py --review 素材.mp4       # 命令列批次審片：輸出片段分析 CSV 與 HTML 報告
 
@@ -28,6 +29,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 QT_FLAG = "--qt"
 TK_FLAG = "--tk"
+# 新介面的版面（3.1 起預設剪輯器版面，見 subtitle/editorguide.py）：單獨給也是「開新介面」，不能被當成影片檔名
+LAYOUT_FLAGS = ("--tabs", "--editor")
 
 QT_MISSING_TEXT = (
     "新介面（--qt）需要 PySide6，這個環境沒有：\n"
@@ -87,8 +90,8 @@ def run_qt(argv):
 
 
 if __name__ == "__main__":
-    if QT_FLAG in sys.argv[1:]:
-        # 放在命令列批次判斷前面：否則 --qt 會被當成影片檔名丟給 cli。
+    if QT_FLAG in sys.argv[1:] or any(a in LAYOUT_FLAGS for a in sys.argv[1:]):
+        # 放在命令列批次判斷前面：否則 --qt（或 --tabs）會被當成影片檔名丟給 cli。
         sys.exit(run_qt([a for a in sys.argv if a != QT_FLAG]))
     if sys.argv[1:] == [TK_FLAG]:
         # 一般版（3.0.0 起要指名）。只認單獨的 --tk：跟影片檔一起給就照舊是命令列批次（cli 會講不認得的參數）。

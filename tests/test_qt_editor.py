@@ -15,7 +15,8 @@
 8. 圖示：每個都畫得出東西、只用 currentColor、沒有外部連結。樣式表的小圖（箭頭、勾勾）檔案存在。
 9. 關視窗前的詢問沿用：字幕改過沒存、選「取消」就不關。
 10. 四頁籤的舊視窗不受影響：沒有套剪輯器的樣式表。
-11. `main.py --qt --editor --selftest`：打開的是剪輯器版面（看視窗標題），自檢照樣通過。
+11. `main.py --qt --editor --selftest`：打開的是剪輯器版面（看視窗標題），自檢照樣通過；`--tabs` 是四頁籤（E-7b 起
+    不加旗標預設是剪輯器，見 test_qt_editor_layout.py）。
 """
 import copy
 import json
@@ -277,11 +278,13 @@ else:
     app_src = open(os.path.join(ROOT, "gui_qt", "app.py"), encoding="utf-8").read()
     check("main() 開的剪輯器版面也是：會存設定、自檢模式不存",
           "editor.EditorWindow(data, persist=SELFTEST_FLAG not in argv)" in app_src)
-    proc = sp.run([sys.executable, "-B", "main.py", "--qt", "--selftest", out, CLIP], cwd=ROOT, env=env,
+    proc = sp.run([sys.executable, "-B", "main.py", "--qt", "--tabs", "--selftest", out, CLIP], cwd=ROOT, env=env,
                   capture_output=True, timeout=180)
     res = json.load(open(out, encoding="utf-8")) if os.path.exists(out) else {}
-    check("不加 --editor：照舊是四頁籤", proc.returncode == 0 and len(res.get("tabs", [])) == 4
-          and res.get("window_title") == qt_app.WINDOW_TITLE, f"rc={proc.returncode} {res}")
+    # E-7b 起預設是剪輯器版面：原本「不加 --editor 是四頁籤」換成「加 --tabs 是四頁籤」（同樣四個頁籤、同樣的標題）
+    check("加 --tabs：四頁籤", proc.returncode == 0 and len(res.get("tabs", [])) == 4
+          and res.get("window_title") == qt_app.WINDOW_TITLE and res.get("layout") == "tabs",
+          f"rc={proc.returncode} {res}")
 
 print()
 if failures:

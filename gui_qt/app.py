@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 import config
 from subtitle.configmerge import changed_sections, merge_for_save
-from subtitle import qtguide
+from subtitle import editorguide, qtguide
 from subtitle.onedirupdate import SENDS as _ONEDIR_SENDS
 from updater import APP_VERSION
 
@@ -201,6 +201,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(STATUS_INTRO)
         # 首次啟動導覽（第三十五階段）：一般版的「新版介面速覽」；第一次打開跳一次，這顆按鈕隨時再打開
         self.guide_dialog = None
+        # 版面切換（E-7b）：記在設定，下次開啟新介面生效（命令列 --tabs／--editor 還是優先）
+        self.layout_btn = QPushButton()
+        self.layout_btn.clicked.connect(lambda _c=False: self.toggle_next_layout())
+        self.statusBar().addPermanentWidget(self.layout_btn)
+        self._update_layout_btn()
         self.guide_btn = QPushButton("新介面導覽…")
         self.guide_btn.setToolTip("一般版的東西在 Qt 版的哪裡、這一版多了什麼、還有哪裡不一樣")
         self.guide_btn.clicked.connect(lambda _c=False: self.open_guide())
@@ -517,6 +522,43 @@ class MainWindow(QMainWindow):
         """關掉導覽：記進這次開啟的設定（關掉 Qt 版時存）；勾了「不再顯示」就永遠不跳。"""
         self.config_data[qtguide.CONFIG_KEY] = qtguide.remember(never, APP_VERSION)
 
+    # ----- 版面（E-7b） -----
+    LAYOUT = editorguide.TABS  # 這個視窗是哪一種版面（剪輯器版面覆寫）
+
+    def next_layout(self):
+        """下次開啟新介面（沒給 --tabs／--editor）會開哪一種版面。"""
+        return editorguide.choose_layout([], self.config_data.get(editorguide.LAYOUT_KEY))
+
+    def use_layout(self, layout):
+        """下次開啟改用 layout（記進這次開啟的設定，關掉時存）；回傳記下的版面。"""
+        layout = editorguide.choose_layout([], layout)
+        self.config_data[editorguide.LAYOUT_KEY] = layout
+        self._update_layout_btn()
+        if layout == self.LAYOUT:
+            self.statusBar().showMessage(f"下次開啟照舊是{editorguide.LAYOUT_NAMES[layout]}。", 8000)
+        else:
+            self.statusBar().showMessage(
+                f"記住了：下次開啟新介面是{editorguide.LAYOUT_NAMES[layout]}（這次的視窗不變；"
+                "兩種版面同一套功能、同一份設定與專案檔）。", 12000)
+        return layout
+
+    def toggle_next_layout(self):
+        """狀態列的版面按鈕：下次開啟換成另一種；已經換了就取消（照舊開這一種）。"""
+        other = editorguide.TABS if self.LAYOUT == editorguide.EDITOR else editorguide.EDITOR
+        return self.use_layout(other if self.next_layout() == self.LAYOUT else self.LAYOUT)
+
+    def _update_layout_btn(self):
+        other = editorguide.TABS if self.LAYOUT == editorguide.EDITOR else editorguide.EDITOR
+        name = editorguide.LAYOUT_NAMES[other]
+        if self.next_layout() == self.LAYOUT:
+            self.layout_btn.setText(f"改用{name}…")
+            self.layout_btn.setToolTip(f"下次開啟新介面改用{name}（記在設定；這次的視窗不變）。"
+                                       "兩種版面同一套功能、同一份設定與專案檔，隨時可以換回來。")
+        else:
+            self.layout_btn.setText(f"下次開：{name}（按此取消）")
+            self.layout_btn.setToolTip(f"已記住下次開啟新介面是{name}；再按一次取消，照舊開"
+                                       f"{editorguide.LAYOUT_NAMES[self.LAYOUT]}。")
+
     def maybe_show_guide(self):
         """啟動時呼叫：沒看過這一版的導覽、也沒勾過「不再顯示」才跳。回傳有沒有跳。"""
         if not qtguide.should_show(self.config_data.get(qtguide.CONFIG_KEY), APP_VERSION):
@@ -667,7 +709,8 @@ def main(argv=None):
     建立並執行 Qt 版。回傳事件迴圈的結束碼。
 
     `--selftest <結果.json> <影片>`：打包後的自檢模式（見 gui_qt/selftest.py）。
-    `--editor`：剪輯器版面（主流剪輯軟體的排版，見 gui_qt/editor.py）；不加照舊是四頁籤。
+    版面（E-7b）：預設是剪輯器版面（主流剪輯軟體的排版，見 gui_qt/editor.py）；`--tabs` 開四頁籤、`--editor` 開剪輯器，
+    都沒給就照設定的 `qt_layout`（狀態列的版面按鈕改得到，`subtitle/editorguide.py` 的 choose_layout）。
     """
     argv = list(sys.argv if argv is None else argv)
     # 一般版「自動安裝 ffmpeg」裝好的執行檔兩版共用：加進本行程的 PATH
@@ -678,7 +721,8 @@ def main(argv=None):
     _cleanup_previous_update()
     data = config.load_config()
     from gui_qt import editor
-    if editor.editor_requested(argv):  # 剪輯器版面（E 系列，docs/ROADMAP_EDITOR.md）：E-7 之前要加 --editor 才開
+    # 剪輯器版面（E 系列，docs/ROADMAP_EDITOR.md）3.1 起是預設；--tabs 或設定的 qt_layout 開四頁籤（E-7b）
+    if editor.editor_requested(argv, data.get(editorguide.LAYOUT_KEY)):
         editor.apply_initial_theme(app, data.get("theme", "light"))
         win = editor.EditorWindow(data, persist=SELFTEST_FLAG not in argv)  # 自檢模式不碰使用者的設定檔
     else:

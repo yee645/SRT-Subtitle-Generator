@@ -387,6 +387,9 @@ if old_app_src is not None:
         # 剪輯器版面改版 E-7a：四頁籤的位置說法（「②字幕頁」「④」）換成剪輯器說法的對照表，
         # 純字串替換、零 GUI 依賴（全新檔案）。介面在 gui_qt/places.py，test_placenames.py 驗規則。
         "subtitle/placenames.py",
+        # 剪輯器版面改版 E-7b：剪輯器版面介紹的內容、跳不跳的規則、開哪一種版面（命令列／設定），
+        # 純資料與純計算、零 GUI 依賴（全新檔案）。介面在 gui_qt/editor.py、gui_qt/app.py，test_editorguide.py 驗規則。
+        "subtitle/editorguide.py",
     }
     # 未追蹤（還沒 git add）的新檔案 `git diff` 看不到，會整個繞過這份白
     # 名單——本檔案上面那段註解已經修過「未 commit 的刪除」，但**新增**
