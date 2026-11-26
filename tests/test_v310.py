@@ -70,8 +70,9 @@ for name in ("媒體", "字幕", "智慧剪輯", "健檢"):
 check("介紹的名稱跟程式一致（剪輯器版面介紹）", "剪輯器版面介紹" in doc and "剪輯器版面介紹" in src)
 check("按鈕字樣跟程式一致（改用四頁籤版面…、按此取消）", "〔改用四頁籤版面…〕" in doc and "〔改用剪輯器版面…〕" in doc
       and "下次開：四頁籤版面（按此取消）" in doc and "改用{name}…" in src and "（按此取消）" in src)
+table = doc.split("### 快捷鍵")[1].split("\n### ")[0] if "### 快捷鍵" in doc else ""
 for key, _what in editorguide.KEYS:
-    check(f"快捷鍵 {key} 跟剪輯器版面介紹一致", key in doc, key)
+    check(f"快捷鍵表有 {key} 這一列（跟剪輯器版面介紹一致）", f"| {key} |" in table, key)
 check("四頁籤的四頁都講了在哪", all(c in doc.split("## 四頁籤的東西在哪裡")[1].split("\n## ")[0] for c in "①②③④"))
 check("講了 --tabs 與 --editor", "--tabs" in doc and "--editor" in doc)
 check("講了會送出去什麼", "**會送出去的**" in doc)
@@ -81,7 +82,11 @@ check("指回 3.0 的介紹（給還沒裝過新介面的人）", "WHATS_NEW_3.0
 
 # ----- 4 -----
 readme = read("README.md")
-check("README 指向 WHATS_NEW_3.1.md", "docs/WHATS_NEW_3.1.md" in readme)
+check("README：3.1 一節連到介紹", "見 **[3.1 新功能介紹](docs/WHATS_NEW_3.1.md)**" in readme)
+check("README：介紹清單把 3.1 排在 3.0 前面", "[3.1 新功能介紹（剪輯器版面）](docs/WHATS_NEW_3.1.md)" in readme
+      and readme.index("[3.1 新功能介紹（剪輯器版面）]") < readme.index("[3.0 新功能介紹（新介面）]"))
+check("README：3.1 一節排在 3.0 一節前面", "## 3.1：剪輯器版面" in readme
+      and readme.index("## 3.1：剪輯器版面") < readme.index("## 3.0：新介面"))
 check("README 講預設剪輯器版面與 --tabs", "剪輯器版面" in readme and "--tabs" in readme)
 guide = read("docs", "USER_GUIDE.md")
 check("使用說明有 3.1 剪輯器版面一節", "### 3.1 剪輯器版面" in guide and "WHATS_NEW_3.1.md" in guide
