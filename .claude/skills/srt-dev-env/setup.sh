@@ -11,7 +11,7 @@ VENV_TK="${VENV_TK:-/tmp/vtk}"
 VENV_QT="${VENV_QT:-/tmp/qtv12}"
 
 need=()
-for pkg in ffmpeg x11-utils xvfb imagemagick fonts-wqy-zenhei python3-tk python3.12-venv; do
+for pkg in ffmpeg x11-utils xvfb imagemagick fonts-wqy-zenhei python3-tk python3.12-venv libegl1; do  # libegl1：PySide6 載入 QtGui 要用，全新容器沒有
   dpkg -s "$pkg" >/dev/null 2>&1 || need+=("$pkg")
 done
 if [ ${#need[@]} -gt 0 ]; then
