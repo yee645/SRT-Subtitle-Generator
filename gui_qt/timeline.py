@@ -68,13 +68,14 @@ import shutil
 import threading
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (QGraphicsItem, QGraphicsLineItem, QGraphicsRectItem,
-                               QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView)
+                               QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView, QToolTip, QWidget)
 
 from subtitle import assemble as assemble_mod
 from subtitle import cueedit
 from subtitle import cutmarks as cutmarks_mod
+from subtitle import designtokens
 from subtitle import filmstrip as filmstrip_mod
 from subtitle import waveform as waveform_mod
 
@@ -96,12 +97,43 @@ ROW_Y["cuts"] = ROW_Y["cues"] + CUE_H + GAP
 ROW_Y["overlays"] = ROW_Y["cuts"] + CUT_LANE_H + GAP
 ROW_Y["music"] = ROW_Y["overlays"] + TRACK_H + GAP
 TOTAL_H = ROW_Y["music"] + TRACK_H
+ROW_ORDER = ("ruler", "thumbs", "wave", "cues", "cuts", "overlays", "music")
+# 四頁籤的播放器頁用的列高（上面那幾個常數）；剪輯器版面（E-2）的時間軸佔整條下方，軌道加高到主流剪輯軟體的高度
+HEIGHTS = {"ruler": RULER_H, "thumbs": THUMB_H, "wave": WAVE_H, "cues": CUE_H, "cuts": CUT_LANE_H,
+           "overlays": TRACK_H, "music": TRACK_H}
+TALL_HEIGHTS = {"ruler": 24, "thumbs": 60, "wave": 56, "cues": 44, "cuts": 24, "overlays": 32, "music": 32}
+
+
+def row_layout(heights=None):
+    """各列的 (上緣 y, 高度, 總高)：照 ROW_ORDER 由上往下排，列與列之間留 GAP。"""
+    heights = dict(HEIGHTS if heights is None else heights)
+    y, row_y = 0, {}
+    for name in ROW_ORDER:
+        row_y[name] = y
+        y += heights[name] + GAP
+    return row_y, heights, y - GAP
+
+
+# 軌道標頭（剪輯器版面）：(列, 名稱, 色票裡的軌道色)；尺規那一列不寫
+TRACK_HEADERS = (
+    ("thumbs", "畫面", "track.video"), ("wave", "聲音", "track.audio"), ("cues", "字幕", "track.subtitle"),
+    ("cuts", "剪點", "track.cut"), ("overlays", "疊加", "track.overlay"), ("music", "音樂", "track.audio"),
+)
+HEADER_TIPS = {
+    "thumbs": "畫面：影片的縮圖，點一下跳到那裡",
+    "wave": "聲音：影片的音量波形",
+    "cues": "字幕：拖邊改時間、拖身體整句移動、←／→ 微調",
+    "cuts": None,  # 下面補上 CUT_LANE_NOTE
+    "overlays": None,  # 下面補上 TRACK_NOTES
+    "music": None,
+}
 CUT_LANE_NOTE = "剪點列：選了上面的「剪點」之後，點一下方塊停用／啟用、拖左右邊調整範圍"
 TRACK_NOTES = {
     "overlays": "疊加軌：按「加入畫面…」從播放頭的位置放 B-roll 或圖片，拖方塊改位置、拖左右邊修頭尾",
     "music": "音樂軌：按「加入音樂…」從播放頭的位置放配樂，拖方塊改位置、拖左右邊修頭尾",
 }
 TRACK_NAMES = {"overlays": "疊加", "music": "音樂"}
+HEADER_TIPS.update(TRACK_NOTES, cuts=CUT_LANE_NOTE)
 
 CACHE_ROOT = ""  # 空字串＝程式工作目錄
 
@@ -151,33 +183,63 @@ def tick_label(seconds, step):
     return f"{int(minutes)}:{int(round(secs)):02d}"
 
 
+ZOOM_SLIDER_STEPS = 100
+
+
+def zoom_to_slider(px_per_sec, steps=ZOOM_SLIDER_STEPS):
+    """縮放倍率 → 滑桿位置（0～steps，對數刻度：每一格放大的倍數一樣）。"""
+    pps = min(max(float(px_per_sec), MIN_PX_PER_SEC), MAX_PX_PER_SEC)
+    return int(round(math.log(pps / MIN_PX_PER_SEC) / math.log(MAX_PX_PER_SEC / MIN_PX_PER_SEC) * steps))
+
+
+def slider_to_zoom(value, steps=ZOOM_SLIDER_STEPS):
+    """滑桿位置 → 縮放倍率（zoom_to_slider 的反函數）。"""
+    frac = min(max(value / steps, 0.0), 1.0)
+    return MIN_PX_PER_SEC * (MAX_PX_PER_SEC / MIN_PX_PER_SEC) ** frac
+
+
+def elide(text, font, width):
+    """方塊放不下整段字時在尾巴加「…」（E-2；原本是硬切，看不出後面還有字）。"""
+    return QFontMetrics(font).elidedText(text, Qt.ElideRight, max(int(width), 0))
+
+
+def palette_theme(view):
+    """時間軸照調色盤的底色判斷深淺（四頁籤與剪輯器版面的調色盤都適用）。"""
+    base = view.palette().color(QPalette.ColorRole.Base)
+    return "dark" if base.lightness() < 128 else "light"
+
+
 def _palette_colors(view):
-    pal = view.palette()
-    base = pal.color(pal.ColorRole.Base)
-    text = pal.color(pal.ColorRole.Text)
-    dark = base.lightness() < 128
+    """時間軸的配色：一律取 `subtitle/designtokens.py` 的色票名稱（E-2 起不寫死色碼）。"""
+    t = {k: QColor(v) for k, v in designtokens.TOKENS[palette_theme(view)].items()}
+    dark = palette_theme(view) == "dark"
+
+    def alpha(color, a):
+        c = QColor(color)
+        c.setAlpha(a)
+        return c
+
     return {
-        "bg": base,
-        "row": base.darker(115) if not dark else base.lighter(125),
-        "text": text,
-        "tick": QColor(text.red(), text.green(), text.blue(), 140),
-        "wave": QColor("#3f9be0") if dark else QColor("#1f6fb2"),
-        "cue": QColor("#c9892f") if dark else QColor("#e0a040"),
-        "cue_sel": QColor("#ffd27a") if dark else QColor("#ffc85a"),
-        "cue_sel_pen": QColor("#ffffff") if dark else QColor("#1a1a1a"),
-        "cue_text": QColor("#101010"),
-        "playhead": QColor("#e0403a"),
-        "note": QColor(text.red(), text.green(), text.blue(), 170),
-        # 剪點：半透明紅（深色底要亮一點才看得到），邊線不透明
-        "cut": QColor(255, 90, 90, 80) if dark else QColor(220, 40, 40, 64),
-        "cut_edge": QColor("#ff6b6b") if dark else QColor("#c62828"),
-        # 接縫轉場重疊的那幾秒：琥珀色斜線（跟剪點的紅分得開）
-        "seam": QColor("#ffc04d") if dark else QColor("#b26a00"),
-        # 疊加軌（青）與音樂軌（紫）：跟字幕（橘）、剪點（紅）、波形（藍）分得開
-        "overlays": QColor("#2fb5a3") if dark else QColor("#1f9e8c"),
-        "music": QColor("#a77be0") if dark else QColor("#8655c9"),
-        "track_text": QColor("#ffffff"),
-        "track_sel_pen": QColor("#ffffff") if dark else QColor("#1a1a1a"),
+        "bg": t["bg.panel"],
+        "row": t["bg.raised"],
+        "text": t["text.secondary"],
+        "tick": t["text.muted"],
+        "note": t["text.secondary"],
+        "wave": t["track.audio"],
+        "cue": t["track.subtitle"],
+        "cue_sel": t["track.subtitle"].lighter(122),
+        "cue_sel_pen": t["text.primary"],
+        "cue_text": t["track.text"],
+        "playhead": t["accent"],
+        # 剪點：半透明（深色底要濃一點才看得到），邊線與剪點列的方塊不透明
+        "cut": alpha(t["track.cut"], 80 if dark else 64),
+        "cut_edge": t["track.cut"],
+        # 接縫轉場重疊的那幾秒：斜線（跟剪點分得開）
+        "seam": t["warning"],
+        "overlays": t["track.overlay"],
+        "music": t["track.audio"],
+        "track_text": t["track.text"],
+        "track_sel_pen": t["text.primary"],
     }
 
 
@@ -283,7 +345,7 @@ class CutLaneRow(_Row):
     """剪點列的底色；還沒有剪點時寫一行怎麼用。方塊本身是 _make_cut_item 畫的。"""
 
     def paint_range(self, painter, rect, colors):
-        if not self.timeline.cut_marks:
+        if not self.timeline.cut_marks and self.timeline.inline_notes:
             self.paint_note(painter, CUT_LANE_NOTE, colors)
 
 
@@ -291,11 +353,11 @@ class TrackRow(_Row):
     """疊加軌／音樂軌的底色；還沒有素材時寫一行怎麼用。方塊本身是 _make_track_item 畫的。"""
 
     def __init__(self, timeline, kind):
-        super().__init__(timeline, ROW_Y[kind], TRACK_H)
+        super().__init__(timeline, timeline.row_y[kind], timeline.row_h[kind])
         self.kind = kind
 
     def paint_range(self, painter, rect, colors):
-        if not self.timeline.tracks[self.kind]:
+        if not self.timeline.tracks[self.kind] and self.timeline.inline_notes:
             self.paint_note(painter, TRACK_NOTES[self.kind], colors)
 
 
@@ -311,9 +373,18 @@ class TimelineView(QGraphicsView):
     trackItemMoved = Signal(str, int, float)      # 哪一軌、第幾段、拖完的開始（秒）
     trackItemDeleteRequested = Signal(str, int)   # 選取後按 Delete
     trackItemChanged = Signal(str, int, object)   # 哪一軌、第幾段、修過頭尾的新 dict
+    rowsChanged = Signal()                        # 換了列高（軌道標頭跟著重排）
+    durationChanged = Signal(float)               # 換片子（片長 0＝沒有影片）
+    zoomChanged = Signal(float)                   # 換了縮放（每秒幾像素）
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, heights=None, inline_notes=True):
         super().__init__(parent)
+        # 列高：預設是四頁籤的；剪輯器版面傳 TALL_HEIGHTS。inline_notes＝在空的剪點列、素材軌上寫怎麼用
+        # （剪輯器版面改寫在軌道標頭的提示裡，列上保持乾淨）
+        self.row_y, self.row_h, self.total_h = row_layout(heights)
+        self.inline_notes = inline_notes
+        self.last_pick = ""        # 最後選的是字幕（"cue"）還是素材（"track"）：兩種可以同時選著，〔刪除〕刪最後選的
+        self.snap_enabled = True   # 拖曳時貼到播放頭、鄰句的邊（剪輯器工具列的〔吸附〕可以關）
         self.duration = 0.0
         self.px_per_sec = DEFAULT_PX_PER_SEC
         self.peaks = None
@@ -342,13 +413,13 @@ class TimelineView(QGraphicsView):
         self.setFrameShape(QGraphicsView.NoFrame)
         # 沒按鍵時也要收到滑鼠移動，才能在碰到字幕塊的邊時換游標
         self.viewport().setMouseTracking(True)
-        self.setFixedHeight(TOTAL_H + self.horizontalScrollBar().sizeHint().height() + 2)
+        self.setFixedHeight(self.total_h + self.horizontalScrollBar().sizeHint().height() + 2)
         self.colors = _palette_colors(self)
 
-        self.ruler = RulerRow(self, ROW_Y["ruler"], RULER_H)
-        self.thumbs = ThumbRow(self, ROW_Y["thumbs"], THUMB_H)
-        self.wave = WaveRow(self, ROW_Y["wave"], WAVE_H)
-        self.cut_lane = CutLaneRow(self, ROW_Y["cuts"], CUT_LANE_H)
+        self.ruler = RulerRow(self, self.row_y["ruler"], self.row_h["ruler"])
+        self.thumbs = ThumbRow(self, self.row_y["thumbs"], self.row_h["thumbs"])
+        self.wave = WaveRow(self, self.row_y["wave"], self.row_h["wave"])
+        self.cut_lane = CutLaneRow(self, self.row_y["cuts"], self.row_h["cuts"])
         for row in (self.ruler, self.thumbs, self.wave, self.cut_lane):
             self.scene_.addItem(row)
         self.cue_bg = QGraphicsRectItem()
@@ -380,12 +451,27 @@ class TimelineView(QGraphicsView):
 
     # ---- 對外 ----------------------------------------------------------
 
+    def set_row_heights(self, heights, inline_notes=None):
+        """換列高（剪輯器版面把軌道加高）；inline_notes 給了就一起換。已經放上去的東西照新的列重排。"""
+        self.row_y, self.row_h, self.total_h = row_layout(heights)
+        if inline_notes is not None:
+            self.inline_notes = inline_notes
+        rows = {"ruler": self.ruler, "thumbs": self.thumbs, "wave": self.wave, "cuts": self.cut_lane,
+                **self.track_rows}
+        for name, row in rows.items():
+            row.row_y, row.row_h = self.row_y[name], self.row_h[name]
+        self.setFixedHeight(self.total_h + self.horizontalScrollBar().sizeHint().height() + 2)
+        self._pixmaps.clear()
+        self._relayout()
+        self.rowsChanged.emit()
+
     def scene_width(self):
         return max(self.duration * self.px_per_sec, 1.0)
 
     def set_duration(self, seconds):
         self.duration = max(float(seconds), 0.0)
         self._relayout()
+        self.durationChanged.emit(self.duration)
 
     def set_peaks(self, peaks, note=""):
         self.peaks = peaks
@@ -458,7 +544,7 @@ class TimelineView(QGraphicsView):
         scene = self.mapToScene(int(view_pos.x()), int(view_pos.y()))
         pps = self.px_per_sec
         for kind in assemble_mod.TRACK_KINDS:
-            if not ROW_Y[kind] <= scene.y() <= ROW_Y[kind] + TRACK_H:
+            if not self.row_y[kind] <= scene.y() <= self.row_y[kind] + self.row_h[kind]:
                 continue
             t = scene.x() / pps
             for index in range(len(self.tracks[kind]) - 1, -1, -1):
@@ -501,6 +587,8 @@ class TimelineView(QGraphicsView):
         new = (kind, index) if index >= 0 and 0 <= index < len(self.tracks.get(kind, ())) else None
         changed = new != self.track_selected
         self.track_selected = new
+        if new:
+            self.last_pick = "track"
         self._build_tracks()
         if changed:
             self.trackItemSelected.emit(kind if new else "", index if new else -1)
@@ -523,7 +611,7 @@ class TimelineView(QGraphicsView):
         None。只看剪點列；抓邊優先，接縫上抓滑鼠所在的那一段。
         """
         scene = self.mapToScene(int(view_pos.x()), int(view_pos.y()))
-        if not ROW_Y["cuts"] <= scene.y() <= ROW_Y["cuts"] + CUT_LANE_H:
+        if not self.row_y["cuts"] <= scene.y() <= self.row_y["cuts"] + self.row_h["cuts"]:
             return None
         pps = self.px_per_sec
         t = scene.x() / pps
@@ -550,6 +638,8 @@ class TimelineView(QGraphicsView):
             index = -1
         changed = index != self.selected
         self.selected = index
+        if index >= 0:
+            self.last_pick = "cue"
         self._build_cues()
         if changed:
             self.cueSelected.emit(index)
@@ -564,7 +654,7 @@ class TimelineView(QGraphicsView):
         None。只看字幕列；重疊時開始得晚的那句在上面（與畫面、CueIndex 一致）。
         """
         scene = self.mapToScene(int(view_pos.x()), int(view_pos.y()))
-        if not ROW_Y["cues"] <= scene.y() <= ROW_Y["cues"] + CUE_H:
+        if not self.row_y["cues"] <= scene.y() <= self.row_y["cues"] + self.row_h["cues"]:
             return None
         pps = self.px_per_sec
         t = scene.x() / pps
@@ -596,7 +686,7 @@ class TimelineView(QGraphicsView):
         """移動播放頭；follow 時播放頭跑出畫面就捲過去（留 10% 邊界）。"""
         self.position_ms = int(ms)
         x = self.position_ms / 1000.0 * self.px_per_sec
-        self.playhead.setLine(x, 0, x, TOTAL_H)
+        self.playhead.setLine(x, 0, x, self.total_h)
         if follow:
             left, right = self.visible_range()
             if not left * self.px_per_sec <= x <= right * self.px_per_sec:
@@ -617,6 +707,15 @@ class TimelineView(QGraphicsView):
         self._fit_mode = keep_fit  # 使用者自己縮放過就不再自動塞滿
         self._relayout()
         self.horizontalScrollBar().setValue(int(round(anchor_sec * new - anchor_x)))
+        self.zoomChanged.emit(new)
+
+    def snap_tolerance(self):
+        """吸附的距離（秒）：SNAP_PX 換成秒數；關掉吸附時是 0（只有剛好落在吸附點上才算）。"""
+        return SNAP_PX / self.px_per_sec if self.snap_enabled else 0.0
+
+    def set_snap(self, enabled):
+        self.snap_enabled = bool(enabled)
+        return self.snap_enabled
 
     def zoom_in(self):
         self.set_zoom(self.px_per_sec * ZOOM_STEP)
@@ -657,7 +756,7 @@ class TimelineView(QGraphicsView):
             pixmap = self.thumb_pixmap(self.filmstrip.frames[0][1])
             if pixmap is not None and not pixmap.isNull() and pixmap.height():
                 ratio = pixmap.width() / pixmap.height()
-        return max(THUMB_H * ratio, 8.0)
+        return max(self.row_h["thumbs"] * ratio, 8.0)
 
     def thumb_pixmap(self, path):
         pixmap = self._pixmaps.get(path)
@@ -783,7 +882,7 @@ class TimelineView(QGraphicsView):
             kind, index, part, item0, edge0, pressed = self._track_trim
             pps = self.px_per_sec
             delta = self.mapToScene(int(pos.x()), 0).x() / pps - pressed
-            t = cueedit.snap(edge0 + delta, self._track_snap_targets(kind, index), SNAP_PX / pps)
+            t = cueedit.snap(edge0 + delta, self._track_snap_targets(kind, index), self.snap_tolerance())
             self.tracks[kind][index] = assemble_mod.trim_item(kind, item0, part, t, self.duration)
             self._refresh_track(kind, index)
             event.accept()
@@ -802,11 +901,11 @@ class TimelineView(QGraphicsView):
             start0, end0 = assemble_mod.item_span(kind, dict(self.tracks[kind][index], at=at0),
                                                   self.duration)
             targets = self._track_snap_targets(kind, index)
-            at = cueedit.snap(at0 + delta, targets, SNAP_PX / pps)
+            at = cueedit.snap(at0 + delta, targets, self.snap_tolerance())
             # 尾巴也能吸：頭沒吸到時，看尾巴（at＋原本長度）有沒有靠近吸附點
             if at == at0 + delta:
                 length = end0 - start0
-                tail = cueedit.snap(at0 + delta + length, targets, SNAP_PX / pps)
+                tail = cueedit.snap(at0 + delta + length, targets, self.snap_tolerance())
                 at = tail - length
             self.tracks[kind][index]["at"] = assemble_mod.clamp_at(at, self.duration)
             self._refresh_track(kind, index)
@@ -822,7 +921,7 @@ class TimelineView(QGraphicsView):
                 targets = [self.position_ms / 1000.0]
                 for _i, cue in self.cues:
                     targets += [float(cue["start"]), float(cue["end"])]
-                t = cueedit.snap(base + delta, targets, SNAP_PX / pps)
+                t = cueedit.snap(base + delta, targets, self.snap_tolerance())
                 marks = list(self.cut_marks)
                 marks[index] = dict(marks[index], start=start0, end=end0)
                 start, end = cutmarks_mod.drag_mark_edge(marks, index, part, t,
@@ -843,7 +942,7 @@ class TimelineView(QGraphicsView):
             # 移動的量＝滑鼠移動的量：抓在邊旁邊幾個像素也不會一按就跳到滑鼠上
             delta = self.mapToScene(int(pos.x()), 0).x() / pps - pressed
             common = dict(duration=self.duration or None,
-                          snap_to=[self.position_ms / 1000.0], snap_tolerance=SNAP_PX / pps)
+                          snap_to=[self.position_ms / 1000.0], snap_tolerance=self.snap_tolerance())
             if part == cueedit.BODY:
                 self._drag_times = cueedit.move_cue(self._source, index, start0 + delta, **common)
             else:
@@ -991,11 +1090,11 @@ class TimelineView(QGraphicsView):
 
     def _in_track_row(self, view_pos):
         y = self.mapToScene(int(view_pos.x()), int(view_pos.y())).y()
-        return any(ROW_Y[k] <= y <= ROW_Y[k] + TRACK_H for k in assemble_mod.TRACK_KINDS)
+        return any(self.row_y[k] <= y <= self.row_y[k] + self.row_h[k] for k in assemble_mod.TRACK_KINDS)
 
     def _in_cue_row(self, view_pos):
         y = self.mapToScene(int(view_pos.x()), int(view_pos.y())).y()
-        return ROW_Y["cues"] <= y <= ROW_Y["cues"] + CUE_H
+        return self.row_y["cues"] <= y <= self.row_y["cues"] + self.row_h["cues"]
 
     def _request_seek(self, view_x):
         ms = int(round(self.seconds_at(view_x) * 1000))
@@ -1004,10 +1103,12 @@ class TimelineView(QGraphicsView):
 
     def _relayout(self):
         width = self.scene_width()
-        self.scene_.setSceneRect(0, 0, width, TOTAL_H)
+        self.scene_.setSceneRect(0, 0, width, self.total_h)
+        # 列與列之間的縫露出面板底色（E-2：原本整片同色，分不出軌道）
+        self.setBackgroundBrush(QBrush(self.colors["bg"]))
         for row in (self.ruler, self.thumbs, self.wave, self.cut_lane, *self.track_rows.values()):
             row.update_geometry()
-        self.cue_bg.setRect(0, ROW_Y["cues"], width, CUE_H)
+        self.cue_bg.setRect(0, self.row_y["cues"], width, self.row_h["cues"])
         self.cue_bg.setBrush(QBrush(self.colors["row"]))
         self.playhead.setPen(QPen(self.colors["playhead"], 2))
         self._build_cues()
@@ -1036,7 +1137,7 @@ class TimelineView(QGraphicsView):
         self.seam_items = []
         pps = self.px_per_sec
         for start, end in self.seam_spans:
-            rect = QRectF(start * pps, ROW_Y["cuts"] + 3, max((end - start) * pps, 2.0), CUT_LANE_H - 6)
+            rect = QRectF(start * pps, self.row_y["cuts"] + 3, max((end - start) * pps, 2.0), self.row_h["cuts"] - 6)
             item = QGraphicsRectItem(rect)
             item.setBrush(QBrush(self.colors["seam"], Qt.BDiagPattern))
             item.setPen(QPen(self.colors["seam"], 1))
@@ -1056,7 +1157,7 @@ class TimelineView(QGraphicsView):
         pps = self.px_per_sec
         start, end = float(mark["start"]), float(mark["end"])
         enabled = mark.get("enabled", True)
-        top, bottom = ROW_Y["thumbs"], ROW_Y["cues"] + CUE_H
+        top, bottom = self.row_y["thumbs"], self.row_y["cues"] + self.row_h["cues"]
         # 再短的剪點也至少 2 像素寬，拉到最遠也看得到
         width = max((end - start) * pps, 2.0)
         rect = QRectF(start * pps, top, width, bottom - top)
@@ -1073,7 +1174,7 @@ class TimelineView(QGraphicsView):
             QGraphicsLineItem(x, top, x, bottom, item).setPen(edge)
         if enabled:
             # 尺規列底下的紅線：拉遠時一眼看出哪裡有剪（停用的不畫）
-            bar = QGraphicsRectItem(rect.left(), ROW_Y["ruler"] + RULER_H - 4, width, 4, item)
+            bar = QGraphicsRectItem(rect.left(), self.row_y["ruler"] + self.row_h["ruler"] - 4, width, 4, item)
             bar.setBrush(QBrush(self.colors["cut_edge"]))
             bar.setPen(QPen(Qt.NoPen))
         reasons = "\n".join(f"・{r}" for r in mark.get("reasons") or ())
@@ -1083,7 +1184,7 @@ class TimelineView(QGraphicsView):
                + (f"\n{reasons}" if reasons else ""))
         item.setToolTip(tip)
         # 剪點列上的方塊：點一下停用／啟用、拖左右邊調整
-        lane = QGraphicsRectItem(rect.left(), ROW_Y["cuts"] + 3, width, CUT_LANE_H - 6, item)
+        lane = QGraphicsRectItem(rect.left(), self.row_y["cuts"] + 3, width, self.row_h["cuts"] - 6, item)
         if enabled:
             lane.setBrush(QBrush(self.colors["cut_edge"]))
             lane.setPen(QPen(self.colors["cut_edge"].darker(130), 1))
@@ -1097,8 +1198,8 @@ class TimelineView(QGraphicsView):
             font.setPixelSize(11)
             label = QGraphicsSimpleTextItem(f"{end - start:.1f}s" if enabled else "不剪", lane)
             label.setFont(font)
-            label.setBrush(QBrush(QColor("#ffffff") if enabled else self.colors["cut_edge"]))
-            label.setPos(rect.left() + 4, ROW_Y["cuts"] + 3)
+            label.setBrush(QBrush(self.colors["track_text"] if enabled else self.colors["cut_edge"]))
+            label.setPos(rect.left() + 4, self.row_y["cuts"] + 3)
             lane.setFlag(QGraphicsItem.ItemClipsChildrenToShape, True)
         self.scene_.addItem(item)
         return item, lane
@@ -1120,7 +1221,7 @@ class TimelineView(QGraphicsView):
         pps = self.px_per_sec
         data = self.tracks[kind][index]
         start, end = self.track_span(kind, index)
-        rect = QRectF(start * pps, ROW_Y[kind] + 2, max((end - start) * pps, 2.0), TRACK_H - 4)
+        rect = QRectF(start * pps, self.row_y[kind] + 2, max((end - start) * pps, 2.0), self.row_h[kind] - 4)
         item = QGraphicsRectItem(rect)
         color = self.colors[kind]
         item.setBrush(QBrush(color))
@@ -1152,7 +1253,8 @@ class TimelineView(QGraphicsView):
         if rect.width() > 24:
             font = QFont(self.font())
             font.setPixelSize(11)
-            label = QGraphicsSimpleTextItem(name + (f"（{'、'.join(marks)}）" if marks else ""), item)
+            label = QGraphicsSimpleTextItem(elide(name + (f"（{'、'.join(marks)}）" if marks else ""), font,
+                                                  rect.width() - 8), item)
             label.setFont(font)
             label.setBrush(QBrush(self.colors["track_text"]))
             label.setPos(rect.left() + 4, rect.top() + (rect.height() - 13) / 2)
@@ -1173,7 +1275,7 @@ class TimelineView(QGraphicsView):
         font = QFont(self.font())
         font.setPixelSize(12)
         start, end = self.cue_times(index)
-        rect = QRectF(start * pps, ROW_Y["cues"] + 3, max((end - start) * pps, 1.0), CUE_H - 6)
+        rect = QRectF(start * pps, self.row_y["cues"] + 3, max((end - start) * pps, 1.0), self.row_h["cues"] - 6)
         item = QGraphicsRectItem(rect)
         if index == self.selected:
             item.setBrush(QBrush(self.colors["cue_sel"]))
@@ -1188,13 +1290,74 @@ class TimelineView(QGraphicsView):
         label = None
         text = " ".join(str(cue.get("text", "")).split())
         if rect.width() > 24 and text:
-            label = QGraphicsSimpleTextItem(text, item)
+            label = QGraphicsSimpleTextItem(elide(text, font, rect.width() - 8), item)
             label.setFont(font)
             label.setBrush(QBrush(self.colors["cue_text"]))
             label.setPos(rect.left() + 4, rect.top() + (rect.height() - 14) / 2)
             # 字比方塊長就截掉：子項目裁到父項目的外框
             item.setFlag(QGraphicsItem.ItemClipsChildrenToShape, True)
         return item, label
+
+
+class TrackHeader(QWidget):
+    """
+    軌道標頭（剪輯器版面，E-2）：時間軸左邊固定的一欄，每一列寫名稱、左邊一條軌道色；滑過去的提示寫這一列怎麼用
+    （原本寫在空的列上）。列的位置跟著 TimelineView 的 row_y／row_h，換列高時重排。
+    """
+
+    WIDTH = 72
+
+    def __init__(self, timeline, parent=None):
+        super().__init__(parent)
+        self.timeline = timeline
+        self.setFixedWidth(self.WIDTH)
+        self.setMouseTracking(True)
+        timeline.rowsChanged.connect(self._sync)
+        self._sync()
+
+    def _sync(self):
+        self.setFixedHeight(self.timeline.height())
+        self.update()
+
+    def row_rect(self, name):
+        """某一列在標頭裡的範圍（跟時間軸同高同位置）。"""
+        return QRectF(0, self.timeline.row_y[name], self.width() - 6, self.timeline.row_h[name])
+
+    def row_at(self, y):
+        for name, _label, _color in TRACK_HEADERS:
+            r = self.row_rect(name)
+            if r.top() <= y <= r.bottom():
+                return name
+        return None
+
+    def event(self, event):  # noqa: D401 —— 每一列各自的提示
+        if event.type() == QEvent.Type.ToolTip:
+            name = self.row_at(event.pos().y())
+            if name:
+                QToolTip.showText(event.globalPos(), HEADER_TIPS[name], self)
+            else:
+                QToolTip.hideText()
+                event.ignore()
+            return True
+        return super().event(event)
+
+    def paintEvent(self, _event):  # noqa: N802
+        t = designtokens.TOKENS[palette_theme(self.timeline)]
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        font = QFont(self.font())
+        font.setPixelSize(designtokens.FONT_PX["small"])
+        painter.setFont(font)
+        for name, label, color in TRACK_HEADERS:
+            r = self.row_rect(name)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(t["bg.raised"]))
+            painter.drawRoundedRect(r, designtokens.RADIUS["clip"], designtokens.RADIUS["clip"])
+            painter.setBrush(QColor(t[color]))
+            painter.drawRoundedRect(QRectF(r.left() + 4, r.top() + 4, 3, max(r.height() - 8, 2)), 1.5, 1.5)
+            painter.setPen(QColor(t["text.secondary"]))
+            painter.drawText(r.adjusted(14, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, label)
+        painter.end()
 
 
 class TimelineLoader(QObject):

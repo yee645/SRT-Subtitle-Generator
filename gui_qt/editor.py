@@ -24,10 +24,11 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
-    QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+    QSlider, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from gui_qt import icons, theme
+from gui_qt import timeline as timeline_mod
 from gui_qt.app import MainWindow, apply_theme
 from updater import APP_VERSION
 
@@ -40,6 +41,8 @@ LEFT_WIDTH = 400
 SECTION_WIDTH = {"media": 340, "subtitles": 420, "smart": 660, "health": 660}
 INSPECTOR_WIDTH = 300
 RAIL_WIDTH = 64
+SPLIT_KEY = "Ctrl+B"
+TIMELINE_EMPTY_TEXT = "開啟影片後，縮圖、波形與字幕會排在這裡。"
 
 # 左邊圖示列：(鍵, 圖示, 名稱, 提示)
 RAIL = (
@@ -87,7 +90,10 @@ FEATURE_MAP = (
     ("復原", "player_panel.undo_btn", "timeline"),
     ("重做", "player_panel.redo_btn", "timeline"),
     ("存字幕", "player_panel.save_btn", "timeline"),
-    ("刪除選取的素材", "player_panel.remove_track_btn", "timeline"),
+    ("在播放頭分割字幕（E-2b）", "split_tool", "timeline"),
+    ("刪除選取（字幕或素材；原本只刪素材）", "delete_tool", "timeline"),
+    ("吸附開關（E-2b）", "snap_tool", "timeline"),
+    ("縮放滑桿（E-2b）", "zoom_slider", "timeline"),
     ("時間軸縮放（拉遠、拉近、整支）", "player_panel.fit_btn", "timeline"),
     ("時間軸（字幕、波形、縮圖、剪點、素材軌）", "player_panel.timeline", "timeline"),
     ("照剪點輸出", "player_panel.export_btn", "export"),
@@ -103,6 +109,7 @@ REPLACED = (
     ("lookup_btn", "lookup_tool"),
     ("guide_btn", "guide_tool"),
     ("theme_btn", "theme_tool"),
+    ("player_panel.remove_track_btn", "delete_tool"),  # E-2b：刪素材也刪字幕（刪最後選的那個）
 )
 
 
@@ -473,13 +480,111 @@ class EditorWindow(MainWindow):
                                      (p.save_btn, "save", None)):
             bar.addWidget(self._iconify(btn, icon_name, text, role="ghost"))
         bar.addWidget(self._separator())
-        bar.addWidget(self._iconify(p.remove_track_btn, "delete", role="ghost"))
+        # E-2b：分割、刪除（字幕或素材）、吸附、縮放滑桿（照剪映的工具列）
+        self.split_tool = self._tool("split", "在播放頭把字幕切成兩句（Ctrl+B）", self.split_at_playhead, text="分割")
+        self.delete_tool = self._tool("delete", "刪除時間軸上選取的字幕或素材（Delete）", self.delete_selection,
+                                      text="刪除")
+        p.remove_track_btn.setParent(self.legacy_central)  # 換成 delete_tool（同一個動作再加上刪字幕）
+        p.remove_track_btn.hide()
+        for tool in (self.split_tool, self.delete_tool):
+            bar.addWidget(tool)
         bar.addStretch(1)
-        for btn, icon_name in ((p.zoom_out_btn, "zoom_out"), (p.zoom_in_btn, "zoom_in"), (p.fit_btn, "fit")):
-            bar.addWidget(self._iconify(btn, icon_name, "", role="ghost"))
+        self.snap_tool = self._tool("magnet", "拖曳時貼到播放頭與鄰句的邊（關掉就自由拖）", lambda: None,
+                                    checkable=True, text="吸附")
+        self.snap_tool.setChecked(p.timeline.snap_enabled)
+        self.snap_tool.toggled.connect(p.timeline.set_snap)
+        for tool in (self.split_tool, self.delete_tool, self.snap_tool):
+            tool.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        bar.addWidget(self.snap_tool)
+        bar.addWidget(self._separator())
+        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider.setRange(0, timeline_mod.ZOOM_SLIDER_STEPS)
+        self.zoom_slider.setFixedWidth(120)
+        self.zoom_slider.setToolTip("縮放時間軸（Ctrl＋滾輪也可以）")
+        self.zoom_slider.setValue(timeline_mod.zoom_to_slider(p.timeline.px_per_sec))
+        self.zoom_slider.valueChanged.connect(self._zoom_from_slider)
+        p.timeline.zoomChanged.connect(self._sync_zoom_slider)
+        for btn, icon_name in ((p.zoom_out_btn, "zoom_out"), (self.zoom_slider, None), (p.zoom_in_btn, "zoom_in"),
+                               (p.fit_btn, "fit")):
+            bar.addWidget(btn if icon_name is None else self._iconify(btn, icon_name, "", role="ghost"))
         col.addLayout(bar)
-        col.addWidget(p.timeline)
+        for signal in (p.timeline.cueSelected, p.timeline.trackItemSelected, p.cuesChanged, p.timeline.durationChanged):
+            signal.connect(self._update_timeline_tools)
+        self._update_timeline_tools()
+        # E-2：軌道加高、列上不寫說明（改寫在軌道標頭的提示裡）、左邊一欄軌道標頭
+        p.timeline.set_row_heights(timeline_mod.TALL_HEIGHTS, inline_notes=False)
+        self.track_header = timeline_mod.TrackHeader(p.timeline)
+        tracks = QWidget()
+        row = QHBoxLayout(tracks)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self.track_header, 0, Qt.AlignTop)
+        row.addWidget(p.timeline, 1, Qt.AlignTop)
+        # 還沒開影片：一句話＋〔開啟影片〕（同一顆按鈕的動作），不攤一排空的列
+        self.timeline_empty = QWidget()
+        self.timeline_empty.setObjectName("timelineEmpty")
+        empty = QVBoxLayout(self.timeline_empty)
+        empty.addStretch(1)
+        self.timeline_empty_label = _secondary(QLabel(TIMELINE_EMPTY_TEXT))
+        self.timeline_empty_label.setAlignment(Qt.AlignCenter)
+        empty.addWidget(self.timeline_empty_label)
+        self.timeline_open_btn = QPushButton("開啟影片…")
+        self.timeline_open_btn.setToolTip(p.open_btn.toolTip() or "開啟要上字幕或剪輯的影片")
+        self.timeline_open_btn.clicked.connect(p.open_btn.click)
+        self._iconify(self.timeline_open_btn, "open")
+        empty.addWidget(self.timeline_open_btn, 0, Qt.AlignHCenter)
+        empty.addStretch(1)
+        self.timeline_stack = QStackedWidget()
+        self.timeline_stack.addWidget(self.timeline_empty)
+        self.timeline_stack.addWidget(tracks)
+        self.timeline_stack.setFixedHeight(p.timeline.height())
+        p.timeline.durationChanged.connect(self._sync_timeline_empty)
+        p.timeline.rowsChanged.connect(lambda: self.timeline_stack.setFixedHeight(p.timeline.height()))
+        self._sync_timeline_empty()
+        col.addWidget(self.timeline_stack)
         return panel
+
+    def _zoom_from_slider(self, value):
+        self.player_panel.timeline.set_zoom(timeline_mod.slider_to_zoom(value))
+
+    def _sync_zoom_slider(self, px_per_sec):
+        """時間軸的縮放（按鈕、Ctrl＋滾輪、整支）變了，滑桿跟著移（不再回頭觸發縮放）。"""
+        self.zoom_slider.blockSignals(True)
+        self.zoom_slider.setValue(timeline_mod.zoom_to_slider(px_per_sec))
+        self.zoom_slider.blockSignals(False)
+
+    def _update_timeline_tools(self, *_args):
+        """分割：有字幕就能按（切不了會講原因）；刪除：時間軸上選了字幕或素材才能按。"""
+        p = self.player_panel
+        t = p.timeline
+        self.split_tool.setEnabled(bool(p.cues) and t.duration > 0)
+        self.delete_tool.setEnabled(t.track_selected is not None or 0 <= t.selected < len(p.cues))
+
+    def split_at_playhead(self):
+        """〔分割〕、Ctrl+B：切不了就在狀態列講原因。回傳切的是第幾句（切不了是 -1）。"""
+        try:
+            index = self.player_panel.split_at_playhead()
+        except ValueError as exc:
+            self.statusBar().showMessage(f"不能分割：{exc}", 5000)
+            return -1
+        self.statusBar().showMessage(f"已把第 {index + 1} 句切成兩句（Ctrl+Z 可以復原）", 5000)
+        return index
+
+    def delete_selection(self):
+        """〔刪除〕、Delete：刪時間軸上最後選的字幕或素材。"""
+        what = self.player_panel.delete_selection()
+        if what == "cue":
+            self.statusBar().showMessage("已刪除選取的字幕（Ctrl+Z 可以復原）", 5000)
+        elif what == "track":
+            self.statusBar().showMessage("已刪除選取的素材", 5000)
+        self._update_timeline_tools()
+        return what
+
+    def _sync_timeline_empty(self, *_args):
+        """時間軸沒有片子時顯示空狀態，有片長就換回軌道。回傳現在是不是空狀態。"""
+        empty = self.player_panel.timeline.duration <= 0
+        self.timeline_stack.setCurrentIndex(0 if empty else 1)
+        return empty
 
     def _separator(self):
         holder = QWidget()
@@ -554,6 +659,9 @@ class EditorWindow(MainWindow):
         p = self.player_panel
         bindings = list(edit_shortcuts(p.undo, p.redo, self.cue_panel.save))
         bindings.append((QKeySequence(QKeySequence.Find), self._find))
+        # E-2b：剪映的分割、刪除（Delete 在打字的地方是那個欄位自己的，不會被這裡搶走）
+        bindings.append((QKeySequence(SPLIT_KEY), self.split_at_playhead))
+        bindings.append((QKeySequence(QKeySequence.Delete), self.delete_selection))
         self.shortcuts = []
         for seq, slot in bindings:
             sc = QShortcut(seq, self)
@@ -603,6 +711,7 @@ class EditorWindow(MainWindow):
         self._update_play_icon()
         p = self.player_panel
         p.timeline.update()
+        self.track_header.update()
         return self._theme
 
     def toggle_theme(self):

@@ -53,6 +53,8 @@ PATHS = {
     "inspector": '<path d="M5 6h8M17 6h2M5 12h2M11 12h8M5 18h10M19 18h0"/><circle cx="15" cy="6" r="2"/>'
                  '<circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
     "picture": '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17" /><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/>',
+    "split": '<path d="M12 3.5v17"/><path d="M8.5 7H5v10h3.5M15.5 7H19v10h-3.5"/>',
+    "magnet": '<path d="M6 4.5v7a6 6 0 0 0 12 0v-7h-3.5v7a2.5 2.5 0 0 1-5 0v-7z"/><path d="M6 8.5h3.5M14.5 8.5H18"/>',
     "chevron_down": '<path d="m6 9 6 6 6-6" stroke-width="2.2"/>',
     "chevron_up": '<path d="m6 15 6-6 6 6" stroke-width="2.2"/>',
     "check": '<path d="m5 12.5 4.5 4.5L19 7.5" stroke-width="2.8"/>',

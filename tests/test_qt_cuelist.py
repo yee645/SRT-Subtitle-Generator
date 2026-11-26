@@ -292,6 +292,28 @@ else:
           and abs(saved[3]["start"] - 9.6) < 0.01 and saved[3]["end"] <= 10.0 + 0.01
           and panel.unsaved_changes() == 0, str([(c["text"], c["start"], c["end"]) for c in saved]))
 
+    # ----- 6. 句子換了位置，編輯框裡沒改過的舊字不會寫到別句上 -----
+    # （剪輯器 E-2b 的分割→復原抓到的：選第 2 句，句子從外面被拿掉一句之後，第 2 個位置換成別句；這時再換選取，
+    #   編輯框裡的舊字原本會被當成「改過」套用到現在第 2 個位置的那句）
+    cp.select(1)
+    wait(30)
+    before = [dict(c) for c in panel.cues]
+    loaded = editor.toPlainText()
+    panel.delete_cue(0)       # 不是從清單刪的（例如時間軸的 Delete）：清單的選取跟著原本的列
+    panel.timeline.select_cue(0, seek=False)
+    wait(30)
+    check("句子換了位置：沒改過的編輯框不套用到別句", [c["text"] for c in panel.cues] == [c["text"] for c in before[1:]],
+          f"編輯框「{loaded}」→ {texts()}")
+    panel.undo()
+    wait(30)
+    check("復原：回到原樣、沒有字被寫到別句", panel.cues == before, str(texts()))
+    cp.select(1)
+    wait(30)
+    editor.setPlainText("真的改了")
+    cp.select(2)
+    wait(30)
+    check("真的改過字：換選取時照樣套用", texts()[1] == "真的改了", str(texts()))
+
     panel._ask_discard = lambda: "discard"
     panel._ask_project_discard = lambda: "discard"
     panel.shutdown()

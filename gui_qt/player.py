@@ -1334,6 +1334,40 @@ class PlayerPanel(QWidget):
         self.timeline.select_cue(min(index, len(self.cues) - 1), seek=False)
         self._after_edit()
 
+    def split_at_playhead(self):
+        """
+        在播放頭把字幕切成兩句（剪映、Premiere 的「分割」，剪輯器版面的 Ctrl+B；可以復原）。切的是選取的那句
+        （播放頭要在它裡面），不然是播放頭底下那句；切完選後半句。回傳切的是第幾句；切不了拋 ValueError（講原因）。
+        """
+        t = self.player.position() / 1000.0
+        index = self.timeline.selected
+        if not (0 <= index < len(self.cues)
+                and float(self.cues[index]["start"]) <= t < float(self.cues[index]["end"])):
+            index = cueedit.cue_at(self.cues, t)
+        if index < 0:
+            raise ValueError("播放頭底下沒有字幕可以分割")
+        cues = cueedit.split_cue(self.cues, index, t)
+        self.history.record_split(index, self.cues[index], cues[index:index + 2])
+        self.cues = cues
+        self.timeline.set_cues(self.cues, keep_selection=True)
+        self.timeline.select_cue(index + 1, seek=False)
+        self._after_edit()
+        return index
+
+    def delete_selection(self):
+        """
+        刪掉時間軸上選取的東西（剪輯器版面的〔刪除〕、Delete）。字幕與素材可以同時選著，刪最後選的那個；
+        字幕可以復原。回傳刪了什麼："track"／"cue"；什麼都沒選（或輸出中不能刪素材）回傳 None。
+        """
+        index = self.timeline.selected
+        cue_ok = 0 <= index < len(self.cues)
+        if self.timeline.track_selected and not (cue_ok and self.timeline.last_pick == "cue"):
+            return "track" if self.remove_selected_track() else None
+        if cue_ok:
+            self.delete_cue(index)
+            return "cue"
+        return None
+
     def replace_text(self, term, replacement, case_sensitive=False, only=None):
         """
         尋找取代（整批是一步復原）。回傳 (取代了幾處, 改到的句子, 因為會變空而沒改的句子)。
