@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from gui_qt.places import here
 from subtitle import pipeline
 from subtitle.burner import ffmpeg_available
 from subtitle.errors import describe_exception
@@ -123,7 +124,7 @@ class BatchDialog(QDialog):
         layout.addWidget(self.file_list)
         row = QHBoxLayout()
         self.add_btn = QPushButton("加入檔案…")
-        self.add_current_btn = QPushButton("加入②開著的")
+        self.add_current_btn = QPushButton(here(self, "加入②開著的"))
         self.remove_btn = QPushButton("移除選取")
         self.clear_btn = QPushButton("清空")
         for button in (self.add_btn, self.add_current_btn, self.remove_btn, self.clear_btn):
@@ -172,8 +173,8 @@ class BatchDialog(QDialog):
         self.start_btn = QPushButton("開始批次")
         self.start_btn.setDefault(True)
         self.stop_btn = QPushButton("停止（做完這一支就停）")
-        self.open_btn = QPushButton("在②開啟這支")
-        self.open_btn.setToolTip("把選取的那一支（影片＋它剛匯出的字幕）開在②，接著校對")
+        self.open_btn = QPushButton(here(self, "在②開啟這支"))
+        self.open_btn.setToolTip(here(self, "把選取的那一支（影片＋它剛匯出的字幕）開在②，接著校對"))
         self.close_btn = QPushButton("關閉")
         buttons.addWidget(self.start_btn)
         buttons.addWidget(self.stop_btn)
@@ -275,7 +276,7 @@ class BatchDialog(QDialog):
             missing = self.missing_transcripts()
             if missing:
                 lines.append("這幾支旁邊沒有同名的 .txt 講稿：" + "、".join(os.path.basename(p) for p in missing))
-        lines.append(SETTINGS_NOTE)
+        lines.append(here(self, SETTINGS_NOTE))
         self.notice.setText("\n".join(lines))
 
         for widget in (self.add_btn, self.remove_btn, self.clear_btn, self.language_box, *self.mode_buttons.values()):
@@ -323,7 +324,7 @@ class BatchDialog(QDialog):
         if not pipeline.enabled_export_formats(automation) and not automation.get("burn_video"):
             return self._refuse(pipeline.describe_output_plan(config))
         if automation.get("burn_video") and not ffmpeg_available():
-            return self._refuse(NO_FFMPEG)
+            return self._refuse(here(self, NO_FFMPEG))
         if mode == "align":
             lacking = self.missing_transcripts()
             if lacking:
@@ -389,7 +390,7 @@ class BatchDialog(QDialog):
             self.result_tree.addTopLevelItem(item)
             item.setExpanded(True)
         self.progress_bar.setValue(1000)
-        tip = "選一支成功的按〔在②開啟這支〕接著校對。" if any(r["ok"] for r in self.results) else ""
+        tip = here(self, "選一支成功的按〔在②開啟這支〕接著校對。") if any(r["ok"] for r in self.results) else ""
         self.status_label.setText(summary_text(self.results) + tip)
         self.refresh()
 
@@ -412,14 +413,14 @@ class BatchDialog(QDialog):
         if not os.path.exists(result["path"]):
             return self._refuse(f"找不到這支影片：{result['path']}")
         if not self.player._maybe_drop_project() or not self.player.maybe_discard():
-            return self._refuse("沒有開：②目前的專案或字幕還有沒存的修改。")
+            return self._refuse(here(self, "沒有開：②目前的專案或字幕還有沒存的修改。"))
         self.player.open_video(result["path"])
         srt = next((p for p in result["result"]["exports"] if p.lower().endswith(".srt") and os.path.exists(p)), "")
         if srt:
             self.player.load_subtitles(srt)
         else:
             self.player.set_generated_cues([dict(c) for c in result["result"]["cues"]])
-        self.status_label.setText(f"已在②開啟：{os.path.basename(result['path'])}"
+        self.status_label.setText(here(self, f"已在②開啟：{os.path.basename(result['path'])}")
                                   + (f"（字幕：{os.path.basename(srt)}）" if srt else "（字幕還沒存成檔）"))
         return True
 

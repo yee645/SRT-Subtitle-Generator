@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QProgressBar, QPushButton, QSpinBox, QVBoxLayout,
 )
 
+from gui_qt.places import here
 from subtitle import branding
 from subtitle.burner import ffmpeg_available
 from subtitle.errors import describe_exception
@@ -77,13 +78,13 @@ class BrandingBox(QGroupBox):
         settings = branding.resolve_branding_settings(self.config)
 
         layout = QVBoxLayout(self)
-        note = QLabel(NOTE)
+        note = QLabel(here(self, NOTE))
         note.setWordWrap(True)
         layout.addWidget(note)
         grid = QGridLayout()
         grid.addWidget(QLabel("來源影片"), 0, 0)
         self.source_edit = QLineEdit()
-        self.source_edit.setPlaceholderText("留空＝②字幕頁開著的影片")
+        self.source_edit.setPlaceholderText(here(self, "留空＝②字幕頁開著的影片"))
         self.source_btn = QPushButton("瀏覽…")
         self.source_btn.clicked.connect(lambda: self._browse(self.source_edit, "選擇來源影片", VIDEO_FILTER))
         self.source_clear = QPushButton("清除")
@@ -194,7 +195,7 @@ class BrandingBox(QGroupBox):
             return self._refuse(OTHER_BUSY)
         source = self.source_path()
         if not source or not os.path.exists(source):
-            return self._refuse(NO_SOURCE)
+            return self._refuse(here(self, NO_SOURCE))
         if not ffmpeg_available():
             return self._refuse(NO_FFMPEG)
         settings = self.collect_settings()

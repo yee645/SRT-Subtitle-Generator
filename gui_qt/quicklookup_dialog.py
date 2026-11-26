@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 )
 
 import config as config_module
+from gui_qt.places import here
 from subtitle import clipwatch as cw
 from subtitle import hotkey as hk
 from subtitle import quicklookup as ql
@@ -200,7 +201,7 @@ class QuickLookupDialog(QDialog):
         prefs = self.config_data.get("quicktranslate") or {}
 
         layout = QVBoxLayout(self)
-        hint = QLabel(HINT)
+        hint = QLabel(here(self, HINT))
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.tabs = QTabWidget()
@@ -445,7 +446,7 @@ class QuickLookupDialog(QDialog):
             self._stop_clipwatch()
             self.clip_status.setText("")
         if has_key:
-            self._show(src="", dst=INITIAL, terms="", status=WAITING)
+            self._show(src="", dst=here(self, INITIAL), terms="", status=WAITING)
         else:
             self._show(src="", dst=NOKEY_BODY, terms="", status=NOKEY_STATUS)
 
@@ -491,7 +492,7 @@ class QuickLookupDialog(QDialog):
             if index is not None and 0 <= index < len(self.player.cues):
                 text = str(self.player.cues[index].get("text") or "")
         if not text.strip():
-            self.status_label.setText(NOTHING_SELECTED)
+            self.status_label.setText(here(self, NOTHING_SELECTED))
             return False
         return self.submit(text, manual=True)
 
@@ -501,7 +502,7 @@ class QuickLookupDialog(QDialog):
         source = qt.normalize_snippet(raw_text)
         if not source:
             if manual:
-                self.status_label.setText(NOTHING_SELECTED)
+                self.status_label.setText(here(self, NOTHING_SELECTED))
             return False
         if st.is_secret(source):  # 所有路徑都經過這裡：寧可漏翻、不可誤送
             self.status_label.setText(SECRET_BLOCKED)
@@ -570,7 +571,7 @@ class QuickLookupDialog(QDialog):
     def copy(self, which):
         widget = self.src_text if which == "src" else self.dst_text
         text = widget.toPlainText().strip()
-        if not text or text in (INITIAL, NOKEY_BODY):
+        if not text or text in (here(self, INITIAL), NOKEY_BODY):
             self.status_label.setText(NOTHING_TO_COPY)
             return False
         QApplication.clipboard().setText(text)
@@ -620,7 +621,7 @@ class QuickLookupDialog(QDialog):
     def _panel_text(self, which):
         widget = self.src_text if which == "src" else self.dst_text
         text = widget.toPlainText().strip()
-        return "" if text in (INITIAL, NOKEY_BODY) else text
+        return "" if text in (here(self, INITIAL), NOKEY_BODY) else text
 
     def _make_speaker(self, settings):
         return speech.Speaker(settings=settings)

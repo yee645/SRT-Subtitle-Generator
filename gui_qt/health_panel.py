@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from gui_qt.places import here
 from subtitle import healthcheck as hc
 from subtitle.errors import describe_exception
 from subtitle.preflight import LEVEL_BAD, LEVEL_GOOD, LEVEL_WARN
@@ -149,7 +150,7 @@ class HealthPanel(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
-        note = QLabel(PAGE_NOTE)
+        note = QLabel(here(self, PAGE_NOTE))
         note.setWordWrap(True)
         layout.addWidget(note)
         self.target_label = QLabel()
@@ -421,7 +422,7 @@ class HealthPanel(QWidget):
         thumbs = len(self.thumb_paths()) if hasattr(self, "thumb_list") else 0
         if thumbs:
             parts.append(f"封面圖 {thumbs} 張")
-        self.target_label.setText("檢查對象（②字幕頁開著的）：" + "　".join(parts))
+        self.target_label.setText(here(self, "檢查對象（②字幕頁開著的）：") + "　".join(parts))
 
     def showEvent(self, event):  # noqa: N802 —— 切到這一頁時更新對象（換影片沒有訊號）
         super().showEvent(event)
@@ -452,7 +453,7 @@ class HealthPanel(QWidget):
         publish = self.publish_text()
         images = self.thumb_paths()
         if not media and not cues and not self._has_text(publish) and not images:
-            self.status_label.setText(NOTHING)
+            self.status_label.setText(here(self, NOTHING))
             return False
         keys = self.selected_keys()
         if not keys:
@@ -562,7 +563,7 @@ class HealthPanel(QWidget):
         self.fix_btn.setText(hc.FIX_LABELS.get(key, FIX_DEFAULT) if key else FIX_DEFAULT)
         self.fix_btn.setEnabled((key in hc.CUE_FIX_KEYS or key in hc.MEDIA_FIX_KEYS or key in hc.TEXT_FIX_KEYS)
                                 and not self.busy())
-        note = (FIX_CUE_NOTE if key in hc.CUE_FIX_KEYS else FIX_MEDIA_NOTE if key in hc.MEDIA_FIX_KEYS
+        note = (here(self, FIX_CUE_NOTE) if key in hc.CUE_FIX_KEYS else here(self, FIX_MEDIA_NOTE) if key in hc.MEDIA_FIX_KEYS
                 else FIX_TEXT_NOTE if key in hc.TEXT_FIX_KEYS else "")
         if self._loudness_row():
             note += FIX_LOUD_NOTE
@@ -610,7 +611,7 @@ class HealthPanel(QWidget):
         except ValueError:
             self.status_label.setText("修復後的句數對不上，沒有套用。")
             return False
-        self._fix_note = f"{message}（②字幕頁按「復原」就還原）"
+        self._fix_note = here(self, f"{message}（②字幕頁按「復原」就還原）")
         if not self.start_scan():  # 例如勾選全取消了：修好的照樣留著，講清楚沒重新檢查
             self.status_label.setText(f"{self._take_fix_note()}沒有重新健檢：{self.status_label.text()}")
         return True
@@ -640,10 +641,10 @@ class HealthPanel(QWidget):
     def _start_media_fix(self, key):
         media = self.player.media_path
         if not media or not os.path.exists(media):
-            self.status_label.setText(FIX_NO_MEDIA)
+            self.status_label.setText(here(self, FIX_NO_MEDIA))
             return False
         if media != self._scan_media:
-            self.status_label.setText(FIX_STALE_MEDIA)
+            self.status_label.setText(here(self, FIX_STALE_MEDIA))
             return False
         from subtitle.burner import ffmpeg_available
         if not ffmpeg_available():
@@ -688,18 +689,18 @@ class HealthPanel(QWidget):
         if not self._ask_adopt(path, self._fix_key):
             return
         if not self.player._maybe_drop_project():  # 跟②「開影片」一樣：專案有沒存的變更先問
-            self.status_label.setText(done + "②沒有換（專案的變更還沒處理）。")
+            self.status_label.setText(done + here(self, "②沒有換（專案的變更還沒處理）。"))
             return
         self.player.open_video(path)
         self.refresh_target()
-        self.status_label.setText(done + "②已換成修復版，按「開始健檢」就是修好之後的結果。")
+        self.status_label.setText(done + here(self, "②已換成修復版，按「開始健檢」就是修好之後的結果。"))
 
     def adopt_question(self, path, key):
         """問要不要在②換成修復版的那段話（修剪版另外寫明字幕時間不會跟著移）。"""
-        text = (f"已輸出：{os.path.basename(path)}\n\n要在②換成這個修復版嗎？建議先播放或試聽確認結果。\n"
-                "換的話跟②「開影片」一樣：素材軌與畫面調整會清掉，字幕留著；選「否」只是輸出檔案。")
+        text = (here(self, f"已輸出：{os.path.basename(path)}\n\n要在②換成這個修復版嗎？建議先播放或試聽確認結果。\n"
+                "換的話跟②「開影片」一樣：素材軌與畫面調整會清掉，字幕留著；選「否」只是輸出檔案。"))
         if key == "trim" and self.player.cues:
-            text += "\n\n注意：修剪版剪掉了開頭，②的字幕時間不會跟著往前移，換了之後要自己對時間。"
+            text += here(self, "\n\n注意：修剪版剪掉了開頭，②的字幕時間不會跟著往前移，換了之後要自己對時間。")
         return text
 
     def _ask_adopt(self, path, key):

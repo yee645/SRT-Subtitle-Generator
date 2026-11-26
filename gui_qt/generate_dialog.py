@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton, QRadioButton, QVBoxLayout,
 )
 
+from gui_qt.places import here
 from subtitle import pipeline
 from subtitle.errors import describe_exception
 from subtitle.transcriber import LANGUAGE_LABELS
@@ -210,7 +211,7 @@ class GenerateDialog(QDialog):
                          "第一次用這個模型要先下載；影片越長、模型越大越久。")
         if self.player.cues:
             lines.append(f"生成完會換掉目前的 {len(self.player.cues)} 句字幕。")
-        lines.append("斷句照②「字幕樣式…」裡的斷句設定。模型、提示詞與金鑰照〔轉寫設定…〕（主視窗右上角的〔轉寫與金鑰…〕是同一份）。")
+        lines.append(here(self, "斷句照②「字幕樣式…」裡的斷句設定。模型、提示詞與金鑰照〔轉寫設定…〕（主視窗右上角的〔轉寫與金鑰…〕是同一份）。"))
         self.notice.setText("\n".join(lines))
 
         ready = bool(self.player.media_path) and (plan["has_key"] or not plan["api"])

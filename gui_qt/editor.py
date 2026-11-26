@@ -33,6 +33,7 @@ from gui_qt import icons, theme
 from gui_qt import timeline as timeline_mod
 from gui_qt.app import MainWindow, apply_theme
 from gui_qt.media_bin import MediaBin
+from gui_qt.places import EDITOR, LAYOUT_PROPERTY, relabel_tree
 from subtitle import playhead
 from updater import APP_VERSION
 
@@ -254,6 +255,8 @@ class EditorWindow(MainWindow):
 
     def __init__(self, config_data=None, persist=None):
         super().__init__(config_data, persist)
+        # 面板的說明文字照剪輯器的位置講（「②字幕頁」→「左邊「字幕」」…，gui_qt/places.py）；之後才顯示的字由 here() 換
+        self.setProperty(LAYOUT_PROPERTY, EDITOR)
         self.setWindowTitle(EDITOR_TITLE)
         self.resize(*EDITOR_SIZE)
         self.setMinimumSize(*EDITOR_MIN)
@@ -315,6 +318,7 @@ class EditorWindow(MainWindow):
         self.setCentralWidget(root)
         self.export_dialog = self._build_export_dialog()
         self._build_menus()
+        relabel_tree(self, skip=(self.legacy_central,))  # 已經建好的字換成剪輯器的說法；收起來的外殼不動
 
         self._install_shortcuts()
         p.player.playbackStateChanged.connect(lambda _s: self._update_play_icon())
