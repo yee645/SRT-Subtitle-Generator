@@ -5,6 +5,7 @@
 
 零 GUI 依賴，任何環境都跑。時間軸（Qt）的拖曳測試在 test_qt_timeline.py。
 """
+import copy
 import os
 import sys
 
@@ -311,6 +312,51 @@ check("分割的復原：合回原本那一句（原文原時間）", undone == 
 redone, focus = h.redo(undone)
 check("分割的重做：再切開", redone == out and focus == 0)
 check("分割後存檔前：句數差算一句", cueedit.changed_count(out, cs) >= 1)
+
+# ----- 素材軌的復原（剪輯器版面 E-3b）：跟字幕排在同一條順序裡 -----
+h = cueedit.EditHistory()
+empty = {"overlays": [], "music": []}
+one = {"overlays": [{"path": "b.png", "at": 1.0, "duration": 3.0, "adjust": {"brightness": 0.1}}], "music": []}
+cs2 = [{"start": 0.0, "end": 1.0, "text": "甲"}]
+h.record(0, (0.0, 1.0), (0.0, 2.0))
+h.record_tracks(empty, one)
+h.record_tracks(one, copy.deepcopy(one))
+check("素材軌：沒變不記", len(h._done) == 2)
+check("素材軌：下一步復原是素材軌", h.next_kind() == "tracks" and h.next_kind(redo=True) is None)
+try:
+    h.undo(cs2)
+    raised = False
+except ValueError:
+    raised = True
+check("素材軌：下一步是素材軌時 undo() 拋 ValueError（不會悄悄退錯一步）", raised and len(h._done) == 2)
+back = h.step_tracks()
+check("素材軌：復原拿回之前的整份素材軌", back == empty and h.next_kind() == "times"
+      and h.next_kind(redo=True) == "tracks")
+undone, focus = h.undo([{"start": 0.0, "end": 2.0, "text": "甲"}])
+check("接著復原字幕：順序對（後做的先退）", undone == cs2 and focus == 0)
+redone, _focus = h.redo(undone)
+check("重做字幕", redone[0]["end"] == 2.0 and h.next_kind(redo=True) == "tracks")
+again = h.step_tracks(redo=True)
+check("重做素材軌：拿回之後的整份", again == one)
+again["overlays"][0]["adjust"]["brightness"] = 0.9
+check("拿回的是複本：改了不會動到紀錄", h.step_tracks() == empty and h.step_tracks(redo=True) == one)
+try:
+    h.step_tracks(redo=True)
+    raised = False
+except ValueError:
+    raised = True
+check("沒有素材軌可重做：step_tracks 拋 ValueError", raised)
+src = copy.deepcopy(one)
+h.record_tracks(src, empty)
+src["overlays"][0]["at"] = 9.0
+src["overlays"][0]["adjust"]["brightness"] = 0.5
+check("記的時候存複本：之後改原本的不影響紀錄", h.step_tracks() == one)
+h.record(0, (0.0, 2.0), (0.0, 3.0))
+check("新的修改清掉重做（素材軌的也清）", not h.can_redo())
+h.record_tracks(empty, one)
+h.forget("tracks")
+check("forget：拿掉全部素材軌的紀錄、字幕的留著", [e[0] for e in h._done] == ["times", "times"]
+      and h.next_kind() == "times")
 
 print()
 if failures:

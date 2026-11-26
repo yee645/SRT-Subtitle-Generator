@@ -379,6 +379,8 @@ class PlayerPanel(QWidget):
 
         # 素材軌（3.0 第 7 項第二階段）：疊加的畫面與背景音樂，照 assemble 的時間軸格式
         self.tracks = {"overlays": [], "music": []}
+        # 上一次畫到時間軸上的素材軌：refresh_tracks 拿它比，有變就記一筆復原（每個改素材的地方都會呼叫 refresh_tracks）
+        self._tracks_shadow = copy.deepcopy(self.tracks)
         self.add_overlay_btn = QPushButton("加入畫面…")
         self.add_overlay_btn.setToolTip("在播放頭的位置疊一段影片或圖片（預設蓋滿整個畫面、不帶聲音）")
         self.add_music_btn = QPushButton("加入音樂…")
@@ -573,6 +575,7 @@ class PlayerPanel(QWidget):
             self._set_picture_target("main")
         self._apply_picture_preview()
         self.refresh_tracks()
+        self.history.forget("tracks")  # 素材軌照上一支的片長放的：舊的紀錄不能再套回來
 
     def set_cues(self, cues, source=""):
         """換一份字幕；畫面上的那句與時間軸上的字幕塊立刻跟著更新。"""
@@ -776,7 +779,10 @@ class PlayerPanel(QWidget):
     # ---- 素材軌（3.0 第 7 項第二階段） ------------------------------------
 
     def refresh_tracks(self, note=None):
-        """把素材軌畫到時間軸上，順便更新那一行的說明與按鈕。"""
+        """把素材軌畫到時間軸上，順便更新那一行的說明與按鈕；素材軌跟上次不一樣就記一筆復原（E-3b）。"""
+        if self.tracks != self._tracks_shadow:
+            self.history.record_tracks(self._tracks_shadow, self.tracks)
+            self._tracks_shadow = copy.deepcopy(self.tracks)
         self.timeline.set_tracks(self.tracks["overlays"], self.tracks["music"])
         self.refresh_overlays()
         if not self.track_exporter.busy:  # 輸出中這一行寫進度，別蓋掉
@@ -1207,6 +1213,7 @@ class PlayerPanel(QWidget):
             self.set_style(state["style"])
             self.styleApplied.emit()
         self.refresh_tracks()
+        self.history.forget("tracks")  # 開專案載入的素材軌是起點，不是一步可以復原的修改
         self._refresh_info()
 
     def maybe_close(self):
@@ -1397,10 +1404,54 @@ class PlayerPanel(QWidget):
         return len(changed)
 
     def undo(self):
+        if self.history.next_kind() == "tracks":
+            self._step_tracks(redo=False)
+            return
         self._step(self.history.undo(self.cues))
 
     def redo(self):
+        if self.history.next_kind(redo=True) == "tracks":
+            self._step_tracks(redo=True)
+            return
         self._step(self.history.redo(self.cues))
+
+    def _step_tracks(self, redo):
+        """復原／重做一筆素材軌的修改（輸出中不動，講一聲）。選取與畫面調整的小視窗跟著還在不在。"""
+        if self.track_exporter.busy:
+            self._show_track_error("正在輸出多軌，素材軌先不復原")
+            return
+        self.tracks = self.history.step_tracks(redo=redo)
+        self._tracks_shadow = copy.deepcopy(self.tracks)
+        selected = self.timeline.track_selected
+        if selected and not 0 <= selected[1] < len(self.tracks.get(selected[0], ())):
+            self.timeline.select_track_item(selected[0], -1, seek=False)
+        if self.picture_dialog is not None and self.picture_dialog.target != "main":
+            index = self.picture_dialog.target[1]
+            self._set_picture_target(("overlays", index) if index < len(self.tracks["overlays"]) else "main")
+        self.refresh_tracks()
+        self._show_track_props()
+
+    def split_track_at_playhead(self):
+        """
+        在播放頭把選取的那段素材切成兩段（剪輯器版面的〔分割〕／Ctrl+B 選到素材時；可以復原）。切完選後段。
+        回傳 (哪一軌, 第幾段)；沒選素材、輸出中、播放頭不在裡面、循環的音樂拋 ValueError（講原因）。
+        """
+        selected = self.timeline.track_selected
+        if not selected or not 0 <= selected[1] < len(self.tracks.get(selected[0], ())):
+            raise ValueError("沒有選取素材")
+        if self.track_exporter.busy:
+            raise ValueError("正在輸出多軌")
+        kind, index = selected
+        try:
+            head, tail = assemble_mod.split_item(kind, self.tracks[kind][index], self.player.position() / 1000.0,
+                                                 self.media_duration())
+        except assemble_mod.AssembleError as exc:
+            raise ValueError(str(exc)) from None
+        self.tracks[kind][index:index + 1] = [head, tail]
+        self.refresh_tracks()
+        # 選後段；畫面調整的小視窗開著的話跟著選取改調後段（_show_track_props）
+        self.timeline.select_track_item(kind, index + 1, seek=False)
+        return kind, index
 
     def save(self):
         """存回載入的字幕檔；沒有檔名（或不是 .srt／.vtt）時先問要存到哪。回傳是否存成功。"""
