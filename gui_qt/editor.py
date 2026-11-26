@@ -23,7 +23,8 @@ from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QDialog, QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QApplication, QButtonGroup, QDialog, QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidget,
+    QListWidgetItem, QPushButton,
     QScrollArea, QSizePolicy, QSlider, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -52,6 +53,17 @@ RAIL = (
     ("smart", "smart", "智慧剪輯", "審片助手：分析、段落清單、粗剪、精彩合輯、章節、封面候選、直式短片"),
     ("health", "health", "健檢", "上架前的 18 項檢查與一鍵修復、發佈文字、封面圖"),
 )
+
+# 匯出視窗（E-5）：四段的說明
+EXPORT_SIZE = (1080, 760)
+EXPORT_NOTES = {
+    "finish": "照下面的輸出設定一次做完：勾選的字幕檔、燒錄硬字幕影片。檔名跟著影片、同名加編號，不問存到哪裡。"
+              "燒錄是燒在原始影片上，剪點、素材軌、轉場不算進去（那些用「剪好的影片」）。",
+    "video": "照剪點輸出：照時間軸上啟用中的剪點剪成新影片。輸出多軌：連同疊加的畫面與音樂、轉場、畫面調整合成一支。"
+             "原始影片都不動。",
+    "subtitles": "一次匯出一種格式，會問存到哪裡；不看上面的勾選，也不必開影片。要好幾種語言用〔多語字幕包…〕。",
+    "branding": "接上片頭、片尾，疊上浮水印（Logo），設定一次、之後每支沿用。輸出成新檔，原檔不動。",
+}
 
 # 屬性面板（E-3a）
 INSPECTOR_HINT = "點時間軸上的字幕或素材，這裡會換成它的屬性。"
@@ -109,7 +121,11 @@ FEATURE_MAP = (
     ("時間軸（字幕、波形、縮圖、剪點、素材軌）", "player_panel.timeline", "timeline"),
     ("照剪點輸出", "player_panel.export_btn", "export"),
     ("輸出多軌", "player_panel.assemble_btn", "export"),
-    ("完成輸出與逐格式匯出、品牌套版、多語字幕包", "output_panel", "export"),
+    ("一鍵完成輸出（輸出設定、字幕檔、燒錄）", "output_panel", "export"),
+    ("單獨匯出一種字幕檔（E-5 獨立成「字幕檔」一段）", "output_panel.single_section", "export"),
+    ("多語字幕包（E-5 在匯出視窗多一顆捷徑，同〔翻譯字幕…〕）", "export_pack_btn", "export"),
+    ("品牌套版（片頭／片尾／浮水印）", "output_panel.branding", "export"),
+    ("輸出進度與結果（E-5 釘在匯出視窗最下面）", "output_panel.status_area", "export"),
 )
 
 
@@ -752,25 +768,102 @@ class EditorWindow(MainWindow):
         return holder
 
     def _build_export_dialog(self):
-        """〔匯出〕：照剪點輸出、輸出多軌，加上原本④的輸出設定與完成輸出（E-5 再合成一個流程）。"""
+        """
+        〔匯出〕（E-5）：原本分在三個地方的出口合成一個視窗，照常用的順序排四段，左邊目錄點了捲過去：
+        一鍵完成輸出（字幕檔＋燒錄，依輸出設定）、剪好的影片（照剪點、多軌）、單獨匯出字幕檔與多語字幕包、品牌套版。
+        進度與結果釘在最下面，捲到哪一段都看得到。
+        """
         p = self.player_panel
+        out = self.output_panel
         dialog = QDialog(self)
         dialog.setWindowTitle("匯出")
-        dialog.resize(860, 700)
-        col = QVBoxLayout(dialog)
-        col.setContentsMargins(16, 16, 16, 16)
+        dialog.resize(EXPORT_SIZE[0], EXPORT_SIZE[1])
+        row = QHBoxLayout(dialog)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+
+        self.export_nav = QListWidget()
+        self.export_nav.setObjectName("exportNav")
+        self.export_nav.setFixedWidth(168)
+        self.export_nav.setFrameShape(QFrame.NoFrame)
+        row.addWidget(self.export_nav)
+
+        right = QWidget()
+        col = QVBoxLayout(right)
+        col.setContentsMargins(16, 16, 16, 12)
         col.setSpacing(8)
-        col.addWidget(_title("匯出成影片"))
-        row = QHBoxLayout()
+        col.addWidget(_title("匯出"))
+        out.target_label.setProperty("secondary", True)
+        col.addWidget(out.target_label)
+        body = QWidget()
+        sections = QVBoxLayout(body)
+        sections.setContentsMargins(0, 0, 8, 0)
+        sections.setSpacing(16)
+        self.export_sections = {}
+
+        def section(key, title, note, *widgets):
+            frame = QFrame()
+            frame.setObjectName("exportSection")
+            lay = QVBoxLayout(frame)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(6)
+            lay.addWidget(_title(title, "sectionTitle"))
+            if note:
+                lay.addWidget(_secondary(QLabel(note)))
+            for w in widgets:
+                if isinstance(w, QHBoxLayout):
+                    lay.addLayout(w)
+                else:
+                    lay.addWidget(w)
+            sections.addWidget(frame)
+            self.export_sections[key] = frame
+            item = QListWidgetItem(title)
+            item.setData(Qt.UserRole, key)
+            self.export_nav.addItem(item)
+
+        out.page_note.hide()  # 寫的是四頁籤的位置（②④）；各段自己有說明
+        section("finish", "一鍵完成輸出", EXPORT_NOTES["finish"], out)
+        out.show()  # 原本在④頁籤裡（收起來的那一份外殼）
+        out.output_box.setTitle("")  # 段落標題已經寫了
+        videos = QHBoxLayout()
         for btn, icon_name in ((p.export_btn, "cut"), (p.assemble_btn, "batch")):
-            row.addWidget(self._iconify(btn, icon_name))
-        row.addStretch(1)
-        col.addLayout(row)
-        col.addWidget(_secondary(QLabel("照剪點輸出：照時間軸上啟用中的剪點剪成新影片。輸出多軌：連同疊加的畫面與音樂"
-                                        "合成一支。原始影片都不動。")))
-        col.addWidget(_title("字幕檔、燒錄與發佈"))
-        col.addWidget(_scroll(self.output_panel), 1)
+            videos.addWidget(self._iconify(btn, icon_name))
+        videos.addStretch(1)
+        section("video", "剪好的影片", EXPORT_NOTES["video"], videos)
+        out.single_heading.hide()  # 這一段的標題、說明就是它
+        out.single_note.hide()
+        self.export_pack_btn = QPushButton("多語字幕包…")
+        self.export_pack_btn.setToolTip("一次翻成好幾個語言、每個語言存一份上傳用的字幕檔（開翻譯視窗，同〔翻譯字幕…〕）")
+        self.export_pack_btn.clicked.connect(lambda _c=False: self.cue_panel.translate_btn.click())
+        _EnabledMirror(self.cue_panel.translate_btn, self.export_pack_btn)
+        pack = QHBoxLayout()
+        pack.addWidget(self._iconify(self.export_pack_btn, "translate"))
+        pack.addStretch(1)
+        section("subtitles", "字幕檔", EXPORT_NOTES["subtitles"], out.single_section, pack)
+        out.branding.setTitle("")  # 段落標題已經寫了
+        section("branding", "品牌套版", EXPORT_NOTES["branding"], out.branding)
+        sections.addStretch(1)
+        self.export_scroll = _scroll(body)
+        col.addWidget(self.export_scroll, 1)
+        out.status_area.setMaximumHeight(128)
+        col.addWidget(out.status_area)
+        row.addWidget(right, 1)
+        self.export_nav.currentRowChanged.connect(
+            lambda r: self.show_export_section(self.export_nav.item(r).data(Qt.UserRole)) if r >= 0 else None)
+        self.export_nav.setCurrentRow(0)
         return dialog
+
+    def show_export_section(self, key):
+        """匯出視窗捲到某一段（finish／video／subtitles／branding），目錄跟著選。"""
+        frame = self.export_sections[key]
+        bar = self.export_scroll.verticalScrollBar()
+        bar.setValue(min(frame.y(), bar.maximum()))
+        for i in range(self.export_nav.count()):
+            if self.export_nav.item(i).data(Qt.UserRole) == key and self.export_nav.currentRow() != i:
+                self.export_nav.blockSignals(True)
+                self.export_nav.setCurrentRow(i)
+                self.export_nav.blockSignals(False)
+        return key
 
     # ----- 動作 -----
     def show_section(self, key):
@@ -790,12 +883,15 @@ class EditorWindow(MainWindow):
         page = self.left_stack.currentWidget()
         return next(k for k, w in self.left_pages.items() if w is page)
 
-    def open_export(self):
-        """打開匯出視窗（不擋主視窗）；字幕編輯框改到一半的先套用。"""
+    def open_export(self, section=None):
+        """打開匯出視窗（不擋主視窗）；字幕編輯框改到一半的先套用。section：直接捲到哪一段。"""
         self.cue_panel.commit()
         self.export_dialog.show()
         self.export_dialog.raise_()
         self.export_dialog.activateWindow()
+        if section:
+            QApplication.processEvents()  # 版面排好才知道每一段在哪
+            self.show_export_section(section)
         return self.export_dialog
 
     def _find(self):
