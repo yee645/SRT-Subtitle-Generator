@@ -97,8 +97,9 @@ import updater  # noqa: E402
 from subtitle import qtguide  # noqa: E402
 
 # 3.0 之後 A-3 起 APP_VERSION 往前走（3.0.1）：這兩條改成跟著版本走，3.0 系列都要成立。
-check("APP_VERSION 是 3.0 系列、3.0.0 以上",
-      re.fullmatch(r"3\.0\.\d+", updater.APP_VERSION) is not None and qtguide.is_formal(updater.APP_VERSION),
+# 剪輯器版面 E-7c 發 3.1.0：「3.0 系列」換成「3.x、3.0.0 以上」；確切是哪一個系列由 test_v310.py 釘住（3.1 系列）。
+check("APP_VERSION 是 3.x、3.0.0 以上",
+      re.fullmatch(r"3\.\d+\.\d+", updater.APP_VERSION) is not None and qtguide.is_formal(updater.APP_VERSION),
       updater.APP_VERSION)
 check("打包的 zip 名稱不再帶 preview", qt_preview.zip_name(updater.APP_VERSION, "win64")
       == f"SRT-Subtitle-Generator-Qt-v{updater.APP_VERSION}-win64.zip")
