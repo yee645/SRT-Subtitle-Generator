@@ -19,11 +19,12 @@ E-1 只換外殼：**功能一個不少、也不另寫一份**。`EditorWindow` 
 """
 import os
 
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QDialog, QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidget,
+    QAbstractItemView, QAbstractSlider, QAbstractSpinBox, QApplication, QButtonGroup, QComboBox, QDialog,
+    QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPlainTextEdit, QTextEdit,
     QListWidgetItem, QPushButton,
     QScrollArea, QSizePolicy, QSlider, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
@@ -32,6 +33,7 @@ from gui_qt import icons, theme
 from gui_qt import timeline as timeline_mod
 from gui_qt.app import MainWindow, apply_theme
 from gui_qt.media_bin import MediaBin
+from subtitle import playhead
 from updater import APP_VERSION
 
 EDITOR_FLAG = "--editor"
@@ -44,6 +46,13 @@ SECTION_WIDTH = {"media": 340, "subtitles": 420, "smart": 660, "health": 660}
 INSPECTOR_WIDTH = 300
 RAIL_WIDTH = 64
 SPLIT_KEY = "Ctrl+B"
+# 快捷鍵（E-6a；照 ROADMAP 第四節）。存專案用 Ctrl+Shift+S：Ctrl+S 兩個版面都是「存字幕」，不改習慣。
+KEYS = {"play": ("Space",), "rewind": ("J",), "pause": ("K",), "forward": ("L",),
+        "prev_frame": ("Left",), "next_frame": ("Right",),
+        "zoom_in": ("Ctrl+=", "Ctrl++"), "zoom_out": ("Ctrl+-",), "fit": ("Shift+Z",),
+        "export": ("Ctrl+E",), "save_project": ("Ctrl+Shift+S",)}
+# 這些元件自己要用方向鍵（清單、數字欄、選單、滑桿、打字的地方）：焦點在它們上面時 ←／→ 不拿去逐格
+ARROW_OWNERS = (QAbstractItemView, QAbstractSpinBox, QComboBox, QAbstractSlider, QLineEdit, QPlainTextEdit, QTextEdit)
 TIMELINE_EMPTY_TEXT = "開啟影片後，縮圖、波形與字幕會排在這裡。"
 
 # 左邊圖示列：(鍵, 圖示, 名稱, 提示)
@@ -94,7 +103,9 @@ FEATURE_MAP = (
     ("影片畫面與字幕疊加", "player_panel.view", "preview"),
     ("播放／暫停", "play_tool", "preview"),
     ("播放進度", "player_panel.slider", "preview"),
-    ("時間", "player_panel.time_label", "preview"),
+    ("時間（E-6a 改成時:分:秒.百分之一秒）", "timecode_label", "preview"),
+    ("上一格（E-6a）", "prev_frame_tool", "preview"),
+    ("下一格（E-6a）", "next_frame_tool", "preview"),
     ("影片與字幕狀態（改過幾處沒存）", "player_panel.info_label", "inspector"),
     ("畫面調整", "player_panel.picture_btn", "inspector"),
     ("編輯用代理檔", "player_panel.proxy_box", "inspector"),
@@ -136,7 +147,8 @@ REPLACED = (
     ("lookup_btn", "lookup_tool"),
     ("guide_btn", "guide_tool"),
     ("theme_btn", "theme_tool"),
-    ("player_panel.remove_track_btn", "delete_tool"),  # E-2b：刪素材也刪字幕（刪最後選的那個）
+    ("player_panel.remove_track_btn", "delete_tool"),
+    ("player_panel.time_label", "timecode_label"),  # E-6a：時間碼換寫法（四頁籤照舊）  # E-2b：刪素材也刪字幕（刪最後選的那個）
 )
 
 
@@ -154,6 +166,25 @@ def resolve(win, path):
     for part in path.split("."):
         obj = getattr(obj, part)
     return obj
+
+
+class _FpsProbe(QObject):
+    """背景量影格率（ffprobe），量好送回主執行緒；逐格照它走。"""
+
+    done = Signal(str, float)
+
+    def start(self, path):
+        import threading
+
+        def run():
+            from subtitle.media import probe_fps
+            try:
+                fps = probe_fps(path)
+            except Exception:  # noqa: BLE001 — 量不到就用預設的 30
+                fps = playhead.DEFAULT_FPS
+            self.done.emit(path, float(fps))
+
+        threading.Thread(target=run, daemon=True).start()
 
 
 class _EnabledMirror(QObject):
@@ -437,9 +468,16 @@ class EditorWindow(MainWindow):
         col.addWidget(p.view, 1)
         col.addWidget(p.slider)
         row = QHBoxLayout()
-        p.time_label.setObjectName("timecode")
-        row.addWidget(p.time_label)
+        # E-6a：時間碼改成「時:分:秒.百分之一秒」（播放器原本那個「分:秒.十分之一秒」收起來，四頁籤照舊）
+        p.time_label.setParent(self.legacy_central)  # 換父元件就藏起來了（收起來的外殼）
+        self.timecode_label = QLabel()
+        self.timecode_label.setObjectName("timecode")
+        self.timecode_label.setToolTip("播放頭／片長（時:分:秒.百分之一秒）")
+        row.addWidget(self.timecode_label)
         row.addStretch(1)
+        self.prev_frame_tool = self._tool("step_back", "上一格（←）", lambda: self.step_frame(-1))
+        self.prev_frame_tool.setProperty("role", "ghost")
+        row.addWidget(self.prev_frame_tool)
         self.play_tool = QToolButton()
         self.play_tool.setProperty("role", "play")
         self.play_tool.setFixedSize(36, 36)
@@ -448,9 +486,19 @@ class EditorWindow(MainWindow):
         self._play_mirror = _EnabledMirror(p.play_btn, self.play_tool)
         p.play_btn.setParent(self.legacy_central)
         row.addWidget(self.play_tool)
+        self.next_frame_tool = self._tool("step_forward", "下一格（→）", lambda: self.step_frame(1))
+        self.next_frame_tool.setProperty("role", "ghost")
+        row.addWidget(self.next_frame_tool)
         row.addStretch(1)
+        self.media_fps = playhead.DEFAULT_FPS
+        self._fps_probe = _FpsProbe(self)
+        self._fps_probe.done.connect(self._on_fps)
+        p.player.positionChanged.connect(lambda _ms: self._update_timecode())
+        p.player.durationChanged.connect(lambda _ms: self._update_timecode())
+        p.timeline.durationChanged.connect(lambda _d: self._probe_fps())
+        self._update_timecode()
         spacer = QWidget()  # 跟左邊的時間一樣寬，播放鍵才會在正中間
-        spacer.setFixedWidth(p.time_label.sizeHint().width())
+        spacer.setFixedWidth(self.timecode_label.sizeHint().width())
         row.addWidget(spacer)
         col.addLayout(row)
         return panel
@@ -911,12 +959,97 @@ class EditorWindow(MainWindow):
         # E-2b：剪映的分割、刪除（Delete 在打字的地方是那個欄位自己的，不會被這裡搶走）
         bindings.append((QKeySequence(SPLIT_KEY), self.split_at_playhead))
         bindings.append((QKeySequence(QKeySequence.Delete), self.delete_selection))
+        # E-6a：播放、J／K／L、逐格、縮放、匯出、存專案（打字的地方會自己留下這些字，不會被搶走）
+        actions = {"play": p.toggle_play, "rewind": lambda: self.jkl("J"), "pause": lambda: self.jkl("K"),
+                   "forward": lambda: self.jkl("L"), "prev_frame": lambda: self.step_frame(-1),
+                   "next_frame": lambda: self.step_frame(1), "zoom_in": p.timeline.zoom_in,
+                   "zoom_out": p.timeline.zoom_out, "fit": p.timeline.zoom_to_fit, "export": self.open_export,
+                   "save_project": p.save_project_btn.click}
+        self.key_shortcuts = {}
+        for name, keys in KEYS.items():
+            for key in keys:
+                bindings.append((QKeySequence(key), actions[name]))
+                self.key_shortcuts.setdefault(name, []).append(len(bindings) - 1)
         self.shortcuts = []
         for seq, slot in bindings:
             sc = QShortcut(seq, self)
             sc.setContext(Qt.WindowShortcut)
+            sc.setAutoRepeat(True)
             sc.activated.connect(slot)
             self.shortcuts.append(sc)
+        self.key_shortcuts = {name: [self.shortcuts[i] for i in idx] for name, idx in self.key_shortcuts.items()}
+        QApplication.instance().focusChanged.connect(lambda _old, _new: self._update_arrow_keys())
+        p.timeline.cueSelected.connect(lambda _i: self._update_arrow_keys())
+        self._update_arrow_keys()
+        for btn, name, text in ((p.zoom_in_btn, "zoom_in", "拉近"), (p.zoom_out_btn, "zoom_out", "拉遠"),
+                                (p.fit_btn, "fit", "整支"), (self.export_button, "export", "匯出"),
+                                (p.save_project_btn, "save_project", "存專案")):
+            tip = btn.toolTip() or text
+            btn.setToolTip(f"{tip}（{KEYS[name][0]}）")
+
+    def _update_arrow_keys(self):
+        """←／→ 逐格只在焦點不在「自己要用方向鍵」的元件上時有效；時間軸選了字幕時留給它微調那句。"""
+        w = QApplication.focusWidget()
+        tl = self.player_panel.timeline
+        ok = not isinstance(w, ARROW_OWNERS)
+        if ok and w is not None and (w is tl or tl.isAncestorOf(w)) and tl.selected >= 0:
+            ok = False
+        for name in ("prev_frame", "next_frame"):
+            for sc in self.key_shortcuts[name]:
+                sc.setEnabled(ok)
+        return ok
+
+    # ----- 播放頭（E-6a） -----
+    def _update_timecode(self):
+        pl = self.player_panel.player
+        text = f"{playhead.format_timecode(pl.position())} / {playhead.format_timecode(pl.duration())}"
+        if self.timecode_label.text() != text:
+            self.timecode_label.setText(text)
+        return text
+
+    def _probe_fps(self):
+        path = self.player_panel.media_path
+        self.media_fps = playhead.DEFAULT_FPS
+        if path:
+            self._fps_probe.start(path)
+
+    def _on_fps(self, path, fps):
+        if path == self.player_panel.media_path:
+            self.media_fps = playhead.clean_fps(fps)
+
+    def step_frame(self, frames):
+        """上一格（-1）／下一格（+1）：先暫停，再照影格率走；回傳新的位置（毫秒），沒開影片是 None。"""
+        pl = self.player_panel.player
+        if pl.duration() <= 0:
+            return None
+        pl.pause()
+        ms = playhead.step_frames(pl.position(), frames, self.media_fps, pl.duration())
+        pl.setPosition(ms)
+        self.player_panel.timeline.set_position(ms)
+        return ms
+
+    def jkl(self, key):
+        """J 倒退 1 秒、K 暫停（速度回 1 倍）、L 播放（在播再按一次快一級：1→2→4 倍）。回傳之後的速度或位置。"""
+        pl = self.player_panel.player
+        if pl.duration() <= 0:
+            return None
+        if key == "K":
+            pl.pause()
+            pl.setPlaybackRate(1.0)
+            self.statusBar().showMessage("暫停", 1500)
+            return 1.0
+        if key == "L":
+            playing = pl.playbackState() == QMediaPlayer.PlayingState
+            rate = playhead.next_rate(pl.playbackRate(), playing)
+            pl.setPlaybackRate(rate)
+            if not playing:
+                pl.play()
+            self.statusBar().showMessage(f"播放 {rate:g} 倍速（K 暫停）", 1500)
+            return rate
+        ms = playhead.rewind(pl.position())
+        pl.setPosition(ms)
+        self.player_panel.timeline.set_position(ms)
+        return ms
 
     def refresh_project_name(self):
         """頂列的專案名稱：沒開專案寫影片名稱；有變更還沒存加「•」。"""
@@ -936,7 +1069,7 @@ class EditorWindow(MainWindow):
         playing = p.player.playbackState() == QMediaPlayer.PlayingState
         t = theme.tokens(self._theme)
         self.play_tool.setIcon(icons.icon("pause" if playing else "play", t["accent.text"], t["text.muted"], size=18))
-        self.play_tool.setToolTip("暫停" if playing else "播放")
+        self.play_tool.setToolTip("暫停（Space、K）" if playing else "播放（Space、L）")
 
     def apply_editor_theme(self, name):
         """套用設計基準的調色盤與樣式表，圖示照主題重畫。"""

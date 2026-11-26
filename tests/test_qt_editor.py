@@ -179,10 +179,11 @@ else:
     QTest.mouseClick(win.play_tool, Qt.LeftButton)
     check("按播放鍵：真的播、提示換成暫停",
           wait_until(lambda: p.player.playbackState() == QMediaPlayer.PlayingState)
-          and win.play_tool.toolTip() == "暫停")
+          # E-6a：提示加上快捷鍵（原本是「暫停」）
+          and win.play_tool.toolTip() == "暫停（Space、K）")
     QTest.mouseClick(win.play_tool, Qt.LeftButton)
     check("再按：停", wait_until(lambda: p.player.playbackState() != QMediaPlayer.PlayingState)
-          and win.play_tool.toolTip() == "播放")
+          and win.play_tool.toolTip() == "播放（Space、L）")
 
     # ----- 6. 快捷鍵 -----
     p.load_subtitles(SRT)

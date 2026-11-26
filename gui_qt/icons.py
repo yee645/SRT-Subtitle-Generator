@@ -36,6 +36,8 @@ PATHS = {
     "sun": '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4'
            'M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
     "play": '<path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/>',
+    "step_back": '<path d="M6.5 5.5v13"/><path d="M18 6v12l-8.5-6z" fill="currentColor"/>',
+    "step_forward": '<path d="M17.5 5.5v13"/><path d="M6 6v12l8.5-6z" fill="currentColor"/>',
     "pause": '<path d="M8 5.5v13M16 5.5v13" stroke-width="3"/>',
     "zoom_in": '<circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5M8 10.5h5M10.5 8v5"/>',
     "zoom_out": '<circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5M8 10.5h5"/>',
