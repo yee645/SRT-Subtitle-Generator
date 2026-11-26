@@ -159,6 +159,13 @@ else:
     check("放大時收起面板（預覽變寬）：還是看正中間", ok, info)
     win.set_focus_preview(False)
     wait(80)
+    view.horizontalScrollBar().setValue(view.horizontalScrollBar().minimum())  # 拖到左上角看
+    view.verticalScrollBar().setValue(view.verticalScrollBar().minimum())
+    check("拖到左上角之後：不在正中間（下一項才有意義）", not centred()[0], centred()[1])
+    win.set_preview_zoom(4.0)
+    ok, info = centred()
+    check("換放大比例：回到正中間", ok, info)
+    win.set_preview_zoom(2.0)
     check("選單的勾跟著下拉選單", [a.isChecked() for a in win.preview_zoom_actions] == [False, True, False])
     win.preview_zoom_actions[2].trigger()
     check("選單選 4 倍：下拉選單跟著、畫面 4 倍", win.preview_zoom_combo.currentIndex() == 2
