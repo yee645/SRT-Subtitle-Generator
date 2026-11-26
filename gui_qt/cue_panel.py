@@ -69,6 +69,7 @@ class CueListPanel(QWidget):
         self.player = player
         self._updating = False
         self._editing = -1  # 編輯框現在改的是第幾句（-1＝沒有）
+        self._loaded_text = ""  # 編輯框載入時的文字：沒改過就不套用（句子換了位置也不會寫錯句）
         self._adding = None  # 「新增一句」打字中：新的那句從幾秒開始（None＝不是在新增）
         self._from_timeline = False  # 這次選取是時間軸那邊來的：只跟著選，不跳播放頭
 
@@ -231,7 +232,9 @@ class CueListPanel(QWidget):
         if not 0 <= index < len(self.player.cues):
             return False
         text = self.editor.toPlainText()
-        if text == self.player.cues[index].get("text", ""):
+        # 編輯框只在使用者真的改過字時才套用：分割、刪除、復原這些會讓句子換位置，編輯框裡還是舊的那句，
+        # 跟「現在這個位置的句子」比會把舊字寫到別句上（E-2b 的分割→復原抓到的）
+        if text == self._loaded_text or text == self.player.cues[index].get("text", ""):
             return False
         try:
             self.player.set_cue_text(index, text)
@@ -445,9 +448,10 @@ class CueListPanel(QWidget):
     def _load_editor(self, index):
         self._editing = index
         cues = self.player.cues
+        self._loaded_text = cues[index].get("text", "") if 0 <= index < len(cues) else ""
         if 0 <= index < len(cues):
             self.editor.setEnabled(True)
-            self.editor.setPlainText(cues[index].get("text", ""))
+            self.editor.setPlainText(self._loaded_text)
             self.note.setText(f"第 {index + 1} 句。" + HINT)
         else:
             self.editor.setPlainText("")
