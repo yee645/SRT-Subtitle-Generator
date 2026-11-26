@@ -29,7 +29,7 @@
 
 清單只是看與選；字幕本身只有播放器那一份（`PlayerPanel.cues`），改過就照 `cuesChanged` 重畫。
 """
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPlainTextEdit,
@@ -62,6 +62,9 @@ def numbers(indices):
 
 
 class CueListPanel(QWidget):
+    # 編輯框換了對象（換一句、清空、開始新增）：剪輯器版面的屬性面板跟著換頁
+    editorChanged = Signal()
+    hint = HINT  # 編輯框搬到別處的版面（剪輯器的屬性面板）換成寫得出位置的說法
     """逐句校對：字幕清單＋改文字的編輯框，跟播放器（PlayerPanel）綁在一起。"""
 
     def __init__(self, player, parent=None):
@@ -279,6 +282,7 @@ class CueListPanel(QWidget):
         self.editor.setFocus()
         self.note.setText(ADD_HINT.format(start=format_seconds(start), end=format_seconds(end)))
         self._update_buttons()
+        self.editorChanged.emit()
         return True
 
     def delete_selected(self):
@@ -452,12 +456,13 @@ class CueListPanel(QWidget):
         if 0 <= index < len(cues):
             self.editor.setEnabled(True)
             self.editor.setPlainText(self._loaded_text)
-            self.note.setText(f"第 {index + 1} 句。" + HINT)
+            self.note.setText(f"第 {index + 1} 句。" + self.hint)
         else:
             self.editor.setPlainText("")
             self.editor.setEnabled(False)
-            self.note.setText(HINT if cues else EMPTY_HINT)
+            self.note.setText(self.hint if cues else EMPTY_HINT)
         self._update_buttons()
+        self.editorChanged.emit()
 
     def _update_buttons(self):
         has_cues = bool(self.player.cues)

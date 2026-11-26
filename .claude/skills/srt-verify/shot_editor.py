@@ -6,7 +6,7 @@
       /tmp/qtv12/bin/python3 .claude/skills/srt-verify/shot_editor.py dark <輸出前綴> [影片] [字幕]
 
 沒給影片就用 ffmpeg 產生 30 秒的測試片（彩條＋音）與一份 5 句的字幕，放在輸出前綴旁邊。
-輸出：<前綴>_empty.png、_media、_subtitles、_smart、_health、_export.png。截完用 Read 看，深淺兩色都要看。
+輸出：<前綴>_empty.png、_media、_subtitles、_smart、_health、_cue、_track、_export.png。截完用 Read 看，深淺兩色都要看。
 """
 import copy
 import os
@@ -72,6 +72,23 @@ def main():
         win.show_section(key)
         wait(500)
         win.grab().save(f"{out}_{key}.png")
+    # E-3a：屬性面板跟著選取換頁（選一句字幕、選一段疊加）
+    win.show_section("subtitles")
+    p.timeline.select_cue(1, seek=False)
+    wait(400)
+    win.grab().save(f"{out}_cue.png")
+    still = os.path.join(os.path.dirname(os.path.abspath(out)), "overlay.png")
+    if not os.path.exists(still):
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180",
+                        "-frames:v", "1", still], check=True)
+    p.player.setPosition(9000)
+    wait(300)
+    if p.add_track("overlays", still):
+        p.timeline.select_track_item("overlays", 0, seek=False)
+        wait(400)
+        win.grab().save(f"{out}_track.png")
+    p.timeline.select_track_item("", -1, seek=False)
+    p.timeline.select_cue(-1, seek=False)
     d = win.open_export()
     wait(500)
     d.grab().save(f"{out}_export.png")

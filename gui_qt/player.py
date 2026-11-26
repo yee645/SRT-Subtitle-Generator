@@ -1458,6 +1458,27 @@ class PlayerPanel(QWidget):
         self.save_project_btn.setEnabled(bool(self.media_path))
         self.generate_btn.setEnabled(bool(self.media_path))
 
+    def set_cue_times(self, index, start=None, end=None):
+        """
+        改第 index 句的開始／結束（秒；剪輯器版面的屬性面板）：照時間軸拖邊的規則夾在鄰句與片長之間
+        （先改開始、再改結束），可以復原。回傳改完的 (開始, 結束)；沒變就不記。
+        """
+        if not 0 <= index < len(self.cues):
+            raise IndexError(index)
+        before = (float(self.cues[index]["start"]), float(self.cues[index]["end"]))
+        duration = self.timeline.duration or None
+        cues, times = self.cues, before
+        for edge, value in ((cueedit.START, start), (cueedit.END, end)):
+            if value is not None:
+                times = cueedit.drag_edge(cues, index, edge, float(value), duration=duration)
+                cues = cueedit.with_times(cues, index, *times)
+        if times != before:
+            self.history.record(index, before, times)
+            self.cues = cues
+            self.timeline.set_cues(self.cues, keep_selection=True)
+            self._after_edit()
+        return times
+
     def _on_cue_times(self, index, start, end):
         """時間軸上拖了某句的邊：回寫字幕清單，畫面上的那句立刻照新時間顯示。"""
         if not 0 <= index < len(self.cues):

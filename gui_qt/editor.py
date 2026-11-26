@@ -23,8 +23,8 @@ from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
-    QSlider, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QDialog, QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QScrollArea, QSizePolicy, QSlider, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from gui_qt import icons, theme
@@ -51,6 +51,11 @@ RAIL = (
     ("smart", "smart", "智慧剪輯", "審片助手：分析、段落清單、粗剪、精彩合輯、章節、封面候選、直式短片"),
     ("health", "health", "健檢", "上架前的 18 項檢查與一鍵修復、發佈文字、封面圖"),
 )
+
+# 屬性面板（E-3a）
+INSPECTOR_HINT = "點時間軸上的字幕或素材，這裡會換成它的屬性。"
+TRACK_TITLES = {"overlays": "疊加的畫面", "music": "音樂"}
+CUE_EDIT_HINT = "文字與時間在右邊的屬性裡改：改完按 Ctrl+Enter、點別句或離開編輯框就套用，Esc 放回原本的。"
 
 # 現有功能在新版面的哪裡（PR 的對照表與測試都照這一份）：(功能, 元件的路徑, 區塊)
 # 路徑從視窗算起，例如 "player_panel.open_btn"。區塊：top／left:<鍵>／preview／inspector／timeline／export。
@@ -87,6 +92,10 @@ FEATURE_MAP = (
     ("素材屬性：音量、循環、講話時壓低、配樂設定", "player_panel.volume_spin", "inspector"),
     ("素材屬性：位置、帶聲音、調畫面", "player_panel.position_combo", "inspector"),
     ("預覽畫面素材", "player_panel.preview_box", "inspector"),
+    ("字幕的文字（逐句校對的編輯框，E-3a 搬到屬性面板）", "cue_panel.editor", "inspector"),
+    ("字幕的開始／結束時間（E-3a；原本只能在時間軸上拖）", "cue_start_spin", "inspector"),
+    ("字幕的開始／結束時間（結束）", "cue_end_spin", "inspector"),
+    ("字幕樣式（屬性面板的捷徑，同逐句校對那顆）", "cue_style_btn", "inspector"),
     ("復原", "player_panel.undo_btn", "timeline"),
     ("重做", "player_panel.redo_btn", "timeline"),
     ("存字幕", "player_panel.save_btn", "timeline"),
@@ -424,25 +433,39 @@ class EditorWindow(MainWindow):
         col.addLayout(row)
         return panel
 
+    def _inspector_page(self, key, title):
+        """屬性面板的一頁（可以捲）：回傳那一頁的直排。"""
+        content = QWidget()
+        col = QVBoxLayout(content)
+        col.setContentsMargins(12, 12, 12, 12)
+        col.setSpacing(6)
+        head = _title(title)
+        col.addWidget(head)
+        self.inspector_pages[key] = _scroll(content)
+        self.inspector_stack.addWidget(self.inspector_pages[key])
+        return col, head
+
     def _build_inspector(self):
+        """
+        屬性面板跟著選取換頁（E-3a）：沒選＝專案（主片段、剪點、疊加與音樂的摘要），選字幕＝那一句的時間與文字，
+        選素材＝那一段的屬性。時間軸上字幕與素材都選著時，看最後點的那個（`TimelineView.last_pick`）。
+        """
         p = self.player_panel
         panel = QFrame()
         panel.setObjectName("inspector")
         panel.setMinimumWidth(240)
         outer = QVBoxLayout(panel)
         outer.setContentsMargins(0, 0, 0, 0)
-        content = QWidget()
-        col = QVBoxLayout(content)
-        col.setContentsMargins(12, 12, 12, 12)
-        col.setSpacing(6)
-        col.addWidget(_title("屬性"))
+        self.inspector_stack = QStackedWidget()
+        outer.addWidget(self.inspector_stack)
+        self.inspector_pages = {}
 
-        col.addWidget(_title("專案", "sectionTitle"))
+        # 專案（沒選東西）
+        col, _head = self._inspector_page("project", "專案")
         col.addWidget(_secondary(p.info_label))
         col.addWidget(_title("主片段", "sectionTitle"))
         col.addWidget(self._iconify(p.picture_btn, "picture", role="list"))
         col.addWidget(p.proxy_box)
-
         col.addWidget(_title("剪點", "sectionTitle"))
         col.addWidget(p.cut_combo)
         p.cut_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -453,19 +476,129 @@ class EditorWindow(MainWindow):
         seam.addWidget(p.seam_spin)
         col.addLayout(seam)
         col.addWidget(p.cut_reset_btn)
+        col.addWidget(_title("疊加與音樂", "sectionTitle"))
+        p.track_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        col.addWidget(_secondary(p.track_label))
+        col.addWidget(p.preview_box)
+        col.addStretch(1)
+        col.addWidget(_secondary(QLabel(INSPECTOR_HINT)))
 
-        col.addWidget(_title("選取的素材", "sectionTitle"))
+        # 字幕（選了一句，或「新增一句」打字中）
+        col, self.cue_page_title = self._inspector_page("cue", "字幕")
+        self.cue_pos_label = _secondary(QLabel(""))
+        col.addWidget(self.cue_pos_label)
+        col.addWidget(_title("時間", "sectionTitle"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        self.cue_start_spin = self._time_spin("這句從幾秒開始（不會蓋到前一句；可以復原）")
+        self.cue_end_spin = self._time_spin("這句到幾秒結束（不會蓋到下一句、不超過片長；可以復原）")
+        self.cue_length_label = QLabel("")
+        for row, (name, widget) in enumerate((("開始", self.cue_start_spin), ("結束", self.cue_end_spin),
+                                               ("長度", self.cue_length_label))):
+            grid.addWidget(_secondary(QLabel(name)), row, 0)
+            grid.addWidget(widget, row, 1)
+        grid.setColumnStretch(1, 1)
+        col.addLayout(grid)
+        self.cue_start_spin.valueChanged.connect(lambda v: self._set_cue_time(start=v))
+        self.cue_end_spin.valueChanged.connect(lambda v: self._set_cue_time(end=v))
+        col.addWidget(_title("文字", "sectionTitle"))
+        col.addWidget(self.cue_panel.editor)  # 逐句校對的編輯框搬過來（同一個，套用、Esc、新增都照舊）
+        self.cue_panel.hint = CUE_EDIT_HINT
+        self.cue_panel._load_editor(self.cue_panel.selected_index())
+        col.addWidget(_title("全部字幕", "sectionTitle"))
+        self.cue_style_btn = QPushButton("字幕樣式…")
+        self.cue_style_btn.setToolTip(self.cue_panel.style_btn.toolTip() or "字型、大小、顏色、位置（套用到全部字幕）")
+        self.cue_style_btn.clicked.connect(lambda _c=False: self.cue_panel.style_btn.click())
+        _EnabledMirror(self.cue_panel.style_btn, self.cue_style_btn)
+        col.addWidget(self.cue_style_btn)
+        col.addStretch(1)
+
+        # 素材（疊加或音樂）
+        col, self.track_page_title = self._inspector_page("track", "素材")
         p.prop_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         col.addWidget(_secondary(p.prop_label))
         for widgets in p._prop_widgets.values():
             for w in widgets:
                 col.addWidget(w)
-        p.track_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        col.addWidget(_secondary(p.track_label))
-        col.addWidget(p.preview_box)
         col.addStretch(1)
-        outer.addWidget(_scroll(content))
+
+        p.timeline.cueSelected.connect(lambda _i: self.sync_inspector())
+        p.timeline.trackItemSelected.connect(lambda _k, _i: self.sync_inspector())
+        # 字幕改了（拖邊、復原、分割…）逐句校對會重載編輯框，editorChanged 就涵蓋了
+        self.cue_panel.editorChanged.connect(self.sync_inspector)
+        self.sync_inspector()
         return panel
+
+    def _time_spin(self, tip):
+        spin = QDoubleSpinBox()
+        spin.setDecimals(3)
+        spin.setRange(0.0, 24 * 3600.0)
+        spin.setSingleStep(0.1)
+        spin.setSuffix(" 秒")
+        spin.setKeyboardTracking(False)  # 打字打到一半不改；按 Enter、離開或按上下才改
+        spin.setToolTip(tip)
+        return spin
+
+    def inspector_mode(self):
+        """屬性面板該顯示哪一頁："project"／"cue"／"track"。"""
+        p = self.player_panel
+        tl = p.timeline
+        if self.cue_panel._adding is not None:
+            return "cue"
+        cue = 0 <= tl.selected < len(p.cues)
+        sel = tl.track_selected
+        track = bool(sel) and 0 <= sel[1] < len(p.tracks.get(sel[0], ()))
+        if cue and track:
+            return "cue" if tl.last_pick == "cue" else "track"
+        return "cue" if cue else "track" if track else "project"
+
+    def sync_inspector(self):
+        """照選取換頁、填這一頁的值（填的時候不送出修改）。"""
+        p = self.player_panel
+        mode = self.inspector_mode()
+        self.inspector_stack.setCurrentWidget(self.inspector_pages[mode])
+        if mode == "track":
+            kind = p.timeline.track_selected[0]
+            self.track_page_title.setText(TRACK_TITLES.get(kind, "素材"))
+        if mode != "cue":
+            return
+        adding = self.cue_panel._adding
+        index = p.timeline.selected
+        if adding is not None:
+            self.cue_page_title.setText("新增一句")
+            self.cue_pos_label.setText("打好字按 Ctrl+Enter 或離開編輯框就加進去，Esc 取消；"
+                                       "加進去之後才能改時間。")
+            start = end = float(adding)
+        else:
+            cue = p.cues[index]
+            start, end = float(cue["start"]), float(cue["end"])
+            self.cue_page_title.setText("字幕")
+            self.cue_pos_label.setText(f"第 {index + 1} 句，共 {len(p.cues)} 句")
+        for spin, value in ((self.cue_start_spin, start), (self.cue_end_spin, end)):
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.setEnabled(adding is None)
+            spin.blockSignals(False)
+        self.cue_length_label.setText("" if adding is not None else f"{end - start:.3f} 秒")
+
+    def _set_cue_time(self, start=None, end=None):
+        """屬性面板改了開始或結束：照拖邊的規則夾好、記進復原，夾過的值填回去。"""
+        p = self.player_panel
+        index = p.timeline.selected
+        if self.cue_panel._adding is not None or not 0 <= index < len(p.cues):
+            return
+        before = (float(p.cues[index]["start"]), float(p.cues[index]["end"]))
+        after = p.set_cue_times(index, start=start, end=end)
+        wanted = start if start is not None else end
+        got = after[0] if start is not None else after[1]
+        if after == before:
+            self.statusBar().showMessage("時間沒有變：會蓋到鄰句、超過片長，或短於 0.1 秒。")
+        elif abs(got - wanted) > 0.0005:
+            self.statusBar().showMessage(f"已改到 {got:.3f} 秒（不能蓋到鄰句、超過片長，或短於 0.1 秒）。")
+        else:
+            self.statusBar().showMessage(f"第 {index + 1} 句：{after[0]:.3f} → {after[1]:.3f} 秒（可以復原）。")
+        self.sync_inspector()
 
     def _build_timeline(self):
         p = self.player_panel
