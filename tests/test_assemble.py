@@ -48,6 +48,14 @@ def error_of(fn, *args, **kwargs):
     return None
 
 
+def _exc_of(fn, *args):
+    try:
+        fn(*args)
+    except Exception as exc:  # noqa: BLE001
+        return exc
+    return None
+
+
 # ----- 1. normalize -----
 raw = {"main": [{"path": "a.mp4", "in": 1, "out": 3}, {"path": "b.mp4", "out": 2},
                 {"path": "still.png"}],
@@ -486,6 +494,44 @@ check("seam_overlaps：每個接縫兩截——前一段的最後 d 秒、下一
 check("seam_overlaps：硬切或改硬切的接縫不標", assemble.seam_overlaps(seam_keep, [0.0, 0.0, 0.0]) == []
       and assemble.seam_overlaps(seam_keep, [0.0, 0.0, 0.3]) == [(7.7, 8.0), (9.5, 9.8)]
       and assemble.seam_overlaps(seam_keep, None) == [])
+
+# ----- 分割素材（剪輯器版面 E-3b：split_item） -----
+clip = {"path": "b.mp4", "at": 2.0, "in": 1.0, "out": 4.0, "length": 5.0, "rect": [0.6, 0.0, 0.4, 0.4],
+        "adjust": {"brightness": 0.1}}
+before = {k: (list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v) for k, v in clip.items()}
+head, tail = assemble.split_item("overlays", clip, 3.5, 30)
+check("split_item：影片在 3.5 秒切 → 前段出點 2.5、後段從 3.5 開始、進點 2.5",
+      (head["at"], head["in"], head["out"]) == (2.0, 1.0, 2.5) and (tail["at"], tail["in"], tail["out"]) == (3.5, 2.5, 4.0),
+      f"{head} {tail}")
+check("split_item：兩段接起來＝原本那段（輸出時間、素材時間都不重疊不漏）",
+      assemble.item_span("overlays", head, 30)[1] == assemble.item_span("overlays", tail, 30)[0]
+      and assemble.item_span("overlays", head, 30)[0] == 2.0 and assemble.item_span("overlays", tail, 30)[1] == 5.0)
+check("split_item：位置、畫面調整、length 兩段都留著，原本的 dict 不動",
+      head["rect"] == tail["rect"] == clip["rect"] and head["adjust"] == tail["adjust"] == {"brightness": 0.1}
+      and head["length"] == tail["length"] == 5.0 and clip == before)
+check("split_item：兩段都是新的 dict", head is not clip and tail is not clip and head is not tail)
+assemble.normalize({"main": [{"path": "a.mp4", "out": 30}], "overlays": [head, tail]})
+check("split_item：切完兩段 normalize 收", True)
+pic = {"path": "logo.png", "at": 8.0, "duration": 3.0}
+head, tail = assemble.split_item("overlays", pic, 9.25, 30)
+check("split_item：圖片改 duration（1.25 + 1.75）", (head["at"], head["duration"]) == (8.0, 1.25)
+      and (tail["at"], tail["duration"]) == (9.25, 1.75) and "in" not in tail, f"{head} {tail}")
+song = {"path": "s.m4a", "at": 0.0, "in": 0.0, "out": 20.0, "length": 20.0, "volume": 0.4, "loop": False, "duck": True}
+head, tail = assemble.split_item("music", song, 12.0, 30)
+check("split_item：音樂（音量、壓低兩段都留）", (head["out"], tail["at"], tail["in"]) == (12.0, 12.0, 12.0)
+      and head["volume"] == tail["volume"] == 0.4 and head["duck"] and tail["duck"])
+check("split_item：循環的音樂不能切", "循環" in (error_of(assemble.split_item, "music", dict(song, loop=True), 5, 30) or ""))
+check("split_item：沒給 out 的音樂不能切",
+      error_of(assemble.split_item, "music", {"path": "s.m4a", "at": 0.0}, 5, 30) is not None)
+check("split_item：播放頭在素材外面不能切", error_of(assemble.split_item, "overlays", clip, 1.0, 30) is not None
+      and error_of(assemble.split_item, "overlays", clip, 6.0, 30) is not None)
+check("split_item：離頭尾不到 MIN_CLIP 不能切", error_of(assemble.split_item, "overlays", clip, 2.02, 30) is not None
+      and error_of(assemble.split_item, "overlays", clip, 4.98, 30) is not None
+      and error_of(assemble.split_item, "overlays", clip, 2.0 + assemble.MIN_CLIP, 30) is None)
+check("split_item：超出片尾的部分不算（片長 4 秒時 4.5 不能切）",
+      error_of(assemble.split_item, "overlays", clip, 4.5, 4.0) is not None)
+check("split_item：不認得的軌拋 ValueError", isinstance(_exc_of(assemble.split_item, "main", clip, 3, 30), ValueError))
+
 
 if not shutil.which("ffmpeg"):
     print("SKIP 這個環境沒有 ffmpeg：略過真的輸出")

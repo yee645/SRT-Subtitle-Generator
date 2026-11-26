@@ -54,6 +54,7 @@
 * 復原：一筆（"split"），復原合回原本那一句（原文原時間），重做再切開。
 """
 
+import copy
 import difflib
 import os
 import shutil
@@ -455,6 +456,35 @@ class EditHistory:
             return
         self._push(("cues", tuple(indices), tuple(dict(c) for c in before), tuple(dict(c) for c in after)))
 
+    def record_tracks(self, before, after):
+        """
+        記一筆素材軌（疊加、音樂）的修改：before／after 是整份素材軌（{"overlays": [...], "music": [...]}）。
+        跟字幕的修改排在同一條復原順序裡（Ctrl+Z 退最後做的那一件）；字幕清單不受影響。
+        """
+        before, after = _copy_tracks(before), _copy_tracks(after)
+        if before == after:
+            return
+        self._push(("tracks", None, before, after))
+
+    def next_kind(self, redo=False):
+        """下一步復原（redo=True：重做）的是哪一種（"times"／"text"／"cue"／"split"／"cues"／"tracks"）；沒有是 None。"""
+        stack = self._undone if redo else self._done
+        return stack[-1][0] if stack else None
+
+    def step_tracks(self, redo=False):
+        """復原（或重做）一筆素材軌的修改，回傳那時候的整份素材軌（複本）；下一步不是素材軌拋 ValueError。"""
+        if self.next_kind(redo) != "tracks":
+            raise ValueError("下一步不是素材軌的修改")
+        source, target = (self._undone, self._done) if redo else (self._done, self._undone)
+        entry = source.pop()
+        target.append(entry)
+        return _copy_tracks(entry[3] if redo else entry[2])
+
+    def forget(self, kind):
+        """拿掉某一種的全部紀錄（換片子時素材軌清空，舊的素材軌紀錄不能再套回來）。字幕的紀錄各自獨立，不受影響。"""
+        self._done[:] = [e for e in self._done if e[0] != kind]
+        self._undone[:] = [e for e in self._undone if e[0] != kind]
+
     def _push(self, entry):
         self._done.append(entry)
         if len(self._done) > self.limit:
@@ -471,6 +501,8 @@ class EditHistory:
         """回傳 (復原後的新清單, 改到的是第幾句)；沒得復原回傳 None。"""
         if not self._done:
             return None
+        if self._done[-1][0] == "tracks":
+            raise ValueError("下一步是素材軌的修改：用 step_tracks()")
         entry = self._done.pop()
         self._undone.append(entry)
         kind, index, before, _after = entry
@@ -480,10 +512,16 @@ class EditHistory:
         """回傳 (重做後的新清單, 改到的是第幾句)；沒得重做回傳 None。"""
         if not self._undone:
             return None
+        if self._undone[-1][0] == "tracks":
+            raise ValueError("下一步是素材軌的修改：用 step_tracks(redo=True)")
         entry = self._undone.pop()
         self._done.append(entry)
         kind, index, _before, after = entry
         return _apply(cues, kind, index, after), _focus(index)
+
+
+def _copy_tracks(tracks):
+    return copy.deepcopy({kind: list(items) for kind, items in (tracks or {}).items()})
 
 
 def _focus(index):

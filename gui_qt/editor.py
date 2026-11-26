@@ -687,14 +687,28 @@ class EditorWindow(MainWindow):
         self.zoom_slider.blockSignals(False)
 
     def _update_timeline_tools(self, *_args):
-        """分割：有字幕就能按（切不了會講原因）；刪除：時間軸上選了字幕或素材才能按。"""
+        """分割：有字幕或選了素材就能按（切不了會講原因）；刪除：時間軸上選了字幕或素材才能按。"""
         p = self.player_panel
         t = p.timeline
-        self.split_tool.setEnabled(bool(p.cues) and t.duration > 0)
+        self.split_tool.setEnabled((bool(p.cues) or t.track_selected is not None) and t.duration > 0)
         self.delete_tool.setEnabled(t.track_selected is not None or 0 <= t.selected < len(p.cues))
 
     def split_at_playhead(self):
-        """〔分割〕、Ctrl+B：切不了就在狀態列講原因。回傳切的是第幾句（切不了是 -1）。"""
+        """
+        〔分割〕、Ctrl+B：最後點的是素材就切那段素材（E-3b），不然切字幕。切不了就在狀態列講原因。
+        回傳切的是第幾句（或第幾段素材；切不了是 -1）。
+        """
+        p = self.player_panel
+        sel = p.timeline.track_selected
+        if sel and p.timeline.last_pick == "track" and 0 <= sel[1] < len(p.tracks.get(sel[0], ())):
+            try:
+                kind, index = p.split_track_at_playhead()
+            except ValueError as exc:
+                self.statusBar().showMessage(f"不能分割：{exc}", 5000)
+                return -1
+            self.statusBar().showMessage(f"已把{TRACK_TITLES.get(kind, '素材')}第 {index + 1} 段切成兩段"
+                                         "（Ctrl+Z 可以復原）", 5000)
+            return index
         try:
             index = self.player_panel.split_at_playhead()
         except ValueError as exc:

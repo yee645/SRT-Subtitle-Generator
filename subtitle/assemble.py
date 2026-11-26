@@ -585,6 +585,32 @@ def trim_item(kind: str, item: dict, edge: str, t: float, total: float) -> dict:
     return out
 
 
+def split_item(kind: str, item: dict, t: float, total: float) -> tuple:
+    """
+    在輸出的第 t 秒把一段素材切成兩段（剪片軟體的「分割」），回傳 (前段, 後段) 兩個新的 dict（不改原本的）。
+    後段從 t 開始、進點往後挪同樣的秒數（圖片改 duration）；其他屬性（音量、位置、畫面調整…）兩段都留著。
+    t 要在這段素材裡面、離頭尾至少 MIN_CLIP 秒；循環或沒給 out 的音樂一路到片尾，不能切（拋 AssembleError）。
+    """
+    if kind == "music" and (item.get("loop") or item.get("out") is None):
+        raise AssembleError("循環播放的音樂一路到片尾，不能分割（先關掉「循環」）")
+    start, end = item_span(kind, item, total)
+    t = round(float(t), 3)
+    if not start + MIN_CLIP <= t <= end - MIN_CLIP:
+        raise AssembleError("播放頭要在這段素材裡面，離頭尾至少 0.05 秒")
+    offset = round(t - float(item.get("at", 0.0)), 3)
+    head, tail = dict(item), dict(item)
+    tail["at"] = t
+    if kind == "overlays" and is_image(item.get("path", "")):
+        duration = float(item.get("duration", DEFAULT_IMAGE_SECONDS))
+        head["duration"] = offset
+        tail["duration"] = round(duration - offset, 3)
+    else:
+        cut = round(float(item.get("in", 0.0)) + offset, 3)
+        head["out"] = cut
+        tail["in"] = cut
+    return head, tail
+
+
 # 子畫面的預設位置（rect 是畫布上 0～1 的比例 [x, y, w, h]）。小畫面佔寬高的三分之一，
 # 離邊 4%：常見的「右上角放一個講者」。
 OVERLAY_POSITIONS = (
