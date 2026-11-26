@@ -73,7 +73,8 @@ TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
     "test_mediabin.py", "test_qt_media_bin.py", "test_qt_editor_export.py",
     "test_playhead.py", "test_qt_editor_keys.py", "test_qt_editor_menus.py",
     "test_placenames.py", "test_qt_editor_places.py",
-    "test_editorguide.py", "test_qt_editor_layout.py"]
+    "test_editorguide.py", "test_qt_editor_layout.py",
+    "test_v310.py"]
 
 
 def main() -> int:
