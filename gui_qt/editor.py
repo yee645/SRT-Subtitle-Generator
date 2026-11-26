@@ -51,6 +51,31 @@ KEYS = {"play": ("Space",), "rewind": ("J",), "pause": ("K",), "forward": ("L",)
         "prev_frame": ("Left",), "next_frame": ("Right",),
         "zoom_in": ("Ctrl+=", "Ctrl++"), "zoom_out": ("Ctrl+-",), "fit": ("Shift+Z",),
         "export": ("Ctrl+E",), "save_project": ("Ctrl+Shift+S",)}
+# 選單列（E-6b）：(選單, [(項目, 目標, 快捷鍵提示) 或 None＝分隔線])。目標是元件路徑（按了＝按那顆，能不能按也照它）
+# 或 "@方法名稱"。快捷鍵只寫在選單上給人看，真正的按鍵在 _install_shortcuts（同一組鍵註冊兩次 Qt 會兩個都不觸發）。
+MENUS = (
+    ("檔案", (("開啟影片…", "player_panel.open_btn", ""), ("載入字幕…", "player_panel.subs_btn", ""),
+              ("匯入素材…", "media_bin.import_btn", ""), None,
+              ("開專案…", "player_panel.open_project_btn", ""), ("存專案", "player_panel.save_project_btn", "Ctrl+Shift+S"),
+              ("存字幕", "player_panel.save_btn", "Ctrl+S"), None,
+              ("匯出…", "export_button", "Ctrl+E"), None, ("關閉視窗", "@close", ""))),
+    ("編輯", (("復原", "player_panel.undo_btn", "Ctrl+Z"), ("重做", "player_panel.redo_btn", "Ctrl+Shift+Z"), None,
+              ("在播放頭分割", "split_tool", "Ctrl+B"), ("刪除選取", "delete_tool", "Delete"), None,
+              ("尋找取代", "@_find", "Ctrl+F"))),
+    ("檢視", (("媒體", "@show_section:media", ""), ("字幕", "@show_section:subtitles", ""),
+              ("智慧剪輯", "@show_section:smart", ""), ("健檢", "@show_section:health", ""), None,
+              ("拉近", "player_panel.zoom_in_btn", "Ctrl+="), ("拉遠", "player_panel.zoom_out_btn", "Ctrl+-"),
+              ("整支", "player_panel.fit_btn", "Shift+Z"), None,
+              ("切換深淺色", "theme_tool", ""))),
+    ("播放", (("播放／暫停", "play_tool", "Space"), ("上一格", "prev_frame_tool", "←"),
+              ("下一格", "next_frame_tool", "→"), None,
+              ("倒退 1 秒", "@jkl:J", "J"), ("暫停", "@jkl:K", "K"), ("播放／快轉", "@jkl:L", "L"))),
+    ("說明", (("新介面導覽", "guide_tool", ""), ("轉寫與金鑰", "transcription_tool", ""),
+              ("即時查譯", "lookup_tool", ""))),
+)
+# 預覽放大（E-6b）：看字幕邊緣、畫面細節；放大時可以用滑鼠拖著看別的地方
+PREVIEW_ZOOMS = (("符合視窗", 1.0), ("放大 2 倍", 2.0), ("放大 4 倍", 4.0))
+
 # 這些元件自己要用方向鍵（清單、數字欄、選單、滑桿、打字的地方）：焦點在它們上面時 ←／→ 不拿去逐格
 ARROW_OWNERS = (QAbstractItemView, QAbstractSpinBox, QComboBox, QAbstractSlider, QLineEdit, QPlainTextEdit, QTextEdit)
 TIMELINE_EMPTY_TEXT = "開啟影片後，縮圖、波形與字幕會排在這裡。"
@@ -105,6 +130,8 @@ FEATURE_MAP = (
     ("播放進度", "player_panel.slider", "preview"),
     ("時間（E-6a 改成時:分:秒.百分之一秒）", "timecode_label", "preview"),
     ("上一格（E-6a）", "prev_frame_tool", "preview"),
+    ("預覽放大（E-6b）", "preview_zoom_combo", "preview"),
+    ("專注預覽：收起左右面板（E-6b）", "focus_tool", "preview"),
     ("下一格（E-6a）", "next_frame_tool", "preview"),
     ("影片與字幕狀態（改過幾處沒存）", "player_panel.info_label", "inspector"),
     ("畫面調整", "player_panel.picture_btn", "inspector"),
@@ -287,6 +314,7 @@ class EditorWindow(MainWindow):
         outer.addWidget(body, 1)
         self.setCentralWidget(root)
         self.export_dialog = self._build_export_dialog()
+        self._build_menus()
 
         self._install_shortcuts()
         p.player.playbackStateChanged.connect(lambda _s: self._update_play_icon())
@@ -497,9 +525,29 @@ class EditorWindow(MainWindow):
         p.player.durationChanged.connect(lambda _ms: self._update_timecode())
         p.timeline.durationChanged.connect(lambda _d: self._probe_fps())
         self._update_timecode()
-        spacer = QWidget()  # 跟左邊的時間一樣寬，播放鍵才會在正中間
-        spacer.setFixedWidth(self.timecode_label.sizeHint().width())
-        row.addWidget(spacer)
+        # 右邊：預覽放大、專注預覽（E-6b）；跟左邊的時間一樣寬，播放鍵才會在正中間
+        right = QWidget()
+        tools = QHBoxLayout(right)
+        tools.setContentsMargins(0, 0, 0, 0)
+        tools.setSpacing(4)
+        tools.addStretch(1)
+        self.preview_zoom_combo = QComboBox()
+        for label, factor in PREVIEW_ZOOMS:
+            self.preview_zoom_combo.addItem(label, factor)
+        self.preview_zoom_combo.setToolTip("預覽放大（看字幕邊緣、畫面細節；放大時用滑鼠拖著看別的地方）")
+        self.preview_zoom_combo.currentIndexChanged.connect(
+            lambda i: self.set_preview_zoom(self.preview_zoom_combo.itemData(i)))
+        tools.addWidget(self.preview_zoom_combo)
+        view = self.player_panel.view  # 放大時收起／放回面板，預覽變寬變窄，還是看正中間
+        view.resized.connect(lambda: view.centerOn(view.sceneRect().center())
+                             if self.preview_zoom_combo.currentIndex() > 0 else None)
+        self.focus_tool = self._tool("fit", "專注預覽：收起左側面板與屬性面板（再按一次放回來）",
+                                     lambda: self.set_focus_preview(self.focus_tool.isChecked()), checkable=True)
+        self.focus_tool.setProperty("role", "ghost")
+        tools.addWidget(self.focus_tool)
+        right.setFixedWidth(max(self.timecode_label.sizeHint().width(), right.sizeHint().width()))
+        self.timecode_label.setMinimumWidth(right.width())
+        row.addWidget(right)
         col.addLayout(row)
         return panel
 
@@ -998,6 +1046,92 @@ class EditorWindow(MainWindow):
             for sc in self.key_shortcuts[name]:
                 sc.setEnabled(ok)
         return ok
+
+    # ----- 選單列、面板收合、預覽放大（E-6b） -----
+    def _build_menus(self):
+        """選單列：每一項都是現有的按鈕或動作（按了＝按那顆；打開選單時照那顆能不能按）。"""
+        bar = self.menuBar()
+        self.menu_actions = {}
+        self._menu_sources = []
+        for title, entries in MENUS:
+            menu = bar.addMenu(title)
+            for entry in entries:
+                if entry is None:
+                    menu.addSeparator()
+                    continue
+                text, target, key = entry
+                action = menu.addAction(f"{text}\t{key}" if key else text)
+                if target.startswith("@"):
+                    name, _, arg = target[1:].partition(":")
+                    slot = getattr(self, name)
+                    action.triggered.connect(lambda _c=False, f=slot, a=arg: f(a) if a else f())
+                else:
+                    widget = resolve(self, target)
+                    action.triggered.connect(lambda _c=False, w=widget: w.click())
+                    self._menu_sources.append((action, widget))
+                self.menu_actions[f"{title}/{text}"] = action
+            menu.aboutToShow.connect(self._sync_menus)
+            if title == "檢視":
+                menu.addSeparator()
+                self.left_panel_action = menu.addAction("顯示左側面板")
+                self.inspector_action = menu.addAction("顯示屬性面板")
+                for action, key in ((self.left_panel_action, "left"), (self.inspector_action, "inspector")):
+                    action.setCheckable(True)
+                    action.setChecked(True)
+                    action.toggled.connect(lambda on, k=key: self.set_panel_visible(k, on))
+                zoom = menu.addMenu("預覽放大")
+                self.preview_zoom_actions = []
+                for i, (label, _factor) in enumerate(PREVIEW_ZOOMS):
+                    act = zoom.addAction(label)
+                    act.setCheckable(True)
+                    act.triggered.connect(lambda _c=False, n=i: self.preview_zoom_combo.setCurrentIndex(n))
+                    self.preview_zoom_actions.append(act)
+                self._sync_zoom_actions()
+        self._sync_menus()
+
+    def _sync_menus(self):
+        for action, widget in self._menu_sources:
+            action.setEnabled(widget.isEnabled())
+
+    def _sync_zoom_actions(self):
+        for i, act in enumerate(getattr(self, "preview_zoom_actions", ())):
+            act.setChecked(i == self.preview_zoom_combo.currentIndex())
+
+    def set_panel_visible(self, which, shown):
+        """收起或放回左側面板（"left"）／屬性面板（"inspector"）；空出來的寬度給預覽。回傳之後是否顯示。"""
+        panel = self.left_panel if which == "left" else self.inspector_panel
+        panel.setVisible(bool(shown))
+        action = self.left_panel_action if which == "left" else self.inspector_action
+        if action.isChecked() != bool(shown):
+            action.blockSignals(True)
+            action.setChecked(bool(shown))
+            action.blockSignals(False)
+        both_hidden = not self.left_panel.isVisible() and not self.inspector_panel.isVisible()
+        if self.focus_tool.isChecked() != both_hidden:
+            self.focus_tool.setChecked(both_hidden)
+        return bool(shown)
+
+    def set_focus_preview(self, on):
+        """專注預覽：左側面板與屬性面板一起收起來（或一起放回來）。"""
+        self.set_panel_visible("left", not on)
+        self.set_panel_visible("inspector", not on)
+        self.statusBar().showMessage("專注預覽：再按一次放回左側面板與屬性面板" if on else "", 3000)
+        return bool(on)
+
+    def set_preview_zoom(self, factor):
+        """預覽放大（1＝符合視窗）。放大時可以用滑鼠拖著看；字幕與疊加的預覽跟著一起放大（同一個畫面）。"""
+        view = self.player_panel.view
+        factor = float(factor or 1.0)
+        view.resetTransform()
+        if factor != 1.0:
+            view.scale(factor, factor)
+        view.setDragMode(view.DragMode.ScrollHandDrag if factor > 1.0 else view.DragMode.NoDrag)
+        view.centerOn(view.sceneRect().center())  # 從畫面正中間開始看，不是從左上角
+        index = next((i for i, (_l, f) in enumerate(PREVIEW_ZOOMS) if f == factor), 0)
+        if self.preview_zoom_combo.currentIndex() != index:
+            self.preview_zoom_combo.setCurrentIndex(index)
+        self._sync_zoom_actions()
+        return factor
 
     # ----- 播放頭（E-6a） -----
     def _update_timecode(self):
