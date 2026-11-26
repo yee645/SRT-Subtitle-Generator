@@ -45,6 +45,7 @@ else:
 
     from gui_qt import app as qt_app  # noqa: E402
     from gui_qt import timeline as tl  # noqa: E402
+    from subtitle.designtokens import TOKENS  # noqa: E402
     from subtitle import cutmarks  # noqa: E402
 
     app = QApplication.instance() or QApplication([])
@@ -164,7 +165,9 @@ else:
     view.setPalette(dark)
     wait(30)
     check("深色主題：剪點換成深色用的顏色（重畫過）",
-          view.cut_items[0].brush().color() == QColor(255, 90, 90, 80), str(view.cut_items[0].brush().color().getRgb()))
+          # E-2：時間軸改用色票（原本寫死 QColor(255, 90, 90, 80)）：深色版的 track.cut、透明度 80
+          view.cut_items[0].brush().color().getRgb()
+          == (*QColor(TOKENS["dark"]["track.cut"]).getRgb()[:3], 80), str(view.cut_items[0].brush().color().getRgb()))
     view.close()
 
     # ----- 2. 播放器 -----
