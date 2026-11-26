@@ -60,6 +60,9 @@ check("不改原本的清單", start == snapshot)
 rel = os.path.relpath(files["song.mp3"])
 check("相對路徑轉成絕對", mediabin.add_paths([], [rel])[1][0]["path"] == os.path.abspath(rel))
 kept = mediabin.remove_paths(out, [files["logo.png"], os.path.join(tmp, "nope.mp4")])
+check("remove_paths：寫法不同的同一個檔也拿得掉", [os.path.basename(e["path"]) for e in
+                                               mediabin.remove_paths(out, [twisted, os.path.relpath(files["song.mp3"])])]
+      == ["clip.mp4"])
 check("remove_paths：拿掉那一個、不在裡面的不管", [os.path.basename(e["path"]) for e in kept] == ["clip.mp4", "song.mp3"]
       and len(out) == 3)
 
