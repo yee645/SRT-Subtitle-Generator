@@ -260,6 +260,58 @@ try:
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
+# ---- 剪輯器版面 E-2b：分割 ----
+cs = [{"start": 1.0, "end": 5.0, "text": "今天要講，怎麼把字幕做好", "style": "x"},
+      {"start": 6.0, "end": 8.0, "text": "第一行\n第二行"},
+      {"start": 7.5, "end": 9.0, "text": "重疊的後一句"},
+      {"start": 10.0, "end": 12.0, "text": "abcdefgh"}]
+check("cue_at：播放頭在句子裡", cueedit.cue_at(cs, 1.0) == 0 and cueedit.cue_at(cs, 4.999) == 0)
+check("cue_at：結束那一刻不算（下一句才開始）", cueedit.cue_at(cs, 5.0) == -1 and cueedit.cue_at(cs, 5.5) == -1)
+check("cue_at：重疊時取開始得最晚的那句", cueedit.cue_at(cs, 7.8) == 2, str(cueedit.cue_at(cs, 7.8)))
+out = cueedit.split_cue(cs, 0, 3.0)
+check("split_cue：多一句、其他句不動", len(out) == len(cs) + 1 and out[2:] == cs[1:])
+check("split_cue：時間切在播放頭", (out[0]["start"], out[0]["end"], out[1]["start"], out[1]["end"]) == (1.0, 3.0, 3.0, 5.0),
+      str(out[:2]))
+check("split_cue：字切在比例附近的標點後面", (out[0]["text"], out[1]["text"]) == ("今天要講，", "怎麼把字幕做好"),
+      str(out[:2]))
+check("split_cue：其他欄位兩句都帶著", out[0]["style"] == out[1]["style"] == "x")
+check("split_cue：原本的清單不動", cs[0]["end"] == 5.0 and len(cs) == 4)
+out = cueedit.split_cue(cs, 1, 7.0)
+check("split_cue：雙行字幕切在換行", (out[1]["text"], out[2]["text"]) == ("第一行", "第二行"), str(out[1:3]))
+check("split_text：換行跟標點一樣近時優先切在換行（雙行字幕一行一句）",
+      cueedit.split_text("第一行，還有字\n第二行", 0.55) == ("第一行，還有字", "第二行"),
+      str(cueedit.split_text("第一行，還有字\n第二行", 0.55)))
+check("split_text：沒有標點照比例切在中間", cueedit.split_text("abcdefgh", 0.25) == ("ab", "cdefgh"),
+      str(cueedit.split_text("abcdefgh", 0.25)))
+check("split_text：比例極端也兩段都有字", cueedit.split_text("abcdefgh", 0.0) == ("a", "bcdefgh")
+      and cueedit.split_text("abcdefgh", 1.0) == ("abcdefg", "h"))
+check("split_text：標點太遠不去遷就", cueedit.split_text("一二三四五六七八九十，", 0.3)[0] == "一二三",
+      str(cueedit.split_text("一二三四五六七八九十，", 0.3)))
+for name, args in (("離開頭太近", (cs, 0, 1.05)), ("離結尾太近", (cs, 0, 4.95)), ("在句子外面", (cs, 0, 6.0))):
+    try:
+        cueedit.split_cue(*args)
+        check(f"split_cue：{name}拋 ValueError", False)
+    except ValueError:
+        check(f"split_cue：{name}拋 ValueError", True)
+try:
+    cueedit.split_cue([{"start": 0, "end": 2, "text": "嗨"}], 0, 1.0)
+    check("split_cue：只有一個字拋 ValueError", False)
+except ValueError:
+    check("split_cue：只有一個字拋 ValueError", True)
+try:
+    cueedit.split_cue(cs, 9, 1.0)
+    check("split_cue：句子編號不對拋 IndexError", False)
+except IndexError:
+    check("split_cue：句子編號不對拋 IndexError", True)
+h = cueedit.EditHistory()
+out = cueedit.split_cue(cs, 0, 3.0)
+h.record_split(0, cs[0], out[0:2])
+undone, focus = h.undo(out)
+check("分割的復原：合回原本那一句（原文原時間）", undone == cs and focus == 0, str(undone[:2]))
+redone, focus = h.redo(undone)
+check("分割的重做：再切開", redone == out and focus == 0)
+check("分割後存檔前：句數差算一句", cueedit.changed_count(out, cs) >= 1)
+
 print()
 if failures:
     print(f"{len(failures)} 項失敗")

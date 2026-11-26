@@ -45,6 +45,13 @@
 * 復原：插入／刪除是一筆（"cue"：之前或之後是 None＝那句不在），全部取代整批是一筆（"cues"），
   跟改時間、改文字同一疊。
 * `diff_counts`：跟存檔時比，先把沒變的句子對齊再數，所以插一句不會讓後面每一句都算成「改過」。
+
+剪輯器版面 E-2b 加上分割（剪映、Premiere 的 Ctrl+B）：
+
+* `cue_at`：播放頭底下是哪一句（重疊時開始得最晚的那句）。
+* `split_cue`：在播放頭把一句切成兩句，兩段都至少 `MIN_DURATION`；字照時間比例分（`split_text`），
+  附近有換行切在換行、其次標點或空白之後，都沒有就切在字中間——寧可切得不漂亮，也不讓一段變空。
+* 復原：一筆（"split"），復原合回原本那一句（原文原時間），重做再切開。
 """
 
 import difflib
@@ -286,6 +293,63 @@ def without_cue(cues, index):
     return out
 
 
+SPLIT_BREAKS = "，。、！？；：…,.!?;:"
+
+
+def cue_at(cues, seconds):
+    """播放頭落在哪一句裡（開始 ≤ t < 結束）；重疊時取開始得最晚的那句（跟時間軸、CueIndex 一致）。沒有回傳 -1。"""
+    t = _ms(seconds)
+    best, best_start = -1, None
+    for i, cue in enumerate(cues):
+        start, end = _ms(cue["start"]), _ms(cue["end"])
+        if start <= t < end and (best_start is None or start >= best_start):
+            best, best_start = i, start
+    return best
+
+
+def split_text(text, ratio):
+    """
+    分割一句時字怎麼分：照時間的比例找切點，附近（字數的四分之一以內）有換行就切在換行、其次標點或空白之後；
+    都沒有就照比例切在字的中間。回傳 (前半, 後半)，兩段都整理過；有一段會是空的（例如只有一個字）拋 ValueError。
+    """
+    text = clean_text(text)
+    if len(text) < 2:
+        raise ValueError("這句只有一個字，不能分割")
+    target = min(max(int(round(len(text) * ratio)), 1), len(text) - 1)
+    reach = max(2, len(text) // 4)
+
+    def nearest(positions):
+        near = [k for k in positions if 1 <= k <= len(text) - 1 and abs(k - target) <= reach]
+        return min(near, key=lambda k: (abs(k - target), k)) if near else None
+
+    cut = nearest([i for i, ch in enumerate(text) if ch == "\n"])  # 雙行字幕：切在換行那裡
+    if cut is None:
+        cut = nearest([i + 1 for i, ch in enumerate(text) if ch in SPLIT_BREAKS or ch.isspace()])
+    if cut is None:
+        cut = target
+    left, right = clean_text(text[:cut]), clean_text(text[cut:])
+    if not left or not right:
+        raise ValueError("分割後有一段沒有字，不能分割")
+    return left, right
+
+
+def split_cue(cues, index, seconds):
+    """
+    在 seconds 把第 index 句切成兩句（剪映、Premiere 的「分割」）：前一句到 seconds 結束、後一句從 seconds 開始，
+    字照 split_text 分。兩段都要至少 MIN_DURATION 秒，不然拋 ValueError。回傳新清單（多一句）。
+    """
+    if not 0 <= index < len(cues):
+        raise IndexError(index)
+    cue = cues[index]
+    start, end, t = _ms(cue["start"]), _ms(cue["end"]), _ms(seconds)
+    if t - start < _ms(MIN_DURATION) or end - t < _ms(MIN_DURATION):
+        raise ValueError("播放頭離這句的開頭或結尾太近，切了會有一段太短")
+    left, right = split_text(cue.get("text", ""), (t - start) / (end - start))
+    out = [dict(c) for c in cues]
+    out[index:index + 1] = [dict(cue, end=t / 1000.0, text=left), dict(cue, start=t / 1000.0, text=right)]
+    return out
+
+
 def replace_text(cues, term, replacement, case_sensitive=False, only=None):
     """
     字面尋找取代（不改傳進來的清單）。回傳 (新清單, 取代了幾處, 改到的句子, 因為會變空而沒改的句子)。
@@ -381,6 +445,10 @@ class EditHistory:
         """記一筆：拿掉了第 index 句（cue 是拿掉前的樣子）。"""
         self._push(("cue", index, dict(cue), None))
 
+    def record_split(self, index, before, after):
+        """記一筆：第 index 句（before）分割成 after 的兩句。復原合回一句、重做再切開。"""
+        self._push(("split", index, (dict(before),), tuple(dict(c) for c in after)))
+
     def record_cues(self, indices, before, after):
         """記一筆整批的（全部取代）：indices 這幾句從 before 換成 after（都是整句的 dict）。"""
         if not indices:
@@ -424,6 +492,11 @@ def _focus(index):
 
 
 def _apply(cues, kind, index, value):
+    if kind == "split":
+        # value 是一句（復原：拿掉切開的兩句、放回原本那句）或兩句（重做：拿掉原本那句、放切開的兩句）
+        out = [dict(c) for c in cues]
+        out[index:index + (3 - len(value))] = [dict(c) for c in value]
+        return out
     if kind == "cue":
         out = [dict(c) for c in cues]
         if value is None:

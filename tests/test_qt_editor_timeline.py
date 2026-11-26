@@ -10,6 +10,14 @@ E-2a：配色、軌道標頭、軌道加高、空狀態
 4. 字幕塊放不下整句時尾巴加「…」，而且字真的塞得進方塊。
 5. 沒開影片：時間軸顯示一句話＋〔開啟影片…〕（按了等於按媒體區的〔開啟影片〕）；有片長就換回軌道。
 6. 換深淺色：軌道標頭與時間軸一起換色票。
+
+E-2b：工具列
+7. 〔分割〕與 Ctrl+B：在播放頭把那句切成兩句（優先選取的那句、不然播放頭底下那句），選後半句，逐句清單跟著多一列，
+   Ctrl+Z 合回原樣；播放頭底下沒字幕就在狀態列講原因、什麼都不動。
+8. 〔刪除〕與 Delete：刪時間軸上最後選的那個（字幕或素材，兩種可以同時選著），字幕 Ctrl+Z 救得回來；
+   沒選東西時按鈕不能按。原本的〔刪除選取〕（只刪素材）換成這顆（REPLACED）。
+9. 〔吸附〕：開著拖字幕的邊會貼到播放頭，關掉就照滑鼠的位置。
+10. 縮放滑桿：拖滑桿＝縮放（對數刻度、兩頭到最小最大）；用按鈕或整支縮放，滑桿跟著移。
 """
 import copy
 import os
@@ -169,6 +177,120 @@ else:
     win.toggle_theme()
     wait(100)
     check("換回深色", rgb(t.colors["cue"]) == rgb(TOKENS["dark"]["track.subtitle"]))
+
+    # ----- 7. 分割 -----
+    src_cues = [{"start": 1.0, "end": 5.0, "text": "今天要講，怎麼把字幕做好"},
+                {"start": 6.0, "end": 8.0, "text": "第二句的字"},
+                {"start": 10.0, "end": 12.0, "text": "第三句"}]
+    p.set_cues(src_cues)
+    t.set_duration(30)
+    t.set_zoom(40, 0, 0)
+    wait(50)
+    pos = {"ms": 3000}
+    p.player.position = lambda: pos["ms"]
+    rows_before = win.cue_panel.table.rowCount()
+    check("有字幕：〔分割〕能按、提示寫 Ctrl+B", win.split_tool.isEnabled() and "Ctrl+B" in win.split_tool.toolTip())
+    t.setFocus()
+    QTest.keyClick(t, Qt.Key_B, Qt.ControlModifier)
+    wait(50)
+    check("Ctrl+B：播放頭底下那句切成兩句", len(p.cues) == 4
+          and (p.cues[0]["end"], p.cues[1]["start"]) == (3.0, 3.0)
+          and (p.cues[0]["text"], p.cues[1]["text"]) == ("今天要講，", "怎麼把字幕做好"), str(p.cues[:2]))
+    check("切完選後半句", t.selected == 1, str(t.selected))
+    check("逐句清單跟著多一列", win.cue_panel.table.rowCount() == rows_before + 1,
+          f"{rows_before} → {win.cue_panel.table.rowCount()}")
+    check("狀態列講切了哪一句", "第 1 句" in win.statusBar().currentMessage(), win.statusBar().currentMessage())
+    QTest.keyClick(t, Qt.Key_Z, Qt.ControlModifier)
+    wait(50)
+    check("Ctrl+Z：合回原本那一句", p.cues == src_cues, str(p.cues[:2]))
+    # 選了別句、播放頭卻在另一句裡：切播放頭底下那句
+    t.select_cue(2, seek=False)
+    pos["ms"] = 7000
+    win.split_tool.click()
+    wait(50)
+    check("〔分割〕：選的那句不在播放頭底下 → 切播放頭底下那句", len(p.cues) == 4
+          and p.cues[1]["end"] == 7.0 and p.cues[2]["start"] == 7.0 and p.cues[3] == src_cues[2], str(p.cues))
+    p.undo()
+    pos["ms"] = 9000
+    win.split_tool.click()
+    wait(50)
+    check("播放頭底下沒字幕：不動、狀態列講原因", p.cues == src_cues
+          and "不能分割" in win.statusBar().currentMessage(), win.statusBar().currentMessage())
+    pos["ms"] = 1020
+    win.split_tool.click()
+    check("離開頭太近：不動、講原因", p.cues == src_cues and "太近" in win.statusBar().currentMessage(),
+          win.statusBar().currentMessage())
+
+    # ----- 8. 刪除 -----
+    check("〔刪除選取〕換成〔刪除〕", ("player_panel.remove_track_btn", "delete_tool") in ed.REPLACED
+          and not p.remove_track_btn.isVisible() and win.delete_tool.isVisible())
+    t.select_cue(-1, seek=False)
+    t.select_track_item("", -1, seek=False)
+    win._update_timeline_tools()
+    check("沒選東西：〔刪除〕不能按", not win.delete_tool.isEnabled())
+    t.select_cue(1, seek=False)
+    check("選了字幕：〔刪除〕能按", win.delete_tool.isEnabled())
+    t.setFocus()
+    QTest.keyClick(t, Qt.Key_Delete)
+    wait(50)
+    check("Delete：刪掉選的那句", [c["text"] for c in p.cues] == ["今天要講，怎麼把字幕做好", "第三句"],
+          str([c["text"] for c in p.cues]))
+    QTest.keyClick(t, Qt.Key_Z, Qt.ControlModifier)
+    wait(50)
+    check("Ctrl+Z：刪掉的那句回來", p.cues == src_cues, str(p.cues))
+    p.tracks["overlays"] = [{"path": os.path.join(tmp, "b.png"), "at": 14.0, "in": 0.0, "out": 3.0, "length": 3.0}]
+    p.refresh_tracks()
+    t.select_track_item("overlays", 0, seek=False)
+    t.select_cue(0, seek=False)  # 兩個都選著，最後選的是字幕
+    check("〔刪除〕：最後選字幕 → 刪字幕、素材留著", win.delete_selection() == "cue"
+          and len(p.cues) == 2 and len(p.tracks["overlays"]) == 1)
+    p.undo()
+    t.select_cue(0, seek=False)
+    t.select_track_item("overlays", 0, seek=False)  # 最後選的是素材
+    check("〔刪除〕：最後選素材 → 刪素材、字幕留著", win.delete_selection() == "track"
+          and len(p.cues) == 3 and not p.tracks["overlays"])
+
+    # ----- 9. 吸附 -----
+    def x_of(seconds):
+        return int(round(seconds * t.px_per_sec)) - t.horizontalScrollBar().value()
+
+    def drag(from_x, to_x, y):
+        vp = t.viewport()
+        QTest.mousePress(vp, Qt.LeftButton, Qt.NoModifier, QPoint(from_x, y))
+        for k in range(1, 5):
+            QTest.mouseMove(vp, QPoint(from_x + (to_x - from_x) * k // 4, y))
+        QTest.mouseRelease(vp, Qt.LeftButton, Qt.NoModifier, QPoint(to_x, y))
+        wait(20)
+
+    y_cue = t.row_y["cues"] + t.row_h["cues"] // 2
+    t.set_position(int(8.4 * 1000), follow=False)
+    check("〔吸附〕預設開著", win.snap_tool.isChecked() and t.snap_enabled and t.snap_tolerance() > 0)
+    drag(x_of(8) - 1, x_of(8.4) - 6, y_cue)  # 第二句的結尾拖到離播放頭 5px
+    check("吸附開著：結尾貼到播放頭", abs(p.cues[1]["end"] - 8.4) < 1e-6, str(p.cues[1]))
+    p.undo()
+    win.snap_tool.click()
+    check("按〔吸附〕關掉", not win.snap_tool.isChecked() and not t.snap_enabled and t.snap_tolerance() == 0)
+    drag(x_of(8) - 1, x_of(8.4) - 6, y_cue)
+    check("吸附關掉：結尾照滑鼠的位置（沒貼到播放頭）", 8.2 < p.cues[1]["end"] < 8.39, str(p.cues[1]))
+    p.undo()
+    win.snap_tool.click()
+    check("再按一次打開", t.snap_enabled)
+
+    # ----- 10. 縮放滑桿 -----
+    check("滑桿兩頭＝最小最大的縮放", abs(tl.slider_to_zoom(0) - tl.MIN_PX_PER_SEC) < 1e-9
+          and abs(tl.slider_to_zoom(tl.ZOOM_SLIDER_STEPS) - tl.MAX_PX_PER_SEC) < 1e-6)
+    check("滑桿與縮放互為反函數", all(tl.zoom_to_slider(tl.slider_to_zoom(v)) == v for v in range(0, 101, 7)))
+    win.zoom_slider.setValue(80)
+    wait(20)
+    check("拖滑桿＝縮放", abs(t.px_per_sec - tl.slider_to_zoom(80)) < 1e-6, str(t.px_per_sec))
+    p.zoom_out_btn.click()
+    wait(20)
+    check("按〔拉遠〕：滑桿跟著移", win.zoom_slider.value() == tl.zoom_to_slider(t.px_per_sec) < 80,
+          f"{win.zoom_slider.value()} / {t.px_per_sec}")
+    p.fit_btn.click()
+    wait(20)
+    check("按〔整支〕：滑桿跟著移", win.zoom_slider.value() == tl.zoom_to_slider(t.px_per_sec),
+          f"{win.zoom_slider.value()} / {t.px_per_sec}")
 
     win.player_panel.maybe_discard = lambda: True
     win.close()

@@ -183,6 +183,21 @@ def tick_label(seconds, step):
     return f"{int(minutes)}:{int(round(secs)):02d}"
 
 
+ZOOM_SLIDER_STEPS = 100
+
+
+def zoom_to_slider(px_per_sec, steps=ZOOM_SLIDER_STEPS):
+    """縮放倍率 → 滑桿位置（0～steps，對數刻度：每一格放大的倍數一樣）。"""
+    pps = min(max(float(px_per_sec), MIN_PX_PER_SEC), MAX_PX_PER_SEC)
+    return int(round(math.log(pps / MIN_PX_PER_SEC) / math.log(MAX_PX_PER_SEC / MIN_PX_PER_SEC) * steps))
+
+
+def slider_to_zoom(value, steps=ZOOM_SLIDER_STEPS):
+    """滑桿位置 → 縮放倍率（zoom_to_slider 的反函數）。"""
+    frac = min(max(value / steps, 0.0), 1.0)
+    return MIN_PX_PER_SEC * (MAX_PX_PER_SEC / MIN_PX_PER_SEC) ** frac
+
+
 def elide(text, font, width):
     """方塊放不下整段字時在尾巴加「…」（E-2；原本是硬切，看不出後面還有字）。"""
     return QFontMetrics(font).elidedText(text, Qt.ElideRight, max(int(width), 0))
@@ -360,6 +375,7 @@ class TimelineView(QGraphicsView):
     trackItemChanged = Signal(str, int, object)   # 哪一軌、第幾段、修過頭尾的新 dict
     rowsChanged = Signal()                        # 換了列高（軌道標頭跟著重排）
     durationChanged = Signal(float)               # 換片子（片長 0＝沒有影片）
+    zoomChanged = Signal(float)                   # 換了縮放（每秒幾像素）
 
     def __init__(self, parent=None, heights=None, inline_notes=True):
         super().__init__(parent)
@@ -367,6 +383,8 @@ class TimelineView(QGraphicsView):
         # （剪輯器版面改寫在軌道標頭的提示裡，列上保持乾淨）
         self.row_y, self.row_h, self.total_h = row_layout(heights)
         self.inline_notes = inline_notes
+        self.last_pick = ""        # 最後選的是字幕（"cue"）還是素材（"track"）：兩種可以同時選著，〔刪除〕刪最後選的
+        self.snap_enabled = True   # 拖曳時貼到播放頭、鄰句的邊（剪輯器工具列的〔吸附〕可以關）
         self.duration = 0.0
         self.px_per_sec = DEFAULT_PX_PER_SEC
         self.peaks = None
@@ -569,6 +587,8 @@ class TimelineView(QGraphicsView):
         new = (kind, index) if index >= 0 and 0 <= index < len(self.tracks.get(kind, ())) else None
         changed = new != self.track_selected
         self.track_selected = new
+        if new:
+            self.last_pick = "track"
         self._build_tracks()
         if changed:
             self.trackItemSelected.emit(kind if new else "", index if new else -1)
@@ -618,6 +638,8 @@ class TimelineView(QGraphicsView):
             index = -1
         changed = index != self.selected
         self.selected = index
+        if index >= 0:
+            self.last_pick = "cue"
         self._build_cues()
         if changed:
             self.cueSelected.emit(index)
@@ -685,6 +707,15 @@ class TimelineView(QGraphicsView):
         self._fit_mode = keep_fit  # 使用者自己縮放過就不再自動塞滿
         self._relayout()
         self.horizontalScrollBar().setValue(int(round(anchor_sec * new - anchor_x)))
+        self.zoomChanged.emit(new)
+
+    def snap_tolerance(self):
+        """吸附的距離（秒）：SNAP_PX 換成秒數；關掉吸附時是 0（只有剛好落在吸附點上才算）。"""
+        return SNAP_PX / self.px_per_sec if self.snap_enabled else 0.0
+
+    def set_snap(self, enabled):
+        self.snap_enabled = bool(enabled)
+        return self.snap_enabled
 
     def zoom_in(self):
         self.set_zoom(self.px_per_sec * ZOOM_STEP)
@@ -851,7 +882,7 @@ class TimelineView(QGraphicsView):
             kind, index, part, item0, edge0, pressed = self._track_trim
             pps = self.px_per_sec
             delta = self.mapToScene(int(pos.x()), 0).x() / pps - pressed
-            t = cueedit.snap(edge0 + delta, self._track_snap_targets(kind, index), SNAP_PX / pps)
+            t = cueedit.snap(edge0 + delta, self._track_snap_targets(kind, index), self.snap_tolerance())
             self.tracks[kind][index] = assemble_mod.trim_item(kind, item0, part, t, self.duration)
             self._refresh_track(kind, index)
             event.accept()
@@ -870,11 +901,11 @@ class TimelineView(QGraphicsView):
             start0, end0 = assemble_mod.item_span(kind, dict(self.tracks[kind][index], at=at0),
                                                   self.duration)
             targets = self._track_snap_targets(kind, index)
-            at = cueedit.snap(at0 + delta, targets, SNAP_PX / pps)
+            at = cueedit.snap(at0 + delta, targets, self.snap_tolerance())
             # 尾巴也能吸：頭沒吸到時，看尾巴（at＋原本長度）有沒有靠近吸附點
             if at == at0 + delta:
                 length = end0 - start0
-                tail = cueedit.snap(at0 + delta + length, targets, SNAP_PX / pps)
+                tail = cueedit.snap(at0 + delta + length, targets, self.snap_tolerance())
                 at = tail - length
             self.tracks[kind][index]["at"] = assemble_mod.clamp_at(at, self.duration)
             self._refresh_track(kind, index)
@@ -890,7 +921,7 @@ class TimelineView(QGraphicsView):
                 targets = [self.position_ms / 1000.0]
                 for _i, cue in self.cues:
                     targets += [float(cue["start"]), float(cue["end"])]
-                t = cueedit.snap(base + delta, targets, SNAP_PX / pps)
+                t = cueedit.snap(base + delta, targets, self.snap_tolerance())
                 marks = list(self.cut_marks)
                 marks[index] = dict(marks[index], start=start0, end=end0)
                 start, end = cutmarks_mod.drag_mark_edge(marks, index, part, t,
@@ -911,7 +942,7 @@ class TimelineView(QGraphicsView):
             # 移動的量＝滑鼠移動的量：抓在邊旁邊幾個像素也不會一按就跳到滑鼠上
             delta = self.mapToScene(int(pos.x()), 0).x() / pps - pressed
             common = dict(duration=self.duration or None,
-                          snap_to=[self.position_ms / 1000.0], snap_tolerance=SNAP_PX / pps)
+                          snap_to=[self.position_ms / 1000.0], snap_tolerance=self.snap_tolerance())
             if part == cueedit.BODY:
                 self._drag_times = cueedit.move_cue(self._source, index, start0 + delta, **common)
             else:
