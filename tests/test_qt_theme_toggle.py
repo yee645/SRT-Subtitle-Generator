@@ -42,6 +42,7 @@ else:
     import config  # noqa: E402
     from gui_qt import app as qt_app  # noqa: E402
     from gui_qt import timeline as tl  # noqa: E402
+    from subtitle.designtokens import TOKENS  # noqa: E402
 
     app = QApplication.instance() or QApplication([])
     tmp = tempfile.mkdtemp()
@@ -99,7 +100,9 @@ else:
     check("時間軸：播放頭的筆照新的配色", timeline.playhead.pen().color() == timeline.colors["playhead"])
     check("時間軸：字幕塊照新的配色（深色版的字幕塊顏色）",
           all(item.brush().color() == timeline.colors["cue"] for item, _label in timeline.cue_items
-              if hasattr(item, "brush")) and timeline.colors["cue"].name() == "#c9892f")
+              if hasattr(item, "brush"))
+          # E-2：時間軸改用色票，深色版的字幕塊是 track.subtitle（原本寫死 #c9892f）
+          and timeline.colors["cue"].name() == TOKENS["dark"]["track.subtitle"])
 
     # ----- 4 -----
     QTest.mouseClick(btn, Qt.LeftButton)

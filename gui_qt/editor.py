@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui_qt import icons, theme
+from gui_qt import timeline as timeline_mod
 from gui_qt.app import MainWindow, apply_theme
 from updater import APP_VERSION
 
@@ -40,6 +41,7 @@ LEFT_WIDTH = 400
 SECTION_WIDTH = {"media": 340, "subtitles": 420, "smart": 660, "health": 660}
 INSPECTOR_WIDTH = 300
 RAIL_WIDTH = 64
+TIMELINE_EMPTY_TEXT = "開啟影片後，縮圖、波形與字幕會排在這裡。"
 
 # 左邊圖示列：(鍵, 圖示, 名稱, 提示)
 RAIL = (
@@ -478,8 +480,44 @@ class EditorWindow(MainWindow):
         for btn, icon_name in ((p.zoom_out_btn, "zoom_out"), (p.zoom_in_btn, "zoom_in"), (p.fit_btn, "fit")):
             bar.addWidget(self._iconify(btn, icon_name, "", role="ghost"))
         col.addLayout(bar)
-        col.addWidget(p.timeline)
+        # E-2：軌道加高、列上不寫說明（改寫在軌道標頭的提示裡）、左邊一欄軌道標頭
+        p.timeline.set_row_heights(timeline_mod.TALL_HEIGHTS, inline_notes=False)
+        self.track_header = timeline_mod.TrackHeader(p.timeline)
+        tracks = QWidget()
+        row = QHBoxLayout(tracks)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self.track_header, 0, Qt.AlignTop)
+        row.addWidget(p.timeline, 1, Qt.AlignTop)
+        # 還沒開影片：一句話＋〔開啟影片〕（同一顆按鈕的動作），不攤一排空的列
+        self.timeline_empty = QWidget()
+        self.timeline_empty.setObjectName("timelineEmpty")
+        empty = QVBoxLayout(self.timeline_empty)
+        empty.addStretch(1)
+        self.timeline_empty_label = _secondary(QLabel(TIMELINE_EMPTY_TEXT))
+        self.timeline_empty_label.setAlignment(Qt.AlignCenter)
+        empty.addWidget(self.timeline_empty_label)
+        self.timeline_open_btn = QPushButton("開啟影片…")
+        self.timeline_open_btn.setToolTip(p.open_btn.toolTip() or "開啟要上字幕或剪輯的影片")
+        self.timeline_open_btn.clicked.connect(p.open_btn.click)
+        self._iconify(self.timeline_open_btn, "open")
+        empty.addWidget(self.timeline_open_btn, 0, Qt.AlignHCenter)
+        empty.addStretch(1)
+        self.timeline_stack = QStackedWidget()
+        self.timeline_stack.addWidget(self.timeline_empty)
+        self.timeline_stack.addWidget(tracks)
+        self.timeline_stack.setFixedHeight(p.timeline.height())
+        p.timeline.durationChanged.connect(self._sync_timeline_empty)
+        p.timeline.rowsChanged.connect(lambda: self.timeline_stack.setFixedHeight(p.timeline.height()))
+        self._sync_timeline_empty()
+        col.addWidget(self.timeline_stack)
         return panel
+
+    def _sync_timeline_empty(self, *_args):
+        """時間軸沒有片子時顯示空狀態，有片長就換回軌道。回傳現在是不是空狀態。"""
+        empty = self.player_panel.timeline.duration <= 0
+        self.timeline_stack.setCurrentIndex(0 if empty else 1)
+        return empty
 
     def _separator(self):
         holder = QWidget()
@@ -603,6 +641,7 @@ class EditorWindow(MainWindow):
         self._update_play_icon()
         p = self.player_panel
         p.timeline.update()
+        self.track_header.update()
         return self._theme
 
     def toggle_theme(self):

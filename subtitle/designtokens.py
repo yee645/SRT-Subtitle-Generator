@@ -31,6 +31,7 @@ TOKENS = {
         "track.audio": "#3a9a72",
         "track.overlay": "#8a67cc",
         "track.cut": "#d9534f",
+        "track.text": "#0b0c0f",
         "preview.bg": "#000000",
     },
     "light": {
@@ -54,6 +55,7 @@ TOKENS = {
         "track.audio": "#4fb08a",
         "track.overlay": "#9f80dd",
         "track.cut": "#e06a66",
+        "track.text": "#0b0c0f",
         "preview.bg": "#0f1012",
     },
 }
@@ -71,6 +73,9 @@ TEXT_PAIRS = (
     ("text.secondary", "bg.panel"), ("text.secondary", "bg.raised"),
     ("accent.text", "accent"), ("accent.text", "accent.hover"),
     ("warning", "warning.bg"),
+    # 時間軸方塊上的字（E-2）：字幕塊、疊加、音樂與波形同色、剪點列的方塊
+    ("track.text", "track.subtitle"), ("track.text", "track.overlay"), ("track.text", "track.audio"),
+    ("track.text", "track.cut"),
 )
 MIN_CONTRAST = 4.5
 
