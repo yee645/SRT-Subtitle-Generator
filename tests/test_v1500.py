@@ -361,8 +361,15 @@ for path, src in (("gui/health_center_panel.py", center_src),
 
 try:
     import tkinter as tk
+    import config as app_config
     from gui.health_center_panel import (HealthCenterPanel,
                                          HealthSettingsDialog)
+
+    # 下面給健檢面板的是空設定 {}，面板存勾選時（_save_checklist）會呼叫 save_config——寫到真的
+    # config.json（目前資料夾）就把使用者的金鑰與習慣設定整份蓋掉，只剩兩個區塊（3.0 之後 A-5）。
+    # 一律寫到暫存資料夾。
+    _cfg_dir = tempfile.mkdtemp()
+    app_config.CONFIG_PATH = os.path.join(_cfg_dir, "config.json")
 
     root = tk.Tk()
     root.geometry("60x60+0+0")
@@ -441,6 +448,7 @@ try:
 
     host.destroy()
     root.destroy()
+    shutil.rmtree(_cfg_dir, ignore_errors=True)
 except tk.TclError as exc:  # pragma: no cover - 沒有可用顯示環境時優雅略過
     print(f"SKIP Xvfb 視窗測試（無可用顯示環境）：{exc}")
 

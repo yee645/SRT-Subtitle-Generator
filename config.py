@@ -7,10 +7,19 @@
 
 config.json 同時保存多組「習慣設定（preset）」，每組包含字幕樣式與斷句參數，
 使用者可於介面上隨時切換、新增、更新或刪除。
+
+一般版與新介面共用同一份 config.json，而且可以同時開著（3.0 之後 A-5）：存檔一律先寫暫存檔再一次
+換上，讀不懂的設定檔改名留著（config.json.broken），不會被下一次存檔默默蓋掉。
 """
 
+import copy
 import json
+import logging
 import os
+import tempfile
+import time
+
+logger = logging.getLogger(__name__)
 
 # 設定檔路徑採用相對路徑，存放於專案根目錄。
 CONFIG_PATH = "config.json"
@@ -393,13 +402,19 @@ DEFAULT_CONFIG = {
 
 
 def _deep_merge(base, override):
-    """將 override 的內容深層合併進 base 的複本並回傳（不修改原物件，符合不可變原則）。"""
-    result = dict(base)
+    """
+    將 override 的內容深層合併進 base 的複本並回傳（不修改原物件，符合不可變原則）。
+
+    回傳的是全新的物件：內層的 dict／list 跟 base、override 都不共用。以前只複製最外層，
+    沒有設定檔時 load_config 回傳的 transcription 等區塊就是 DEFAULT_CONFIG 裡的那一個——
+    改了載入的設定，模組的預設值也跟著被改掉。
+    """
+    result = copy.deepcopy(base)
     for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+        if isinstance(result.get(key), dict) and isinstance(value, dict):
             result[key] = _deep_merge(result[key], value)
         else:
-            result[key] = value
+            result[key] = copy.deepcopy(value)
     return result
 
 
@@ -459,8 +474,35 @@ def describe_preset_state(current, presets, active):
             "按〔更新目前樣式〕存起來，或〔另存新樣式〕存成新的一組。")
 
 
-def load_config():
-    """載入設定檔；若檔案不存在或損毀，回傳預設設定的複本。"""
+def _set_aside_broken_file():
+    """
+    把讀不懂的設定檔改名留著，回傳新的路徑；改不了名回傳 None。
+
+    叫 config.json.broken；已經有一份就 config.json.broken-2、-3…——第一份往往才是還有金鑰的那一份，
+    不能被後來壞掉的蓋掉。
+    """
+    base = CONFIG_PATH + ".broken"
+    target, number = base, 1
+    while os.path.exists(target):
+        number += 1
+        target = f"{base}-{number}"
+    try:
+        os.replace(CONFIG_PATH, target)
+    except OSError:
+        return None
+    return target
+
+
+def load_config(fallback=None):
+    """
+    載入設定檔；檔案不存在時回傳預設設定的複本。
+
+    讀不懂（不是 JSON、不是 UTF-8、不是一個物件）：原檔改名成 config.json.broken 留著並寫進記錄檔，
+    不然下一次存檔就把它蓋掉，裡面的金鑰與習慣設定再也找不回來。讀不到（權限、被別的程式鎖住）：
+    檔案本身沒壞，不動它。這兩種情況都不中斷程式：有給 `fallback`（呼叫端手上那份完整的設定，例如
+    新介面開啟時讀到的）就以它代替磁碟上的內容，否則用預設值。檔案不存在時不用 `fallback`——
+    刪掉設定檔就是要回到預設。回傳的一律是新的物件，改了不會動到 `fallback` 或預設值。
+    """
     if not os.path.exists(CONFIG_PATH):
         return _deep_merge(DEFAULT_CONFIG, {})
     try:
@@ -468,15 +510,36 @@ def load_config():
             user_config = json.load(fp)
         if not isinstance(user_config, dict):
             raise ValueError("設定檔格式錯誤")
-    except (json.JSONDecodeError, ValueError, OSError):
-        # 設定檔毀損時不中斷程式，改用預設值。
-        return _deep_merge(DEFAULT_CONFIG, {})
+    except ValueError as exc:  # JSONDecodeError、UnicodeDecodeError 都是 ValueError：內容壞了
+        moved = _set_aside_broken_file()
+        logger.warning("設定檔 %s 讀不懂（%s）；%s，這次改用%s。", CONFIG_PATH, exc,
+                       f"原檔已改名為 {moved}" if moved else "原檔無法改名、留在原處",
+                       "開啟時讀到的設定" if fallback is not None else "預設值")
+        if fallback is None:
+            return _deep_merge(DEFAULT_CONFIG, {})
+        user_config = fallback
+    except OSError as exc:
+        logger.warning("設定檔 %s 讀不到（%s），這次改用%s。", CONFIG_PATH, exc,
+                       "開啟時讀到的設定" if fallback is not None else "預設值")
+        if fallback is None:
+            return _deep_merge(DEFAULT_CONFIG, {})
+        user_config = fallback
 
     # 以預設設定為基底，套上使用者設定，確保缺漏欄位有預設值。
     merged = _deep_merge(DEFAULT_CONFIG, user_config)
 
-    # 相容處理：舊版設定檔沒有 presets 時，以目前樣式建立「預設」習慣設定。
-    if "presets" not in user_config or not isinstance(user_config.get("presets"), dict):
+    presets = user_config.get("presets")
+    if isinstance(presets, dict):
+        # 習慣設定是使用者自己的清單：照存的那份，不把預設值裡的「預設」併回來——不然刪掉的「預設」
+        # 重開後又會出現。存的那份裡有「預設」時，照舊用預設值補上舊版沒有的欄位（例如動態字幕）。
+        merged["presets"] = {
+            name: (_deep_merge(DEFAULT_CONFIG["presets"][name], profile)
+                   if name in DEFAULT_CONFIG["presets"] and isinstance(profile, dict)
+                   else copy.deepcopy(profile))
+            for name, profile in presets.items()
+        }
+    else:
+        # 相容處理：舊版設定檔沒有 presets 時，以目前樣式建立「預設」習慣設定。
         merged["presets"] = {
             "預設": make_profile(merged["subtitle_style"], merged["segmentation"]),
         }
@@ -493,7 +556,44 @@ def load_config():
     return merged
 
 
+def _replace_waiting_for_readers(source, target, tries=10, delay=0.05):
+    """
+    os.replace；Windows 上被擋住時等一下再試。
+
+    Windows 上另一個介面正好開著 config.json 在讀（一般版與新介面可以同時開），換檔會被拒絕
+    （PermissionError）。讀一次只要幾毫秒，讀完就放開，所以等一下再試；大約半秒還換不上才放棄、丟出去。
+    """
+    for attempt in range(tries):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(delay)
+
+
 def save_config(config):
-    """將設定寫回 config.json。發生 I/O 錯誤時拋出例外由呼叫端處理。"""
-    with open(CONFIG_PATH, "w", encoding="utf-8") as fp:
-        json.dump(config, fp, ensure_ascii=False, indent=2)
+    """
+    將設定寫回 config.json。發生 I/O 錯誤時拋出例外由呼叫端處理。
+
+    先整份轉成文字（轉不了，例如放了 set，就丟例外、不碰磁碟），寫到同一個資料夾的暫存檔，寫完
+    再一次換上（os.replace）。以前直接覆寫：寫到一半當掉、磁碟滿，或一般版與新介面同時存檔、同時去讀，
+    就會留下或讀到半份，下次開啟讀不懂，金鑰與習慣設定全回到預設。現在磁碟上不是舊的一整份，就是
+    新的一整份（與 subtitle/project.py 存專案檔同一個寫法）。
+    """
+    text = json.dumps(config, ensure_ascii=False, indent=2)
+    folder = os.path.dirname(os.path.abspath(CONFIG_PATH))
+    fd, temp = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fp:
+            fp.write(text)
+            fp.flush()
+            os.fsync(fp.fileno())
+        _replace_waiting_for_readers(temp, CONFIG_PATH)
+    except BaseException:
+        try:
+            os.remove(temp)
+        except OSError:
+            pass
+        raise
