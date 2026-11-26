@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from gui_qt import icons, theme
 from gui_qt import timeline as timeline_mod
 from gui_qt.app import MainWindow, apply_theme
+from gui_qt.media_bin import MediaBin
 from updater import APP_VERSION
 
 EDITOR_FLAG = "--editor"
@@ -67,6 +68,7 @@ FEATURE_MAP = (
     ("新介面導覽", "guide_tool", "top"),
     ("深淺色", "theme_tool", "top"),
     ("匯出", "export_button", "top"),
+    ("素材庫（匯入一批、縮圖、拖到時間軸、加到播放頭、開成主片；E-4）", "media_bin", "left:media"),
     ("開啟影片", "player_panel.open_btn", "left:media"),
     ("載入字幕", "player_panel.subs_btn", "left:media"),
     ("加入畫面", "player_panel.add_overlay_btn", "left:media"),
@@ -355,6 +357,11 @@ class EditorWindow(MainWindow):
         m.setContentsMargins(12, 12, 12, 12)
         m.setSpacing(6)
         m.addWidget(_title("媒體"))
+        m.addWidget(_title("素材庫", "sectionTitle"))
+        self.media_bin = MediaBin(p, icon_for=lambda name: icons.icon(
+            name, theme.tokens(getattr(self, "_theme", "light"))["text.secondary"], size=40))
+        p.timeline.durationChanged.connect(lambda _d: self.media_bin._update_buttons())
+        m.addWidget(self.media_bin, 1)
         m.addWidget(_title("匯入", "sectionTitle"))
         for btn, icon_name in ((p.open_btn, "film"), (p.subs_btn, "subtitles"),
                                (p.add_overlay_btn, "image"), (p.add_music_btn, "music")):
@@ -364,8 +371,7 @@ class EditorWindow(MainWindow):
         m.addWidget(_title("素材準備", "sectionTitle"))
         for btn, icon_name in ((self.audiovis_btn, "wave"), (self.batch_btn, "batch")):
             m.addWidget(self._iconify(btn, icon_name, role="list"))
-        m.addStretch(1)
-        self._add_page("media", _scroll(media))
+        self._add_page("media", _scroll(media))  # 多出來的高度給素材庫
 
         # 字幕
         subs = QWidget()
@@ -859,6 +865,7 @@ class EditorWindow(MainWindow):
         p = self.player_panel
         p.timeline.update()
         self.track_header.update()
+        self.media_bin._refresh()  # 沒有縮圖的素材用圖示：照新的顏色重畫
         return self._theme
 
     def toggle_theme(self):

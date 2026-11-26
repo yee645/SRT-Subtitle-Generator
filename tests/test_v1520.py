@@ -377,6 +377,10 @@ if old_app_src is not None:
         # 純資料與純計算、零 GUI 依賴（全新檔案）。新介面的樣式表照這裡的名稱取色，
         # test_designtokens.py 拿同一份算法量每一組字×底。
         "subtitle/designtokens.py",
+        # 剪輯器版面改版 E-4：素材庫的規則（收哪些副檔名、去重、拖到哪一列放哪一軌、
+        # 時間標籤、檔案篩選字串），純資料與純計算、零 GUI 依賴（全新檔案）。
+        # 介面在 gui_qt/media_bin.py，test_mediabin.py 驗規則。
+        "subtitle/mediabin.py",
     }
     # 未追蹤（還沒 git add）的新檔案 `git diff` 看不到，會整個繞過這份白
     # 名單——本檔案上面那段註解已經修過「未 commit 的刪除」，但**新增**

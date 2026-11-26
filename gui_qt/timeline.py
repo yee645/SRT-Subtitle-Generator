@@ -376,6 +376,7 @@ class TimelineView(QGraphicsView):
     rowsChanged = Signal()                        # 換了列高（軌道標頭跟著重排）
     durationChanged = Signal(float)               # 換片子（片長 0＝沒有影片）
     zoomChanged = Signal(float)                   # 換了縮放（每秒幾像素）
+    filesDropped = Signal(object, str, float)     # 拖進來的檔案路徑、落在哪一列（列名；列外是 ""）、第幾秒
 
     def __init__(self, parent=None, heights=None, inline_notes=True):
         super().__init__(parent)
@@ -581,6 +582,45 @@ class TimelineView(QGraphicsView):
                 if (other, k) != (kind, index):
                     targets += list(self.track_span(other, k))
         return targets
+
+    # ----- 拖檔案進來（剪輯器版面 E-4：素材庫、檔案總管都行） -----
+    def drop_target(self, view_pos):
+        """視窗座標 → (落在哪一列, 第幾秒)：列名照 row_y（列外是 ""），秒數夾在 0～片長。"""
+        scene = self.mapToScene(int(view_pos.x()), int(view_pos.y()))
+        row = next((name for name, top in self.row_y.items()
+                    if top <= scene.y() < top + self.row_h.get(name, 0)), "")
+        seconds = max(0.0, scene.x() / self.px_per_sec)
+        if self.duration > 0:
+            seconds = min(seconds, self.duration)
+        return row, round(seconds, 3)
+
+    @staticmethod
+    def _local_files(event):
+        data = event.mimeData()
+        if not data.hasUrls():
+            return []
+        return [u.toLocalFile() for u in data.urls() if u.isLocalFile()]
+
+    def dragEnterEvent(self, event):  # noqa: N802
+        if self.duration > 0 and self._local_files(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):  # noqa: N802
+        if self.duration > 0 and self._local_files(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):  # noqa: N802
+        paths = self._local_files(event)
+        if self.duration <= 0 or not paths:
+            event.ignore()
+            return
+        row, seconds = self.drop_target(event.position().toPoint())
+        event.acceptProposedAction()
+        self.filesDropped.emit(paths, row, seconds)
 
     def select_track_item(self, kind, index, seek=True):
         """選取某一段素材（index -1＝取消）；seek 時跳到它開始的地方。"""
