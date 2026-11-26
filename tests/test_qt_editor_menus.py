@@ -147,6 +147,18 @@ else:
     win.preview_zoom_combo.setCurrentIndex(1)
     check("2 倍：畫面放大、可以拖著看", view.transform().m11() == 2.0
           and view.dragMode() == QGraphicsView.ScrollHandDrag)
+    def centred():
+        mid = view.mapToScene(view.viewport().rect().center())
+        c = view.sceneRect().center()
+        return abs(mid.x() - c.x()) <= 2 and abs(mid.y() - c.y()) <= 2, f"{mid} vs {c}"
+    ok, info = centred()
+    check("放大後看的是畫面正中間（不是左上角）", ok, info)
+    win.set_focus_preview(True)
+    wait(80)
+    ok, info = centred()
+    check("放大時收起面板（預覽變寬）：還是看正中間", ok, info)
+    win.set_focus_preview(False)
+    wait(80)
     check("選單的勾跟著下拉選單", [a.isChecked() for a in win.preview_zoom_actions] == [False, True, False])
     win.preview_zoom_actions[2].trigger()
     check("選單選 4 倍：下拉選單跟著、畫面 4 倍", win.preview_zoom_combo.currentIndex() == 2

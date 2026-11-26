@@ -538,6 +538,9 @@ class EditorWindow(MainWindow):
         self.preview_zoom_combo.currentIndexChanged.connect(
             lambda i: self.set_preview_zoom(self.preview_zoom_combo.itemData(i)))
         tools.addWidget(self.preview_zoom_combo)
+        view = self.player_panel.view  # 放大時收起／放回面板，預覽變寬變窄，還是看正中間
+        view.resized.connect(lambda: view.centerOn(view.sceneRect().center())
+                             if self.preview_zoom_combo.currentIndex() > 0 else None)
         self.focus_tool = self._tool("fit", "專注預覽：收起左側面板與屬性面板（再按一次放回來）",
                                      lambda: self.set_focus_preview(self.focus_tool.isChecked()), checkable=True)
         self.focus_tool.setProperty("role", "ghost")
@@ -1123,6 +1126,7 @@ class EditorWindow(MainWindow):
         if factor != 1.0:
             view.scale(factor, factor)
         view.setDragMode(view.DragMode.ScrollHandDrag if factor > 1.0 else view.DragMode.NoDrag)
+        view.centerOn(view.sceneRect().center())  # 從畫面正中間開始看，不是從左上角
         index = next((i for i, (_l, f) in enumerate(PREVIEW_ZOOMS) if f == factor), 0)
         if self.preview_zoom_combo.currentIndex() != index:
             self.preview_zoom_combo.setCurrentIndex(index)
