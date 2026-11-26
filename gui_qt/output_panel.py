@@ -97,12 +97,14 @@ class OutputPanel(QWidget):
         layout.setContentsMargins(12, 8, 12, 8)
         note = QLabel(PAGE_NOTE)
         note.setWordWrap(True)
+        self.page_note = note  # 剪輯器的匯出視窗另外寫說明，這段收起來
         layout.addWidget(note)
         self.target_label = QLabel()
         self.target_label.setWordWrap(True)
         layout.addWidget(self.target_label)
 
         box = QGroupBox("輸出")
+        self.output_box = box
         inner = QVBoxLayout(box)
         # ① 這次會輸出什麼＋主動作
         self.plan_label = QLabel()
@@ -159,11 +161,15 @@ class OutputPanel(QWidget):
         row.addWidget(self.dir_btn)
         inner.addLayout(row)
 
-        # ③ 只做單獨一件事
-        inner.addWidget(self._heading("只做單獨一件事"))
-        single = QLabel(SINGLE_NOTE)
-        single.setWordWrap(True)
-        inner.addWidget(single)
+        # ③ 只做單獨一件事（包成一塊：剪輯器的匯出視窗把它排在「字幕檔」那一段）
+        self.single_section = QWidget()
+        section = QVBoxLayout(self.single_section)
+        section.setContentsMargins(0, 0, 0, 0)
+        self.single_heading = self._heading("只做單獨一件事")
+        section.addWidget(self.single_heading)
+        self.single_note = QLabel(SINGLE_NOTE)
+        self.single_note.setWordWrap(True)
+        section.addWidget(self.single_note)
         row = QHBoxLayout()
         self.export_btns = {}
         for name in FORMATS:
@@ -172,24 +178,30 @@ class OutputPanel(QWidget):
             row.addWidget(btn)
             self.export_btns[name] = btn
         row.addStretch(1)
-        inner.addLayout(row)
+        section.addLayout(row)
+        inner.addWidget(self.single_section)
         layout.addWidget(box)
         from gui_qt.branding_box import BrandingBox
         self.branding = BrandingBox(player, other_busy=self.busy)
         layout.addWidget(self.branding)
 
+        # 進度與結果包成一塊（剪輯器的匯出視窗把它釘在最下面，捲到哪一段都看得到）
+        self.status_area = QWidget()
+        status = QVBoxLayout(self.status_area)
+        status.setContentsMargins(0, 0, 0, 0)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1000)
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
+        status.addWidget(self.progress_bar)
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
+        status.addWidget(self.status_label)
         self.result_box = QPlainTextEdit()
         self.result_box.setReadOnly(True)
         self.result_box.setPlaceholderText("（輸出的檔案會列在這裡）")
-        layout.addWidget(self.result_box, 1)
+        status.addWidget(self.result_box, 1)
+        layout.addWidget(self.status_area, 1)
 
         self.worker = OutputWorker(self)
         self.worker.progress.connect(self._on_progress)
