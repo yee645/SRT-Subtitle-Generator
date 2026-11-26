@@ -95,6 +95,7 @@ from gui_qt.picture_panel import PictureDialog
 from gui_qt.music_dialog import MusicDialog
 from gui_qt.timeline import FFMPEG_MISSING, TimelineLoader, TimelineView
 from subtitle import assemble as assemble_mod
+from subtitle import mediabin
 from subtitle import cueedit, cutmarks, picture
 from subtitle import project as project_mod
 from subtitle import proxy as proxy_mod
@@ -536,6 +537,7 @@ class PlayerPanel(QWidget):
         self.overlay_audio_box.toggled.connect(lambda on: self.set_track_props(audio=bool(on)))
         self.timeline.trackItemMoved.connect(self._on_track_moved)
         self.timeline.trackItemDeleteRequested.connect(self.remove_track)
+        self.timeline.filesDropped.connect(self.drop_files)
         self.timeline.cutMarkToggled.connect(self._on_cut_toggled)
         self.timeline.cutMarkChanged.connect(self._on_cut_changed)
         self.proxy_box.toggled.connect(self._on_proxy_toggled)
@@ -911,9 +913,9 @@ class PlayerPanel(QWidget):
             self.tracks[kind][index] = dict(item)
         self.refresh_tracks()
 
-    def add_track(self, kind, path=None):
+    def add_track(self, kind, path=None, at=None):
         """
-        在播放頭的位置加一段素材（kind："overlays"／"music"）。path 省略時先問要哪個檔。
+        在播放頭的位置（或 at 秒）加一段素材（kind："overlays"／"music"）。path 省略時先問要哪個檔。
         回傳是否加成功；讀不出來（沒有畫面的檔放畫面軌、沒有聲音的檔放音樂軌、量不到
         長度）就說清楚、不加。
         """
@@ -927,7 +929,7 @@ class PlayerPanel(QWidget):
             if not path:
                 return False
         path = os.path.abspath(path)
-        at = self.player.position() / 1000.0
+        at = self.player.position() / 1000.0 if at is None else float(at)
         if not os.path.isfile(path):
             self._show_track_error(f"找不到 {os.path.basename(path)}")
             return False
@@ -947,6 +949,32 @@ class PlayerPanel(QWidget):
         self.refresh_tracks()
         self.timeline.select_track_item(kind, len(self.tracks[kind]) - 1, seek=False)
         return True
+
+    def drop_files(self, paths, row, seconds):
+        """
+        把檔案放上素材軌（素材庫拖到時間軸、〔加到播放頭〕；剪輯器版面 E-4）：照落在哪一列與種類決定放哪一軌
+        （`subtitle.mediabin.track_for`），每一軌各自從 seconds 開始、一個接一個。不收的種類略過，讀不出來的照 add_track 講。
+        回傳放了幾個；沒開影片、輸出中放不了，講一聲。
+        """
+        if not self.media_path or self.media_duration() <= 0:
+            self._show_track_error("先開啟影片（主片），再把素材放上時間軸")
+            return 0
+        if self.track_exporter.busy:
+            self._show_track_error("正在輸出多軌，素材先不放")
+            return 0
+        cursor, placed, refused = {}, 0, []  # 每一軌各自從 seconds 開始、一個接一個
+        for path in paths:
+            track = mediabin.track_for(row, mediabin.kind_of(path))
+            if track is None:
+                refused.append(os.path.basename(path))
+                continue
+            if self.add_track(track, path, at=cursor.get(track, float(seconds))):
+                placed += 1
+                cursor[track] = self.timeline.track_span(track, len(self.tracks[track]) - 1)[1]
+        if refused:
+            where = {"overlays": "疊加列", "music": "音樂列"}.get(row, "這一列")
+            self.refresh_tracks(f"{where}放不了：{'、'.join(refused)}（疊加列放影片或圖片、音樂列放聲音或影片）")
+        return placed
 
     def remove_track(self, kind, index):
         if self.track_exporter.busy or not 0 <= index < len(self.tracks.get(kind, ())):

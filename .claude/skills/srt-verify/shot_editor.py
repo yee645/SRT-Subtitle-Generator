@@ -68,6 +68,22 @@ def main():
     wait(1500)
     p.player.setPosition(4000)
     wait(800)
+    # E-4：素材庫放幾個素材（影片、圖片、聲音），等縮圖抽好
+    folder = os.path.dirname(os.path.abspath(out))
+    still = os.path.join(folder, "overlay.png")
+    song = os.path.join(folder, "music.m4a")
+    if not os.path.exists(still):
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180",
+                        "-frames:v", "1", still], check=True)
+    if not os.path.exists(song):
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=330",
+                        "-t", "5", "-c:a", "aac", song], check=True)
+    win.media_bin.add_files([media, still, song])
+    for _ in range(100):
+        if all(v.get("seconds") or v.get("thumb") for v in win.media_bin.info.values()):
+            break
+        wait(100)
+    wait(300)
     for key in ("media", "subtitles", "smart", "health"):
         win.show_section(key)
         wait(500)
@@ -77,10 +93,6 @@ def main():
     p.timeline.select_cue(1, seek=False)
     wait(400)
     win.grab().save(f"{out}_cue.png")
-    still = os.path.join(os.path.dirname(os.path.abspath(out)), "overlay.png")
-    if not os.path.exists(still):
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180",
-                        "-frames:v", "1", still], check=True)
     p.player.setPosition(9000)
     wait(300)
     if p.add_track("overlays", still):
