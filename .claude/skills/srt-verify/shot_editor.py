@@ -114,6 +114,11 @@ def main():
     win.set_preview_zoom(1.0)
     win.set_focus_preview(False)
     wait(200)
+    # E-7b：剪輯器版面介紹
+    g = win.open_guide()
+    wait(300)
+    g.grab().save(f"{out}_guide.png")
+    g.close()
     d = win.open_export()
     wait(500)
     d.grab().save(f"{out}_export.png")

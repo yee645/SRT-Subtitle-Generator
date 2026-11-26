@@ -154,7 +154,7 @@ else:
     app.exec = fake_exec
     try:
         before = {id(w) for w in QApplication.topLevelWidgets()}
-        rc = qt_app.main(["prog"])
+        rc = qt_app.main(["prog", "--tabs"])  # 3.1 起預設是剪輯器版面（E-7b）；這份測的是四頁籤的導覽
         guides = visible_guides()
         check("從 main() 開：事件迴圈一跑就跳導覽", rc == 0 and len(guides) == 1 and len(seen_wins) == 1,
               f"{rc} {len(guides)} {len(seen_wins)}")
@@ -177,7 +177,7 @@ else:
         check("讀回來還在（load_config 不會丟掉這一格）", config.load_config().get(qtguide.CONFIG_KEY) == qtguide.NEVER_SHOW)
 
         seen_wins.clear()
-        rc = qt_app.main(["prog"])
+        rc = qt_app.main(["prog", "--tabs"])
         check("下次 main()：不跳", rc == 0 and not visible_guides() and len(seen_wins) == 1)
         for w in seen_wins:
             w.player_panel._ask_discard = lambda *a, **k: "discard"
@@ -187,7 +187,7 @@ else:
 
         # 自檢模式：主視窗建好就 return（參數不夠時回 2），不排導覽
         os.remove(config.CONFIG_PATH)
-        rc = qt_app.main(["prog", qt_app.SELFTEST_FLAG])
+        rc = qt_app.main(["prog", "--tabs", qt_app.SELFTEST_FLAG])
         wait(200)
         check("自檢模式：不跳導覽", rc == 2 and not visible_guides())
     finally:

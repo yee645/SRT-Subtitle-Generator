@@ -62,6 +62,7 @@ def run(app, win, out_path, clip):
     result = {
         "window_title": win.windowTitle(),
         "tabs": [win.tabs.tabText(i) for i in range(win.tabs.count())],
+        "layout": getattr(win, "LAYOUT", ""),  # E-7b：剪輯器版面是預設，四頁籤要 --tabs
         "clip": os.path.basename(clip),
         "player_available": player.isAvailable(),
         "frames_decoded": 0,

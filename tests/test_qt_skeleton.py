@@ -161,7 +161,7 @@ if PySide6 is not None:
         app.quit()
 
     QTimer.singleShot(0, inspect)
-    rc = qt_app.main(["test"])
+    rc = qt_app.main(["test", "--tabs"])  # 3.1 起預設是剪輯器版面（E-7b）；這份測的是四頁籤的骨架
     check("gui_qt.main() 真的開出一個主視窗並正常結束", rc == 0 and seen.get("count") == 1,
           f"rc={rc} {seen}")
 
@@ -196,7 +196,7 @@ if PySide6 is not None:
     for label, target, want_ok in (("真的影片", clip, True),
                                    ("不存在的影片", os.path.join(tmp, "none.mp4"), False)):
         out = os.path.join(tmp, f"selftest_{want_ok}.json")
-        proc = sp.run([sys.executable, "-B", "main.py", "--qt", "--selftest", out, target],
+        proc = sp.run([sys.executable, "-B", "main.py", "--qt", "--tabs", "--selftest", out, target],
                       cwd=ROOT, env=qt_env, capture_output=True, timeout=120)
         res = json.load(open(out, encoding="utf-8")) if os.path.exists(out) else {}
         if want_ok:
