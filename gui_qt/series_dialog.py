@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QPlainTextEdit, QProgressBar, QPushButton, QVBoxLayout,
 )
 
+from gui_qt.places import here
 from subtitle import seriescheck as sc
 from subtitle.burner import ffmpeg_available
 from subtitle.errors import describe_exception
@@ -114,7 +115,7 @@ class SeriesDialog(QDialog):
         row = QHBoxLayout()
         self.add_btn = QPushButton("加入影片…")
         self.add_btn.clicked.connect(lambda _c=False: self.add_files())
-        self.add_current_btn = QPushButton("加入②開著的影片")
+        self.add_current_btn = QPushButton(here(self, "加入②開著的影片"))
         self.add_current_btn.clicked.connect(lambda _c=False: self.add_current())
         self.remove_btn = QPushButton("移除選取")
         self.remove_btn.clicked.connect(self.remove_selected)
@@ -228,7 +229,7 @@ class SeriesDialog(QDialog):
     def add_current(self):
         media = self._current_media()
         if not media:
-            self.status_label.setText(NO_PLAYER_MEDIA)
+            self.status_label.setText(here(self, NO_PLAYER_MEDIA))
             return 0
         added = self.add_paths([media])
         self.status_label.setText(f"已加入：{os.path.basename(media)}" if added
@@ -275,7 +276,7 @@ class SeriesDialog(QDialog):
             return False
         paths = self.paths()
         if len(paths) < sc.MIN_FILES:
-            self.status_label.setText(NEED_TWO)
+            self.status_label.setText(here(self, NEED_TWO))
             return False
         if not ffmpeg_available():
             self.ffmpeg_label.setVisible(True)

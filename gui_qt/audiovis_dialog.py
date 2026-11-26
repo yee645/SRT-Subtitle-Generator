@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QProgressBar, QPushButton, QSpinBox, QVBoxLayout,
 )
 
+from gui_qt.places import here
 from subtitle import audiovis
 from subtitle.burner import ffmpeg_available
 from subtitle.errors import describe_exception
@@ -153,7 +154,7 @@ class AudioVisDialog(QDialog):
         bg_layout.addWidget(bg_note)
         layout.addWidget(bg)
 
-        self.status_label = QLabel(HINT)
+        self.status_label = QLabel(here(self, HINT))
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
         self.progress_bar = QProgressBar()
@@ -163,8 +164,8 @@ class AudioVisDialog(QDialog):
         layout.addWidget(self.progress_bar)
         buttons = QHBoxLayout()
         self.run_btn = QPushButton("輸出視覺化影片")
-        self.open_btn = QPushButton("在②開啟")
-        self.open_btn.setToolTip("把轉好的影片開在②的播放器（同一條時間軸，字幕照樣對得上）")
+        self.open_btn = QPushButton(here(self, "在②開啟"))
+        self.open_btn.setToolTip(here(self, "把轉好的影片開在②的播放器（同一條時間軸，字幕照樣對得上）"))
         self.close_btn = QPushButton("關閉")
         buttons.addWidget(self.run_btn)
         buttons.addWidget(self.open_btn)
@@ -223,8 +224,8 @@ class AudioVisDialog(QDialog):
 
     def _ask_open(self, path):
         return QMessageBox.question(
-            self, "轉換完成", f"已輸出視覺化影片：\n{path}\n\n要在②開啟這支影片嗎？"
-            "（同一條時間軸：原本對著音訊做的字幕照樣對得上）") == QMessageBox.Yes
+            self, "轉換完成", here(self, f"已輸出視覺化影片：\n{path}\n\n要在②開啟這支影片嗎？"
+            "（同一條時間軸：原本對著音訊做的字幕照樣對得上）")) == QMessageBox.Yes
 
     def ask_close_while_rendering(self):
         return QMessageBox.question(self, "還在轉換", self.close_question()) == QMessageBox.Yes
@@ -305,7 +306,7 @@ class AudioVisDialog(QDialog):
         if not self.player._maybe_drop_project():
             return False
         self.player.open_video(path)
-        self.status_label.setText(f"已在②開啟：{os.path.basename(path)}")
+        self.status_label.setText(here(self, f"已在②開啟：{os.path.basename(path)}"))
         return True
 
     # ----- 關閉 -----

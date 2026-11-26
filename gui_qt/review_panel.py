@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QRadioButton, QSpinBox, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
+from gui_qt.places import here
 from subtitle import adbreaks, chaptercheck, clipplan, cutmarks, exporter, publisher, review, shorts, thumbnails
 from subtitle.audio import DEFAULT_TARGET_LUFS
 from subtitle.burner import ffmpeg_available
@@ -322,7 +323,7 @@ class ReviewPanel(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
-        note = QLabel(PAGE_NOTE)
+        note = QLabel(here(self, PAGE_NOTE))
         note.setWordWrap(True)
         layout.addWidget(note)
 
@@ -378,13 +379,13 @@ class ReviewPanel(QWidget):
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setFixedWidth(160)
         self.progress_bar.setVisible(False)
-        self.status_label = QLabel(IDLE)
+        self.status_label = QLabel(here(self, IDLE))
         self.status_label.setWordWrap(True)
         row.addWidget(self.analyze_btn)
         row.addWidget(self.progress_bar)
         row.addWidget(self.status_label, 1)
         layout.addLayout(row)
-        self.stale_label = QLabel(STALE)
+        self.stale_label = QLabel(here(self, STALE))
         self.stale_label.setWordWrap(True)
         self.stale_label.setVisible(False)
         layout.addWidget(self.stale_label)
@@ -454,7 +455,7 @@ class ReviewPanel(QWidget):
             self.out_tabs.addTab(page, label)
         out_box.addWidget(self.out_tabs)
         out_layout = self.out_pages["video"].layout()
-        out_note = QLabel(OUTPUT_NOTE)
+        out_note = QLabel(here(self, OUTPUT_NOTE))
         out_note.setWordWrap(True)
         out_layout.addWidget(out_note)
         row = QHBoxLayout()
@@ -513,7 +514,7 @@ class ReviewPanel(QWidget):
         row.addWidget(self.publish_buttons["adbreaks"])
         row.addStretch(1)
         out_layout.addLayout(row)
-        publish_note = QLabel(PUBLISH_NOTE)
+        publish_note = QLabel(here(self, PUBLISH_NOTE))
         publish_note.setWordWrap(True)
         out_layout.addWidget(publish_note)
         out_layout.addStretch(1)
@@ -544,7 +545,7 @@ class ReviewPanel(QWidget):
         row.addWidget(self.thumb_btn)
         row.addStretch(1)
         left.addLayout(row)
-        thumb_note = QLabel(THUMB_NOTE)
+        thumb_note = QLabel(here(self, THUMB_NOTE))
         thumb_note.setWordWrap(True)
         left.addWidget(thumb_note)
         left.addStretch(1)
@@ -558,7 +559,7 @@ class ReviewPanel(QWidget):
         self.thumb_strip.setFixedHeight(96)
         self.thumb_strip.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.thumb_strip.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.thumb_strip.setToolTip("擷取的封面候選（照清晰度排名）；點一張，②的播放器跳到那一格")
+        self.thumb_strip.setToolTip(here(self, "擷取的封面候選（照清晰度排名）；點一張，②的播放器跳到那一格"))
         cols.addWidget(self.thumb_strip, 2)
         page.addLayout(cols)
         page = self.out_pages["shorts"].layout()
@@ -609,7 +610,7 @@ class ReviewPanel(QWidget):
             row.addWidget(spin)
         row.addStretch(1)
         page.addLayout(row)
-        shorts_note = QLabel(SHORTS_NOTE)
+        shorts_note = QLabel(here(self, SHORTS_NOTE))
         shorts_note.setWordWrap(True)
         page.addWidget(shorts_note)
         page.addStretch(1)
@@ -686,7 +687,7 @@ class ReviewPanel(QWidget):
             self.before_analyze()  # 逐句校對改到一半的先套用：分析的是現在的句子
         cues = [c for c in self.player.cues if str(c.get("text", "")).strip()]
         if not cues:
-            self.status_label.setText(NO_CUES)
+            self.status_label.setText(here(self, NO_CUES))
             return False
         self.collect_settings()
         self.player.refresh_cut_marks()  # 時間軸的「審片建議」剪點讀同一份設定：跟著重算
@@ -912,7 +913,7 @@ class ReviewPanel(QWidget):
             return False
         media = self.player.media_path
         if not media or not os.path.exists(media):
-            return self._refuse(NO_MEDIA)
+            return self._refuse(here(self, NO_MEDIA))
         items = self.cut_items(kind)
         if kind == "highlight" and not items:
             return self._refuse(NO_HIGHLIGHT)
@@ -957,22 +958,22 @@ class ReviewPanel(QWidget):
         if not self._ask_adopt(result):
             return
         if not self.player.maybe_close():  # 專案或字幕有沒存的變更：先問
-            self.status_label.setText(done + "②沒有換（還沒存的變更沒有處理）。")
+            self.status_label.setText(done + here(self, "②沒有換（還沒存的變更沒有處理）。"))
             return
         self.player.open_video(result["output"])
         if result["subtitles"]:
             self.player.load_subtitles(result["subtitles"])
         else:
             self.player.set_cues([])
-        self.status_label.setText(done + f"②已換成這支{label}，可以接著上字幕、健檢、輸出。")
+        self.status_label.setText(done + here(self, f"②已換成這支{label}，可以接著上字幕、健檢、輸出。"))
 
     def adopt_question(self, result):
         label = CUT_KINDS[result["kind"]][0]
         subs = ("字幕換成對齊到剪後時間的那一份" if result["subtitles"]
-                else "這支沒有對齊的字幕（②的字幕會清掉，要重新生成）")
-        return (f"已輸出：{os.path.basename(result['output'])}\n\n要在②換成這支{label}嗎？換了之後可以直接替它上字幕、"
+                else here(self, "這支沒有對齊的字幕（②的字幕會清掉，要重新生成）"))
+        return (here(self, f"已輸出：{os.path.basename(result['output'])}\n\n要在②換成這支{label}嗎？換了之後可以直接替它上字幕、"
                 f"跑健檢或接著輸出。\n換的話跟②「開啟影片」一樣：素材軌與畫面調整會清掉，{subs}；"
-                "選「否」只是輸出檔案，②維持不變。")
+                "選「否」只是輸出檔案，②維持不變。"))
 
     def _ask_adopt(self, result):
         return QMessageBox.question(self, f"{CUT_KINDS[result['kind']][0]}完成",
@@ -1005,7 +1006,7 @@ class ReviewPanel(QWidget):
             return ""
         path = self.default_path(*spec[key])
         if not path:
-            self.status_label.setText(NO_BASE)
+            self.status_label.setText(here(self, NO_BASE))
             return ""
         name = os.path.basename(self.player.media_path or self.player._subtitle_path)
         try:
@@ -1090,7 +1091,7 @@ class ReviewPanel(QWidget):
         text = "\n".join(f"{chaptercheck.format_timestamp(c['start'])} {c['title']}" for c in chapters)
         QApplication.clipboard().setText(text)
         if self._send_publish(chapters=text):
-            self.status_label.setText(f"章節草稿（{len(chapters)} 章）已複製到剪貼簿，{SENT_TO_HEALTH}。{note}")
+            self.status_label.setText(f"章節草稿（{len(chapters)} 章）已複製到剪貼簿，{here(self, SENT_TO_HEALTH)}。{note}")
         else:
             self.status_label.setText(f"章節草稿（{len(chapters)} 章）已複製到剪貼簿，可以直接貼到說明欄。{note}")
         return text
@@ -1128,7 +1129,7 @@ class ReviewPanel(QWidget):
             return ""
         path = self.default_path("_發佈包", ".txt")
         if not path:
-            self.status_label.setText(NO_BASE)
+            self.status_label.setText(here(self, NO_BASE))
             return ""
         settings = review.resolve_settings(self.config)
         publish = publisher.resolve_publish_settings(self.config)
@@ -1147,7 +1148,7 @@ class ReviewPanel(QWidget):
                                                 extra_words=settings["extra_excite_words"])
         sent = self._send_publish(title=fields["title"], description=fields["description"], tags=fields["tags"],
                                   chapters=fields["chapters"])
-        extra = f"；建議標題、說明欄、標籤與章節{SENT_TO_HEALTH}" if sent else ""
+        extra = f"；建議標題、說明欄、標籤與章節{here(self, SENT_TO_HEALTH)}" if sent else ""
         self.status_label.setText(f"已匯出發佈包（建議標題、說明欄草稿、標籤，上傳時自行潤飾）：{path}{extra}。")
         return path
 
@@ -1166,7 +1167,7 @@ class ReviewPanel(QWidget):
             return False
         media = self.player.media_path
         if not media or not os.path.exists(media):
-            return self._refuse(NO_MEDIA)
+            return self._refuse(here(self, NO_MEDIA))
         if not ffmpeg_available():
             return self._refuse(NO_FFMPEG_THUMBS)
         settings = self.thumb_settings()
@@ -1203,7 +1204,7 @@ class ReviewPanel(QWidget):
                 + "、".join(f"{os.path.basename(i['path'])}（{clock(i['time'])} 處）" for i in results))
         if callable(self.on_thumbnails):
             added = self.on_thumbnails([i["path"] for i in results])
-            done += f"；{SENT_THUMBS}" if added else "；③的「封面圖」已經有這幾張了"
+            done += f"；{here(self, SENT_THUMBS)}" if added else here(self, "；③的「封面圖」已經有這幾張了")
         self.status_label.setText(done + "。")
 
     def _on_thumb_clicked(self, entry):
@@ -1257,7 +1258,7 @@ class ReviewPanel(QWidget):
             return False
         media = self.player.media_path
         if not media or not os.path.exists(media):
-            return self._refuse(NO_MEDIA)
+            return self._refuse(here(self, NO_MEDIA))
         if not ffmpeg_available():
             return self._refuse(NO_FFMPEG_SHORTS)
         jobs = self.shorts_jobs(how)

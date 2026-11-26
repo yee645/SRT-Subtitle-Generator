@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QProgressBar, QPushButton, QVBoxLayout, QWidget,
 )
 
+from gui_qt.places import here
 from subtitle import exporter, pipeline
 from subtitle.audio import MAX_TARGET_LUFS, MIN_TARGET_LUFS, clamp_target
 from subtitle.burner import ffmpeg_available
@@ -95,7 +96,7 @@ class OutputPanel(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
-        note = QLabel(PAGE_NOTE)
+        note = QLabel(here(self, PAGE_NOTE))
         note.setWordWrap(True)
         self.page_note = note  # 剪輯器的匯出視窗另外寫說明，這段收起來
         layout.addWidget(note)
@@ -248,7 +249,7 @@ class OutputPanel(QWidget):
         media, count = self.player.media_path, len(self.player.cues)
         parts = [f"影片：{os.path.basename(media)}" if media else "影片：還沒開",
                  f"字幕：{count} 句" if count else "字幕：沒有"]
-        self.target_label.setText("輸出對象（②字幕頁開著的）：" + "　".join(parts))
+        self.target_label.setText(here(self, "輸出對象（②字幕頁開著的）：") + "　".join(parts))
         self.plan_label.setText("這次會輸出：" + pipeline.describe_output_plan(self.config, media or None))
         busy = self.busy()
         burn = self.burn_box.isChecked()
@@ -285,9 +286,9 @@ class OutputPanel(QWidget):
         media = self.player.media_path
         automation = self.config["automation"]
         if not cues:
-            return self._refuse(NO_CUES)
+            return self._refuse(here(self, NO_CUES))
         if not media or not os.path.exists(media):
-            return self._refuse(NO_MEDIA)
+            return self._refuse(here(self, NO_MEDIA))
         if not pipeline.enabled_export_formats(automation) and not automation.get("burn_video"):
             return self._refuse(pipeline.describe_output_plan(self.config))
         if automation.get("burn_video") and not ffmpeg_available():
@@ -353,7 +354,7 @@ class OutputPanel(QWidget):
             self.before_output()
         cues = [dict(c) for c in self.player.cues]
         if not cues:
-            self.status_label.setText(NO_CUES)
+            self.status_label.setText(here(self, NO_CUES))
             return ""
         if path is None:
             path, _ = QFileDialog.getSaveFileName(self, f"儲存 {name.upper()} 字幕檔",

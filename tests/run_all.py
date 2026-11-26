@@ -71,7 +71,8 @@ TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
     "test_designtokens.py", "test_qt_editor.py", "test_qt_editor_timeline.py",
     "test_qt_editor_inspector.py", "test_qt_track_undo.py",
     "test_mediabin.py", "test_qt_media_bin.py", "test_qt_editor_export.py",
-    "test_playhead.py", "test_qt_editor_keys.py", "test_qt_editor_menus.py"]
+    "test_playhead.py", "test_qt_editor_keys.py", "test_qt_editor_menus.py",
+    "test_placenames.py", "test_qt_editor_places.py"]
 
 
 def main() -> int:
