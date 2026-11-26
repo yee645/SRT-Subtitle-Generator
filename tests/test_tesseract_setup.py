@@ -246,8 +246,32 @@ class _FakeResponse:
         return False
 
 
+# 語言檔裝到哪裡，不能看這台機器的 tesseract 裝在哪、可不可寫（3.0 之後 A-5）：以前用 root 跑，語言檔
+# 往系統的資料夾裝（真實下載那段還會蓋掉系統原有的 chi_tra），下面檢查的資料夾根本沒建出來，等於沒驗；
+# GitHub 的 CI 不是 root，系統原有的語言被帶過來，檢查又失敗。所以引擎的語言檔資料夾由測試指定。
+_real_engine_dir, _real_writable = ts.engine_tessdata_dir, ts._writable
+
+
+def _restore_tessdata_prefix(saved):
+    if saved is None:
+        os.environ.pop("TESSDATA_PREFIX", None)
+    else:
+        os.environ["TESSDATA_PREFIX"] = saved
+
+
+def _read_bytes(path):
+    """檔案內容；不存在回傳 None。"""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+_saved_prefix_download = os.environ.get("TESSDATA_PREFIX")
 with tempfile.TemporaryDirectory() as tmp:
     ts.install_candidates = lambda: [os.path.join(tmp, "tesseract")]
+    ts.engine_tessdata_dir = lambda: None  # a. 沒有引擎的語言檔資料夾：裝到自己的資料夾
     urllib.request.urlopen = lambda *a, **k: _FakeResponse(
         b"<html>blocked by your network</html>" + b" " * 300_000)
     try:
@@ -259,10 +283,38 @@ with tempfile.TemporaryDirectory() as tmp:
         target = os.path.join(tmp, "tesseract", "tessdata")
         left = os.listdir(target) if os.path.isdir(target) else []
         check("驗不過的檔案不會被留在定位（半個檔案比沒有更糟）",
-              not any(n.endswith(".traineddata") for n in left), str(left))
+              os.path.isdir(target) and not any(n.endswith(".traineddata") for n in left),
+              str(left))
+
+        # b. 引擎有語言檔、但資料夾不可寫（Windows 裝在 Program Files 就是這樣）：退回自己的資料夾、
+        #    先把原有的帶過來；下載到錯誤頁時，帶過來的那份要原封不動，不能被錯誤頁換掉。
+        engine = os.path.join(tmp, "engine-tessdata")
+        os.makedirs(engine)
+        original = ts._TRAINEDDATA_MAGIC + b"\x00" * ts._MIN_TRAINEDDATA_BYTES
+        with open(os.path.join(engine, "eng.traineddata"), "wb") as fh:
+            fh.write(original)
+        mine = os.path.join(tmp, "mine")
+        ts.install_candidates = lambda: [mine]
+        ts.engine_tessdata_dir = lambda: engine
+        ts._writable = lambda folder: (
+            False if os.path.abspath(folder) == os.path.abspath(engine) else _real_writable(folder))
+        try:
+            ts.install_languages(["eng"])
+            check("引擎不可寫、下載到錯誤頁：要報錯", False, "沒有丟例外")
+        except ts.SetupError as exc:
+            check("引擎不可寫、下載到錯誤頁：丟 SetupError", "內容不對" in str(exc), str(exc))
+        kept = os.path.join(mine, "tessdata", "eng.traineddata")
+        names = sorted(os.listdir(os.path.dirname(kept))) if os.path.isdir(os.path.dirname(kept)) else None
+        check("引擎不可寫：原有的語言先帶過來，下載到錯誤頁也不會把它換掉",
+              names == ["eng.traineddata"] and _read_bytes(kept) == original, str(names))
+        check("引擎不可寫：引擎自己的那份也沒被動到",
+              _read_bytes(os.path.join(engine, "eng.traineddata")) == original)
     finally:
         urllib.request.urlopen = _real_urlopen
         ts.install_candidates = _real_candidates
+        ts.engine_tessdata_dir = _real_engine_dir
+        ts._writable = _real_writable
+        _restore_tessdata_prefix(_saved_prefix_download)
 
 
 # ===== 4b. 語言檔要裝去哪：不可以把使用者原有的語言弄不見 ==============
@@ -325,8 +377,11 @@ def _network_ok():
 if not _network_ok():
     print("SKIP 真實下載段：這個環境連不到語言檔來源（離線或被網路政策擋）")
 else:
+    _saved_prefix_real = os.environ.get("TESSDATA_PREFIX")
     with tempfile.TemporaryDirectory() as tmp:
         ts.install_candidates = lambda: [os.path.join(tmp, "tesseract")]
+        # 裝到暫存的自己的資料夾：用 root 跑時不往系統的資料夾裝、不蓋掉系統原有的 chi_tra（見上面錯誤頁那段）。
+        ts.engine_tessdata_dir = lambda: None
         try:
             messages = []
             folder = ts.install_languages(
@@ -355,6 +410,9 @@ else:
                 print("SKIP 用下載回來的語言檔實際辨識（沒有 tesseract 或測資）")
         finally:
             ts.install_candidates = _real_candidates
+            ts.engine_tessdata_dir = _real_engine_dir
+            # 裝完會把 TESSDATA_PREFIX 指到暫存資料夾；它馬上就刪掉了，不還原的話後面的段落拿到的是不存在的資料夾。
+            _restore_tessdata_prefix(_saved_prefix_real)
 
 
 # ===== 7. 介面：Xvfb 下開得出來、勾選狀態正確 ===========================

@@ -11,6 +11,9 @@ v1.13.1 修復驗證（Issue #28）：
    os.dup2 把 stdout 檔案描述元暫時導到 devnull，涵蓋 Python 與
    C 層級輸出。本測試以假 whisper 模組實際跑一次 _WORKER_SCRIPT，
    驗證雜訊確實被擋下、JSON 仍完整可解析。
+   3.0 之後 A-5：接回 stdout 前要先把 Python 的緩衝區沖進 devnull——沒設
+   PYTHONUNBUFFERED（使用者的電腦就是這樣）時，print 的雜訊原本會在最後
+   跟 JSON 一起寫出去。有設、沒設兩種都跑。
 """
 import glob
 import json
@@ -84,24 +87,34 @@ with tempfile.TemporaryDirectory() as tmp:
     audio_path = os.path.join(tmp, "a.wav")
     open(audio_path, "wb").write(b"x")
 
-    completed = subprocess.run(
-        [sys.executable, worker_path, audio_path, "base", "auto", ""],
-        capture_output=True, timeout=30)
+    # 兩種環境都跑（3.0 之後 A-5）。使用者電腦上主程式開外部 Python 時，stdout 是管線、通常沒有
+    # PYTHONUNBUFFERED：print 的雜訊先留在緩衝區，接回 stdout 之後才寫出去。開發容器預設
+    # PYTHONUNBUFFERED=1，雜訊直接寫進 devnull，以前只在那種環境跑，這一種從來沒驗到；
+    # 新的 CI 沒有設，才抓到。
+    for label, unbuffered in (("沒設 PYTHONUNBUFFERED（使用者的電腦）", None),
+                              ("PYTHONUNBUFFERED=1", "1")):
+        env = dict(os.environ)
+        env.pop("PYTHONUNBUFFERED", None)
+        if unbuffered:
+            env["PYTHONUNBUFFERED"] = unbuffered
+        completed = subprocess.run(
+            [sys.executable, worker_path, audio_path, "base", "auto", ""],
+            capture_output=True, timeout=30, env=env)
 
-    check("worker 子程序正常結束", completed.returncode == 0,
-          completed.stderr.decode("utf-8", "ignore"))
-    stdout_text = completed.stdout.decode("utf-8", "ignore")
-    check("雜訊未混入 stdout", "下載模型" not in stdout_text
-          and "UserWarning" not in stdout_text, stdout_text)
-    try:
-        words = json.loads(stdout_text)
-        parsed_ok = True
-    except json.JSONDecodeError:
-        words, parsed_ok = None, False
-    check("stdout 仍是可解析的乾淨 JSON", parsed_ok, stdout_text)
-    if parsed_ok:
-        check("轉寫結果正確帶出", words == [
-            {"word": "測試", "start": 0.0, "end": 1.2}], str(words))
+        check(f"{label}：worker 子程序正常結束", completed.returncode == 0,
+              completed.stderr.decode("utf-8", "ignore"))
+        stdout_text = completed.stdout.decode("utf-8", "ignore")
+        check(f"{label}：雜訊未混入 stdout", "下載模型" not in stdout_text
+              and "UserWarning" not in stdout_text, stdout_text)
+        try:
+            words = json.loads(stdout_text)
+            parsed_ok = True
+        except json.JSONDecodeError:
+            words, parsed_ok = None, False
+        check(f"{label}：stdout 仍是可解析的乾淨 JSON", parsed_ok, stdout_text)
+        if parsed_ok:
+            check(f"{label}：轉寫結果正確帶出", words == [
+                {"word": "測試", "start": 0.0, "end": 1.2}], str(words))
 
 print("\n" + ("ALL PASS" if not failures else f"FAILURES: {failures}"))
 sys.exit(1 if failures else 0)

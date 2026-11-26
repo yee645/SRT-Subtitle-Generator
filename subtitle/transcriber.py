@@ -71,10 +71,17 @@ initial_prompt = sys.argv[4] if len(sys.argv) > 4 else ""
 
 _stdout_fd = os.dup(1)
 _devnull_fd = os.open(os.devnull, os.O_WRONLY)
+sys.stdout.flush()
 os.dup2(_devnull_fd, 1)
 try:
     result = _run(audio_path, model_name, language, initial_prompt)
 finally:
+    # stdout 是管線時，print 的字（例如自動偵測語言時的 Detected language）先留在 Python 的
+    # 緩衝區；不先沖進 devnull，接回去之後就跟 JSON 一起寫出去，主程式讀不懂。
+    try:
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        pass
     os.dup2(_stdout_fd, 1)
     os.close(_stdout_fd)
     os.close(_devnull_fd)
