@@ -373,6 +373,10 @@ if old_app_src is not None:
         # 何函式或公開名稱（下面「公開名稱一個不少」那條照樣守著）。
         "subtitle/errors.py", "subtitle/aligner.py", "subtitle/segmenter.py",
         "subtitle/transcriber.py", "subtitle/subtitlecheck.py",
+        # 剪輯器版面改版 E-1：設計基準（色票、間距、圓角、字級）與 WCAG 對比度算法，
+        # 純資料與純計算、零 GUI 依賴（全新檔案）。新介面的樣式表照這裡的名稱取色，
+        # test_designtokens.py 拿同一份算法量每一組字×底。
+        "subtitle/designtokens.py",
     }
     # 未追蹤（還沒 git add）的新檔案 `git diff` 看不到，會整個繞過這份白
     # 名單——本檔案上面那段註解已經修過「未 commit 的刪除」，但**新增**
