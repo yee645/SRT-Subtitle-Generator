@@ -12,6 +12,8 @@
 5. 關視窗被取消（還沒存的變更選「取消」）：不存。
 6. 存不進去（資料夾不存在）：不擋關視窗、不丟例外，回傳沒寫。
 7. 頁面上的說明改成「自動記憶」；樣式小視窗講關掉時會存。
+8. 開著的期間磁碟上的設定檔壞了（3.0 之後 A-5）：照樣存，沒改的區塊照開啟時讀到的（金鑰不被預設值蓋掉）、
+   Qt 改的寫進去，壞掉的那份改名成 config.json.broken 留著。
 """
 import json
 import os
@@ -192,6 +194,32 @@ else:
     wait(50)
     check("存不進去：照樣關掉、不丟例外、回傳沒寫", not win2.isVisible() and win2.save_settings() is False
           and not os.path.exists(config.CONFIG_PATH))
+
+    # ----- 8. 開著的期間磁碟上的設定檔壞了（3.0 之後 A-5） -----
+    config.CONFIG_PATH = os.path.join(tmp, "config.json")
+    good = disk()
+    good["transcription"]["api_key"] = "sk-QT-MEMORY"
+    write_disk(good)
+    win3 = qt_app.MainWindow()
+    tame(win3)
+    win3.show()
+    wait(50)
+    dlg3 = win3.health_panel.open_series()
+    dlg3.spins["cast_tolerance"].setValue(12.0)
+    dlg3.settings()
+    text = open(config.CONFIG_PATH, encoding="utf-8").read()
+    with open(config.CONFIG_PATH, "w", encoding="utf-8") as fp:
+        fp.write(text[:len(text) // 2])  # 別的程式寫到一半當掉、或手改改壞了
+    check("磁碟上的壞了：照樣存進去", win3.save_settings() is True)
+    saved = disk()
+    check("磁碟上的壞了：沒改的區塊照開啟時的（金鑰沒被預設值蓋掉）",
+          saved["transcription"]["api_key"] == "sk-QT-MEMORY", repr(saved["transcription"]["api_key"]))
+    check("磁碟上的壞了：Qt 改的寫進去", saved["seriescheck"]["cast_tolerance"] == 12.0)
+    check("磁碟上的壞了：壞掉的那份改名成 config.json.broken 留著",
+          open(config.CONFIG_PATH + ".broken", encoding="utf-8").read() == text[:len(text) // 2]
+          if os.path.exists(config.CONFIG_PATH + ".broken") else False)
+    win3.close()
+    wait(50)
 
 print()
 if failures:

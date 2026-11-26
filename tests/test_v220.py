@@ -27,6 +27,9 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 量版面：字型要固定，開發容器換了預設字型就會量到不一樣的高度（見 tests/fonts.conf）。
+os.environ.setdefault("FONTCONFIG_FILE",
+                      os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts.conf"))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

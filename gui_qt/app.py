@@ -642,7 +642,9 @@ class MainWindow(QMainWindow):
         if not self.persist or not changed_sections(self._opened_config, self.config_data):
             return False
         try:
-            disk = config.load_config()  # 磁碟上現在的（一般版剛存的也在裡面）
+            # 磁碟上現在的（一般版剛存的也在裡面）。讀不懂或讀不到就當作沒人動過、以開啟時讀到的為準：
+            # 以前拿預設值當「磁碟上的」，沒改過的區塊（金鑰、習慣設定）會被預設值蓋掉（3.0 之後 A-5）。
+            disk = config.load_config(fallback=self._opened_config)
             config.save_config(merge_for_save(disk, self._opened_config, self.config_data))
         except OSError as exc:
             logger.warning("Qt 版存設定失敗（%s）：%s", config.CONFIG_PATH, exc)

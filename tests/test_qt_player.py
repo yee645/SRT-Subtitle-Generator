@@ -27,6 +27,8 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# 量像素（白字黑邊）：字型要固定，開發容器換了預設字型就會量到不一樣的比例（見 tests/fonts.conf）。
+os.environ.setdefault("FONTCONFIG_FILE", os.path.join(ROOT, "tests", "fonts.conf"))
 
 from subtitle.cuetime import CueIndex, cue_at  # noqa: E402
 from subtitle.exporter import BURN_PLAY_RES, burn_layout, cues_to_ass  # noqa: E402

@@ -6,11 +6,27 @@
 
 各測試檔皆以替身（stub）隔離 whisper／ffmpeg 相依，無須安裝任何
 外部程式即可執行；每檔獨立子程序跑完並回報結果，全部通過才回傳 0。
+
+另外兩件事（3.0 之後 A-5）：
+
+- **使用者的個人資料檔不准動**：程式把 config.json（含 API 金鑰、習慣設定）與生字本存在「目前的
+  資料夾」，從原始碼跑程式的人，這兩個檔就在專案根目錄。每個測試跑之前記下它們的內容，跑完被
+  改過、建出來或刪掉就換回原樣，並把那個測試算失敗——test_v1500 曾經每跑一次就把整份 config.json
+  換成只剩兩個區塊。
+- **字型固定**：每個測試都拿到 FONTCONFIG_FILE＝tests/fonts.conf（已經有設的照用），量像素與
+  版面的測試不會因為開發容器換了預設字型就失敗；原因見 tests/fonts.conf。
 """
 
 import os
 import subprocess
 import sys
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(BASE)
+FONTS_CONF = os.path.join(BASE, "fonts.conf")
+
+# 程式用相對路徑存在「目前的資料夾」的個人資料（config.CONFIG_PATH、生字本 quicklookup.VOCAB_FILENAME）。
+PROTECTED_FILES = ("config.json", "quicktranslate_vocab.json")
 
 TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
          "test_v160.py", "test_v170.py", "test_v180.py", "test_v190.py",
@@ -67,16 +83,68 @@ TESTS = ["test_pipeline.py", "test_review.py", "test_v140.py", "test_v150.py",
  "test_onedirupdate.py", "test_qt_selfupdate.py",
  "test_switch_selftest.py",
     "test_qtbridge.py", "test_qtbridge_gui.py", "test_whatsnew30.py",
-    "test_entry30.py", "test_qt_none_refcount.py", "test_licenses30.py"]
+    "test_entry30.py", "test_qt_none_refcount.py", "test_licenses30.py",
+    "test_configfile.py"]
+
+
+def snapshot(folders) -> dict:
+    """記下各資料夾裡個人資料檔現在的內容（bytes；不存在記 None）。"""
+    state = {}
+    for folder in folders:
+        for name in PROTECTED_FILES:
+            path = os.path.join(folder, name)
+            try:
+                with open(path, "rb") as fh:
+                    state[path] = fh.read()
+            except FileNotFoundError:
+                state[path] = None
+    return state
+
+
+def restore(before: dict) -> list:
+    """跟 `snapshot` 記下的比，被動過的檔換回原樣（原本沒有的就刪掉）；回傳被動過的路徑。"""
+    touched = []
+    for path, data in before.items():
+        try:
+            with open(path, "rb") as fh:
+                now = fh.read()
+        except FileNotFoundError:
+            now = None
+        if now == data:
+            continue
+        touched.append(path)
+        if data is None:
+            os.remove(path)
+        else:
+            with open(path, "wb") as fh:
+                fh.write(data)
+    return touched
+
+
+def test_env(environ=None) -> dict:
+    """給每個測試的環境變數：沒有另外指定字型設定的話，用 tests/fonts.conf。"""
+    env = dict(os.environ if environ is None else environ)
+    env.setdefault("FONTCONFIG_FILE", FONTS_CONF)
+    return env
+
+
+def run_one(path, folders, env=None):
+    """跑一個測試檔：回傳（結束碼, 被動過而已經換回去的個人資料檔清單）。"""
+    before = snapshot(folders)
+    result = subprocess.run([sys.executable, path], env=test_env() if env is None else env)
+    return result.returncode, restore(before)
 
 
 def main() -> int:
-    base = os.path.dirname(os.path.abspath(__file__))
+    folders = sorted({os.path.realpath(os.getcwd()), os.path.realpath(ROOT)})
     failed = []
     for name in TESTS:
         print(f"===== {name} =====", flush=True)
-        result = subprocess.run([sys.executable, os.path.join(base, name)])
-        if result.returncode != 0:
+        code, touched = run_one(os.path.join(BASE, name), folders)
+        if touched:
+            print(f"FAIL {name} 動到了使用者的個人資料檔（已換回原樣）：{', '.join(touched)}",
+                  flush=True)
+        if code != 0 or touched:
             failed.append(name)
     print()
     if failed:

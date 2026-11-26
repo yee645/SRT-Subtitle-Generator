@@ -1,0 +1,57 @@
+# 每個 PR 在 Linux＋Xvfb 跑全套測試（tests/run_all.py）。見 docs/ROADMAP_3.0.md「3.0 之後」A-5。
+#
+# 以前沒有任何 CI 跑測試：Qt preview build 只在動到 gui_qt/ 時打包＋自檢，release.yml 只打包。
+# 測試只在開發容器裡跑，容器的環境一變（2026-11 映像檔把預設字型換成 Inter），紅燈要等有人
+# 手動跑全套才看得到。這裡固定一套環境：
+#   - Ubuntu 24.04 內建的 Python 3.12，跟發版時新介面打包用的同一版（release.yml 第二個工作）；
+#     python3-tk 是給它的，所以 venv 一定要從 /usr/bin/python3 建。
+#   - 字型：裝跟開發容器一樣的 DejaVu Sans 與文泉驛正黑；tests/fonts.conf（run_all.py 自動套用）
+#     不讓 Inter 頂替預設字型。
+#   - ffmpeg、tesseract（英文＋繁中）、ImageMagick、x11-utils：有它們的測試才會真的跑，不會 SKIP。
+# 只讀不寫：不打包、不發佈、不動 tag。
+#
+# 用預設的淺層 checkout（只有這一個 commit），跟開發容器一樣：test_v1520 對照 v1.51.0（9364eea）
+# 的那一段在完整歷史下會失敗（v1.52 的白名單沒跟上後來的改動），淺層時照它的設計 SKIP。
+name: Tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-all:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            python3-venv python3-tk xvfb x11-utils \
+            ffmpeg imagemagick tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-tra \
+            fonts-dejavu-core fonts-wqy-zenhei \
+            libegl1 libgl1 libopengl0 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+            libxcb-xinerama0 libxcb-xfixes0 libxcb-xkb1 libdbus-1-3 libfontconfig1 libglib2.0-0t64 \
+            libpulse0 libasound2t64
+
+      - name: Python packages
+        # 不釘版本，跟 release.yml 打包時裝的一樣是當下最新的：上游一改壞，這裡會先紅。
+        run: |
+          /usr/bin/python3 -m venv .venv
+          .venv/bin/pip install --quiet PySide6 sv-ttk zhconv openai
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Run tests
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" .venv/bin/python tests/run_all.py
