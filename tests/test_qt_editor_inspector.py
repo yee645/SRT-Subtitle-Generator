@@ -46,6 +46,7 @@ else:
 
     import config  # noqa: E402
     from gui_qt import app as qt_app  # noqa: E402
+    from gui_qt import cue_panel as cue_panel_mod  # noqa: E402
     from gui_qt import editor as ed  # noqa: E402
     from gui_qt import timeline as tl  # noqa: E402
 
@@ -112,10 +113,15 @@ else:
     check("寫第幾句", win.cue_pos_label.text() == "第 2 句，共 3 句", win.cue_pos_label.text())
     check("開始／結束／長度", win.cue_start_spin.value() == 4.0 and win.cue_end_spin.value() == 5.0
           and win.cue_length_label.text() == "1.000 秒", f"{win.cue_start_spin.value()} {win.cue_end_spin.value()}")
+    check("逐句清單下面的說明寫編輯框在右邊", cp.note.text() == "第 2 句。" + ed.CUE_EDIT_HINT, cp.note.text())
     check("編輯框是那一句、可以打字", cp.editor.toPlainText() == "第二句" and cp.editor.isEnabled()
           and cp.editor.isVisible())
+    win.statusBar().showMessage("哨兵")
+    depth0 = len(p.history._done)
     cp.table.selectRow(2)
     wait(20)
+    check("換一句只是填數字：不送出修改、不記復原、狀態列不動", len(p.history._done) == depth0
+          and win.statusBar().currentMessage() == "哨兵", win.statusBar().currentMessage())
     check("逐句清單點第 3 句：跟著換", page() == "cue" and win.cue_pos_label.text() == "第 3 句，共 3 句"
           and win.cue_start_spin.value() == 7.0 and cp.editor.toPlainText() == "第三句")
 
@@ -244,7 +250,8 @@ else:
     p2 = win2.player_panel
     p2._ask_discard = lambda *a, **k: "discard"
     p2._ask_project_discard = lambda *a, **k: "discard"
-    check("四頁籤：編輯框還在逐句校對裡", inside(win2.cue_panel.editor, win2.cue_panel))
+    check("四頁籤：編輯框還在逐句校對裡、說明照舊", inside(win2.cue_panel.editor, win2.cue_panel)
+          and win2.cue_panel.hint == cue_panel_mod.HINT)
     p2.timeline.set_duration(10)
     p2.set_cues([{"start": 1.0, "end": 2.0, "text": "甲"}, {"start": 3.0, "end": 4.0, "text": "乙"}])
     check("set_cue_times：一次改開始與結束", p2.set_cue_times(0, start=0.5, end=2.5) == (0.5, 2.5)

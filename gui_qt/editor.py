@@ -55,6 +55,7 @@ RAIL = (
 # 屬性面板（E-3a）
 INSPECTOR_HINT = "點時間軸上的字幕或素材，這裡會換成它的屬性。"
 TRACK_TITLES = {"overlays": "疊加的畫面", "music": "音樂"}
+CUE_EDIT_HINT = "文字與時間在右邊的屬性裡改：改完按 Ctrl+Enter、點別句或離開編輯框就套用，Esc 放回原本的。"
 
 # 現有功能在新版面的哪裡（PR 的對照表與測試都照這一份）：(功能, 元件的路徑, 區塊)
 # 路徑從視窗算起，例如 "player_panel.open_btn"。區塊：top／left:<鍵>／preview／inspector／timeline／export。
@@ -503,6 +504,8 @@ class EditorWindow(MainWindow):
         self.cue_end_spin.valueChanged.connect(lambda v: self._set_cue_time(end=v))
         col.addWidget(_title("文字", "sectionTitle"))
         col.addWidget(self.cue_panel.editor)  # 逐句校對的編輯框搬過來（同一個，套用、Esc、新增都照舊）
+        self.cue_panel.hint = CUE_EDIT_HINT
+        self.cue_panel._load_editor(self.cue_panel.selected_index())
         col.addWidget(_title("全部字幕", "sectionTitle"))
         self.cue_style_btn = QPushButton("字幕樣式…")
         self.cue_style_btn.setToolTip(self.cue_panel.style_btn.toolTip() or "字型、大小、顏色、位置（套用到全部字幕）")
@@ -522,7 +525,7 @@ class EditorWindow(MainWindow):
 
         p.timeline.cueSelected.connect(lambda _i: self.sync_inspector())
         p.timeline.trackItemSelected.connect(lambda _k, _i: self.sync_inspector())
-        p.cuesChanged.connect(self.sync_inspector)
+        # 字幕改了（拖邊、復原、分割…）逐句校對會重載編輯框，editorChanged 就涵蓋了
         self.cue_panel.editorChanged.connect(self.sync_inspector)
         self.sync_inspector()
         return panel
