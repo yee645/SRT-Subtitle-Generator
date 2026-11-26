@@ -381,6 +381,9 @@ if old_app_src is not None:
         # 時間標籤、檔案篩選字串），純資料與純計算、零 GUI 依賴（全新檔案）。
         # 介面在 gui_qt/media_bin.py，test_mediabin.py 驗規則。
         "subtitle/mediabin.py",
+        # 剪輯器版面改版 E-6a：播放頭的規則（時間碼寫法、逐格步距、J／K／L 的速度），
+        # 純計算、零 GUI 依賴（全新檔案）。按鍵在 gui_qt/editor.py，test_playhead.py 驗規則。
+        "subtitle/playhead.py",
     }
     # 未追蹤（還沒 git add）的新檔案 `git diff` 看不到，會整個繞過這份白
     # 名單——本檔案上面那段註解已經修過「未 commit 的刪除」，但**新增**
