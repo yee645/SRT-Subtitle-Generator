@@ -667,6 +667,7 @@ def main(argv=None):
     建立並執行 Qt 版。回傳事件迴圈的結束碼。
 
     `--selftest <結果.json> <影片>`：打包後的自檢模式（見 gui_qt/selftest.py）。
+    `--editor`：剪輯器版面（主流剪輯軟體的排版，見 gui_qt/editor.py）；不加照舊是四頁籤。
     """
     argv = list(sys.argv if argv is None else argv)
     # 一般版「自動安裝 ffmpeg」裝好的執行檔兩版共用：加進本行程的 PATH
@@ -676,8 +677,13 @@ def main(argv=None):
     app = QApplication.instance() or QApplication(argv[:1])
     _cleanup_previous_update()
     data = config.load_config()
-    apply_theme(app, data.get("theme", "light"))
-    win = MainWindow(data, persist=SELFTEST_FLAG not in argv)  # 自檢模式不碰使用者的設定檔
+    from gui_qt import editor
+    if editor.editor_requested(argv):  # 剪輯器版面（E 系列，docs/ROADMAP_EDITOR.md）：E-7 之前要加 --editor 才開
+        editor.apply_initial_theme(app, data.get("theme", "light"))
+        win = editor.EditorWindow(data, persist=SELFTEST_FLAG not in argv)  # 自檢模式不碰使用者的設定檔
+    else:
+        apply_theme(app, data.get("theme", "light"))
+        win = MainWindow(data, persist=SELFTEST_FLAG not in argv)  # 自檢模式不碰使用者的設定檔
     if SELFTEST_FLAG in argv:
         at = argv.index(SELFTEST_FLAG)
         if len(argv) < at + 3:
