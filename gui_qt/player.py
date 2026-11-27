@@ -239,6 +239,9 @@ class PlayerPanel(QWidget):
     cuesChanged = Signal()
     styleApplied = Signal()  # 開專案換了字幕樣式（樣式的小視窗開著就跟著換）
     cuesGenerated = Signal(str)  # 「生成字幕」套用完：一句話說生成了什麼（逐句校對寫在下面）
+    # 資訊列裡「專案」「影片」「字幕」之間的分隔：四頁籤放在底下一整行，用全形空白；剪輯器放在窄的屬性面板，
+    # 換成換行，一項一行，不會在「字幕：demo.srt，」後面折斷（E-9i）
+    info_sep = "　"
     pictureChanged = Signal()  # 主片或疊加素材的畫面調整可能變了（剪輯器的屬性面板照著重填；E-8d）
     binRestored = Signal(list)  # 開專案還原了素材庫的清單（剪輯器版面的素材庫照著重排；E-8a）
 
@@ -1290,10 +1293,10 @@ class PlayerPanel(QWidget):
             return ""
         name = os.path.basename(self.project_path)
         if self.project_changed():
-            return f"專案：{name}（有變更還沒存）　"
+            return f"專案：{name}（有變更還沒存）{self.info_sep}"
         if self._project_note:
-            return f"專案：{name}（{self._project_note}）　"
-        return f"專案：{name}　"
+            return f"專案：{name}（{self._project_note}）{self.info_sep}"
+        return f"專案：{name}{self.info_sep}"
 
     def _suggested_project_path(self):
         return os.path.splitext(self.media_path)[0] + project_mod.SUFFIX if self.media_path else ""
@@ -1535,9 +1538,9 @@ class PlayerPanel(QWidget):
 
     def _subs_note(self):
         if not len(self._index):
-            return "　字幕：尚未載入"
+            return f"{self.info_sep}字幕：尚未載入"
         name = os.path.basename(self._subtitle_path) if self._subtitle_path else "（目前的字幕）"
-        note = f"　字幕：{name}，{len(self._index)} 句"
+        note = f"{self.info_sep}字幕：{name}，{len(self._index)} 句"
         if self.unsaved_changes():
             note += f"（{self._unsaved_text()}，尚未存檔）"
         elif self._save_note:
