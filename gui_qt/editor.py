@@ -112,6 +112,11 @@ TRACK_TITLES = {"overlays": "疊加的畫面", "music": "音樂"}
 # 逐句清單下面那行只講位置（E-9b）；怎麼套用寫在屬性面板編輯框的提示裡，不整段攤在畫面上
 CUE_EDIT_HINT = "文字與時間在右邊的屬性裡改。"
 CUE_APPLY_TIP = "改完按 Ctrl+Enter、點別句或離開編輯框就套用，Esc 放回原本的。"
+# 健檢頁兩個收合區塊在剪輯器裡的字（E-9d）：短的放按鈕上，括號裡的說明放提示
+HEALTH_PUBLISH_LABELS = ("▸ 發佈文字與章節（選填）", "▾ 發佈文字與章節（選填）")
+HEALTH_THUMB_LABELS = ("▸ 封面圖（可多選）", "▾ 封面圖（可多選）")
+HEALTH_PUBLISH_TIP = "填什麼檢什麼：標題、說明欄、hashtag、標籤、章節；點一下展開或收合"
+HEALTH_THUMB_TIP = "封面圖可以加好幾張，會依分數排名；點一下展開或收合"
 # 媒體頁〔加入畫面…〕〔加入音樂…〕的提示多一句放上去之後怎麼調（原本是按鈕下面一整段說明；E-9b）
 TRACK_ADD_TIP = "；放上去之後在時間軸上拖動、在右邊的屬性裡調整"
 
@@ -251,6 +256,39 @@ def _secondary(label):
     label.setProperty("secondary", True)
     label.setWordWrap(True)
     return label
+
+
+class ReflowGrid(QObject):
+    """
+    一格一格的勾選項依可用寬度排幾欄（E-9d）：盯著捲動區的可視寬度，放得下幾欄就排幾欄（最多 max_columns），
+    窄的面板不用撐出橫捲軸。四頁籤不用這個（那邊照舊固定欄數）。
+    """
+
+    def __init__(self, grid, widgets, viewport, max_columns=3, reserve=48):
+        super().__init__(viewport)
+        self.grid, self.widgets, self.max_columns, self.reserve = grid, list(widgets), max_columns, reserve
+        self.columns = None
+        viewport.installEventFilter(self)
+        self.relayout(viewport.width())
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Resize:
+            self.relayout(obj.width())
+        return False
+
+    def columns_for(self, width):
+        cell = max(w.sizeHint().width() for w in self.widgets) + max(self.grid.horizontalSpacing(), 0)
+        return max(1, min(self.max_columns, (width - self.reserve) // max(cell, 1)))
+
+    def relayout(self, width):
+        columns = self.columns_for(width)
+        if columns == self.columns:
+            return
+        self.columns = columns
+        for w in self.widgets:
+            self.grid.removeWidget(w)
+        for i, w in enumerate(self.widgets):
+            self.grid.addWidget(w, i // columns, i % columns)
 
 
 def _scroll(widget):
@@ -485,7 +523,19 @@ class EditorWindow(MainWindow):
 
         # 智慧剪輯、健檢：原本整頁寬，放進可以捲的區塊
         self._add_page("smart", self._titled("智慧剪輯", _scroll(self.review_panel)))
-        self._add_page("health", self._titled("健檢", _scroll(self.health_panel)))
+        health_area = _scroll(self.health_panel)
+        self._add_page("health", self._titled("健檢", health_area))
+        # 健檢的勾選項：原本固定三欄（最小 787px），左側面板放不下——依寬度排欄（E-9d）
+        hp = self.health_panel
+        # 收合區塊的字縮短，括號裡的說明放提示（最小視窗時這兩行原本撐出橫捲軸）
+        hp.publish_labels = HEALTH_PUBLISH_LABELS
+        hp.thumb_labels = HEALTH_THUMB_LABELS
+        hp.publish_toggle.setToolTip(HEALTH_PUBLISH_TIP)
+        hp.thumb_toggle.setToolTip(HEALTH_THUMB_TIP)
+        hp.show_publish(hp.publish_body.isVisible())
+        hp.show_thumbs(hp.thumb_body.isVisible())
+        self.health_reflow = ReflowGrid(hp.filename_box.parentWidget().layout(),
+                                        list(hp.check_boxes.values()) + [hp.filename_box], health_area.viewport())
         return panel
 
     def _titled(self, text, widget):

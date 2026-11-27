@@ -140,6 +140,10 @@ class MediaFixWorker(QObject):
 class HealthPanel(QWidget):
     """③健檢中心頁：勾選要跑的項目 → 開始健檢 → 結果依「一定要修／建議修／通過」分組。"""
 
+    # 兩個可以收合的區塊上的字（收合時, 展開時）；窄的版面（剪輯器的左側面板）換成短的，說明放提示（E-9d）
+    publish_labels = (PUBLISH_CLOSED, PUBLISH_OPEN)
+    thumb_labels = (THUMB_CLOSED, THUMB_OPEN)
+
     def __init__(self, player, before_scan=None, parent=None):
         super().__init__(parent)
         self.player = player
@@ -257,7 +261,7 @@ class HealthPanel(QWidget):
         outer = QVBoxLayout(wrap)
         outer.setContentsMargins(0, 0, 0, 0)
         self.publish_toggle = QToolButton()
-        self.publish_toggle.setText(PUBLISH_CLOSED)
+        self.publish_toggle.setText(self.publish_labels[0])
         self.publish_toggle.setAutoRaise(True)
         self.publish_toggle.clicked.connect(lambda: self.show_publish(not self.publish_body.isVisible()))
         outer.addWidget(self.publish_toggle)
@@ -293,7 +297,7 @@ class HealthPanel(QWidget):
 
     def show_publish(self, shown=True):
         self.publish_body.setVisible(shown)
-        self.publish_toggle.setText(PUBLISH_OPEN if shown else PUBLISH_CLOSED)
+        self.publish_toggle.setText(self.publish_labels[1 if shown else 0])
 
     def adopt_publish(self, **fields):
         """
@@ -329,7 +333,7 @@ class HealthPanel(QWidget):
         outer = QVBoxLayout(wrap)
         outer.setContentsMargins(0, 0, 0, 0)
         self.thumb_toggle = QToolButton()
-        self.thumb_toggle.setText(THUMB_CLOSED)
+        self.thumb_toggle.setText(self.thumb_labels[0])
         self.thumb_toggle.setAutoRaise(True)
         self.thumb_toggle.clicked.connect(lambda: self.show_thumbs(not self.thumb_body.isVisible()))
         outer.addWidget(self.thumb_toggle)
@@ -364,7 +368,7 @@ class HealthPanel(QWidget):
 
     def show_thumbs(self, shown=True):
         self.thumb_body.setVisible(shown)
-        self.thumb_toggle.setText(THUMB_OPEN if shown else THUMB_CLOSED)
+        self.thumb_toggle.setText(self.thumb_labels[1 if shown else 0])
 
     def thumb_paths(self):
         """加入的封面圖（完整路徑，照加入的順序）。"""
