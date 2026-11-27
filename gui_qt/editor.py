@@ -86,6 +86,9 @@ PREVIEW_ZOOMS = (("符合視窗", 1.0), ("放大 2 倍", 2.0), ("放大 4 倍", 
 
 # 這些元件自己要用方向鍵（清單、數字欄、選單、滑桿、打字的地方）：焦點在它們上面時 ←／→ 不拿去逐格
 ARROW_OWNERS = (QAbstractItemView, QAbstractSpinBox, QComboBox, QAbstractSlider, QLineEdit, QPlainTextEdit, QTextEdit)
+# 時間碼（E-9f）：量寬度用的樣本（等寬字，每一位都一樣寬）與提示
+TIMECODE_SAMPLE = "00:00:00.00"
+TIMECODE_TIP = "播放頭／片長（時:分:秒.百分之一秒）"
 TIMELINE_EMPTY_TEXT = "開啟影片後，縮圖、波形與字幕會排在這裡。"
 
 # 左邊圖示列：(鍵, 圖示, 名稱, 提示)
@@ -290,6 +293,20 @@ class ReflowGrid(QObject):
             self.grid.removeWidget(w)
         for i, w in enumerate(self.widgets):
             self.grid.addWidget(w, i // columns, i % columns)
+
+
+class _OnResize(QObject):
+    """widget 改變大小時呼叫 callback（E-9f：預覽區變寬變窄時重算時間碼）。"""
+
+    def __init__(self, widget, callback):
+        super().__init__(widget)
+        self._callback = callback
+        widget.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Resize:
+            self._callback()
+        return False
 
 
 def _scroll(widget):
@@ -572,7 +589,7 @@ class EditorWindow(MainWindow):
         p.time_label.setParent(self.legacy_central)  # 換父元件就藏起來了（收起來的外殼）
         self.timecode_label = QLabel()
         self.timecode_label.setObjectName("timecode")
-        self.timecode_label.setToolTip("播放頭／片長（時:分:秒.百分之一秒）")
+        self.timecode_label.setToolTip(TIMECODE_TIP)
         row.addWidget(self.timecode_label)
         row.addStretch(1)
         self.prev_frame_tool = self._tool("step_back", "上一格（←）", lambda: self.step_frame(-1))
@@ -617,10 +634,15 @@ class EditorWindow(MainWindow):
                                      lambda: self.set_focus_preview(self.focus_tool.isChecked()), checkable=True)
         self.focus_tool.setProperty("role", "ghost")
         tools.addWidget(self.focus_tool)
-        right.setFixedWidth(max(self.timecode_label.sizeHint().width(), right.sizeHint().width()))
-        self.timecode_label.setMinimumWidth(right.width())
         row.addWidget(right)
         col.addLayout(row)
+        # 時間碼左右兩邊一樣寬，播放鍵才在正中間；寬度要等樣式表（等寬字）套上才量得準，預覽區變窄時改成只寫播放頭
+        # （片長放提示），不然會被切成「00:0」（E-9f）
+        self._timecode_side = right
+        self._timecode_short = False
+        self._preview_panel = panel
+        self._preview_watch = _OnResize(panel, self._fit_timecode)
+        self._fit_timecode()
         return panel
 
     def _inspector_page(self, key, title):
@@ -1263,10 +1285,37 @@ class EditorWindow(MainWindow):
     # ----- 播放頭（E-6a） -----
     def _update_timecode(self):
         pl = self.player_panel.player
-        text = f"{playhead.format_timecode(pl.position())} / {playhead.format_timecode(pl.duration())}"
+        full = f"{playhead.format_timecode(pl.position())} / {playhead.format_timecode(pl.duration())}"
+        text = playhead.format_timecode(pl.position()) if getattr(self, "_timecode_short", False) else full
         if self.timecode_label.text() != text:
             self.timecode_label.setText(text)
+            self.timecode_label.setToolTip(f"{TIMECODE_TIP}：{full}")
         return text
+
+    def _fit_timecode(self):
+        """
+        依預覽區的寬度決定時間碼寫「播放頭 / 片長」還是只寫播放頭，左右兩邊設成一樣寬（E-9f）。
+        回傳是不是短的。換主題（字型可能變）、預覽區變寬變窄都會重算。
+        """
+        lab, side = self.timecode_label, self._timecode_side
+        lab.ensurePolished()
+        fm = lab.fontMetrics()
+        full_w = fm.horizontalAdvance(TIMECODE_SAMPLE + " / " + TIMECODE_SAMPLE) + 8
+        short_w = fm.horizontalAdvance(TIMECODE_SAMPLE) + 8
+        tools_w = side.layout().sizeHint().width()
+        middle = (self.prev_frame_tool.sizeHint().width() + self.play_tool.width()
+                  + self.next_frame_tool.sizeHint().width() + 32)
+        m = self._preview_panel.contentsMargins()
+        avail = self._preview_panel.width() - m.left() - m.right() - 8
+        short = avail < 2 * max(full_w, tools_w) + middle
+        # 預覽區最窄照短的算：完整的時間碼不能把預覽區撐寬、擠掉左側面板（放不下時改寫短的）
+        self._preview_panel.setMinimumWidth(2 * max(short_w, tools_w) + middle + m.left() + m.right() + 8)
+        width = max(short_w if short else full_w, tools_w)
+        lab.setFixedWidth(width)
+        side.setFixedWidth(width)
+        self._timecode_short = short
+        self._update_timecode()
+        return short
 
     def _probe_fps(self):
         path = self.player_panel.media_path
@@ -1338,6 +1387,8 @@ class EditorWindow(MainWindow):
         app = QApplication.instance()
         app.setPalette(theme.palette(self._theme))
         self.setStyleSheet(theme.stylesheet(self._theme))
+        if hasattr(self, "_timecode_side"):
+            self._fit_timecode()  # 樣式表換了，時間碼的字寬跟著重量
         t = theme.tokens(self._theme)
         for btn, icon_name in self._icon_buttons:
             if btn is self.export_button:
