@@ -144,7 +144,7 @@ QListView, QListWidget, QTreeView, QTreeWidget, QTableView, QTableWidget {{
     border-radius: {r}px; selection-background-color: {t['accent.soft']}; selection-color: {t['text.primary']}; }}
 /* 匯出視窗左邊的目錄（E-5） */
 QListWidget#exportNav {{ background: {t['bg.panel']}; border: none; border-right: 1px solid {t['border']};
-                         border-radius: 0; padding: 12px 8px; }}
+                         border-radius: 0; padding: 12px 8px; outline: 0; }}
 QListWidget#exportNav::item {{ color: {t['text.secondary']}; padding: 8px 10px; border-radius: {r}px; }}
 QListWidget#exportNav::item:hover {{ background: {t['bg.hover']}; }}
 QListWidget#exportNav::item:selected {{ background: {t['accent.soft']}; color: {t['text.primary']}; }}
