@@ -657,6 +657,9 @@ class EditorWindow(MainWindow):
 
         p.timeline.cueSelected.connect(lambda _i: self.sync_inspector())
         p.timeline.trackItemSelected.connect(lambda _k, _i: self.sync_inspector())
+        # 拖檔案到時間軸：狀態列講會怎麼放（E-8c；時間軸上同時畫落點與標籤）
+        p.timeline.dropPreviewChanged.connect(
+            lambda text: self.statusBar().showMessage(text) if text else self.statusBar().clearMessage())
         # 字幕改了（拖邊、復原、分割…）逐句校對會重載編輯框，editorChanged 就涵蓋了
         self.cue_panel.editorChanged.connect(self.sync_inspector)
         self.sync_inspector()
