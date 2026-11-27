@@ -239,6 +239,7 @@ class PlayerPanel(QWidget):
     cuesChanged = Signal()
     styleApplied = Signal()  # 開專案換了字幕樣式（樣式的小視窗開著就跟著換）
     cuesGenerated = Signal(str)  # 「生成字幕」套用完：一句話說生成了什麼（逐句校對寫在下面）
+    binRestored = Signal(list)  # 開專案還原了素材庫的清單（剪輯器版面的素材庫照著重排；E-8a）
 
     def __init__(self, parent=None, style=None, config=None):
         super().__init__(parent)
@@ -261,6 +262,9 @@ class PlayerPanel(QWidget):
         # 專案檔（3.0 第 10 項第二階段）：開過或存過的專案，以及那時的樣子（拿來算有沒有變更）
         self.project_path = ""
         self._saved_project = None
+        # 素材庫的清單（剪輯器版面的素材庫寫進來，存專案時一起記；E-8a）。四頁籤沒有素材庫，開專案讀到的
+        # 照樣留著，再存一次不會把它弄丟。
+        self.bin_paths = []
         self._project_note = ""
         self.last_project_missing = []  # 上一次開專案時找不到的檔案 [(哪一個, 路徑)]
 
@@ -1129,6 +1133,7 @@ class PlayerPanel(QWidget):
                      "overrides": copy.deepcopy(self.cut_overrides)},
             "seam": {"type": self.seam_combo.currentData() or "", "duration": round(self.seam_spin.value(), 3)},
             "style": clean_style(self._style),
+            "bin": list(self.bin_paths),
         }
 
     def _normalized_project(self):
@@ -1210,7 +1215,9 @@ class PlayerPanel(QWidget):
             self._show_project_message(
                 "開專案", f"專案打開了，但這些檔案找不到：\n{lines}\n\n"
                           "其他的都照專案還原了。找不到的素材輸出時會失敗，請放回原處再開一次專案；"
-                          "字幕檔找不到不要緊，內容存在專案裡，存字幕時會再問要存到哪。")
+                          "字幕檔找不到不要緊，內容存在專案裡，存字幕時會再問要存到哪。"
+                          + ("素材庫裡找不到的檔案先不放進素材庫（時間軸上的不受影響）。"
+                             if any(what.startswith("素材庫") for what, _w in missing) else ""))
         return True
 
     def apply_project(self, state):
@@ -1242,6 +1249,8 @@ class PlayerPanel(QWidget):
             self.styleApplied.emit()
         self.refresh_tracks()
         self.history.forget("tracks")  # 開專案載入的素材軌是起點，不是一步可以復原的修改
+        self.bin_paths = list(state["bin"])
+        self.binRestored.emit(list(self.bin_paths))
         self._refresh_info()
 
     def maybe_close(self):

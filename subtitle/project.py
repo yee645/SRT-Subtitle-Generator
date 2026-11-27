@@ -14,6 +14,9 @@
 * `seam`：剪點接縫的轉場（硬切／溶接／黑場與長度）。
 * `style`：字幕樣式（`exporter.clean_style` 的格式：位置、字型、字級、顏色、重點字、動態）。
   第 2 版才有；空的 `{}`＝專案沒記樣式（第 1 版存的），開的時候沿用目前的樣式。
+* `bin`：剪輯器版面的素材庫清單（E-8a，檔案位置的清單）。**選填、不升版本**：舊一點的程式只讀它認得的
+  項目，看到 `bin` 照樣打得開（只是沒有素材庫）；沒有 `bin` 的檔＝素材庫是空的。升版本反而會讓已經發出去
+  的程式拒開新存的檔。
 
 **路徑**：每個檔案記兩種——相對於專案檔的位置（整個資料夾搬走、換電腦還開得起來）與絕對路徑。
 讀的時候先找相對的、再找絕對的；兩個都找不到的不算錯，列在 `missing` 讓介面說清楚（使用者可能
@@ -35,13 +38,14 @@ import math
 import os
 import tempfile
 
-from . import assemble, cutmarks, exporter, picture
+from . import assemble, cutmarks, exporter, mediabin, picture
 
 FORMAT = "srt-subtitle-generator-project"
 VERSION = 2
 SUFFIX = ".srtproj"
 MAX_BYTES = 20 * 1024 * 1024   # 再大就不是正常的專案檔（字幕幾萬句也才幾 MB）
 MAX_CUES = 50000
+MAX_BIN = 2000                 # 素材庫最多記幾個檔
 SEAM_TYPES = ("",) + tuple(assemble.TRANSITIONS)
 DEFAULT_SEAM = {"type": "", "duration": 0.5}
 
@@ -63,7 +67,7 @@ def new_state() -> dict:
     """空的專案狀態（還沒開影片）。"""
     return {"media": "", "adjust": {}, "subtitles": "", "cues": [],
             "tracks": {"overlays": [], "music": []},
-            "cuts": {"source": "", "overrides": {}}, "seam": dict(DEFAULT_SEAM), "style": {}}
+            "cuts": {"source": "", "overrides": {}}, "seam": dict(DEFAULT_SEAM), "style": {}, "bin": []}
 
 
 # ---- 檢查 ------------------------------------------------------------------
@@ -180,6 +184,25 @@ def _style(style):
     return exporter.clean_style(_plain(style, "字幕樣式"))
 
 
+def _bin(paths):
+    """素材庫：檔案路徑的清單，只收影片、圖片、聲音；重複的（同一個檔）只留第一個，順序照舊。"""
+    if not isinstance(paths, list):
+        raise ProjectError("素材庫要是檔案路徑的清單")
+    if len(paths) > MAX_BIN:
+        raise ProjectError(f"素材庫太多（{len(paths)} 個，上限 {MAX_BIN}）")
+    out, seen = [], set()
+    for i, path in enumerate(paths, 1):
+        if not isinstance(path, str) or not path:
+            raise ProjectError(f"素材庫第 {i} 個要是檔案路徑（字串）")
+        if mediabin.kind_of(path) is None:
+            raise ProjectError(f"素材庫第 {i} 個不是影片、圖片或聲音：{os.path.basename(path)}")
+        key = os.path.normcase(os.path.abspath(path))
+        if key not in seen:
+            seen.add(key)
+            out.append(path)
+    return out
+
+
 def normalize_state(state) -> dict:
     """檢查一份專案狀態，回傳整理過的新 dict（缺的補預設）；不合理就拋 ProjectError。"""
     if not isinstance(state, dict):
@@ -202,6 +225,7 @@ def normalize_state(state) -> dict:
     out["cuts"] = _cuts(state.get("cuts") or {})
     out["seam"] = _seam(state.get("seam") or DEFAULT_SEAM)
     out["style"] = _style(state.get("style") if state.get("style") is not None else {})
+    out["bin"] = _bin(state.get("bin") if state.get("bin") is not None else [])
     if (out["tracks"]["overlays"] or out["tracks"]["music"] or out["adjust"]) and not out["media"]:
         raise ProjectError("有素材軌或畫面調整，卻沒有主片")
     return out
@@ -257,6 +281,7 @@ def to_document(state, project_path) -> dict:
         "cuts": state["cuts"],
         "seam": state["seam"],
         "style": state["style"],
+        "bin": [_portable(path, base) for path in state["bin"]],
     }
 
 
@@ -292,6 +317,9 @@ def from_document(doc, project_path):
     tracks = doc.get("tracks") or {}
     if not isinstance(tracks, dict):
         raise ProjectError("素材軌要是 dict")
+    stored_bin = doc.get("bin") if doc.get("bin") is not None else []
+    if not isinstance(stored_bin, list):
+        raise ProjectError("素材庫要是清單")
     resolved = {}
     for kind, items in tracks.items():
         if not isinstance(items, list):
@@ -312,6 +340,8 @@ def from_document(doc, project_path):
         "seam": doc.get("seam") or DEFAULT_SEAM,
         "style": doc.get("style") if doc.get("style") is not None else {},
     }
+    # 素材庫排在最後找：找不到的列在主片、字幕、素材軌後面（素材庫找不到的只是不放進素材庫）
+    state["bin"] = [_resolve(entry, base, f"素材庫第 {i} 個", missing) for i, entry in enumerate(stored_bin, 1)]
     # 字幕檔找不到不要緊（內容在專案裡），只是存字幕時要另外選地方：照樣列出來
     return normalize_state(state), missing
 
