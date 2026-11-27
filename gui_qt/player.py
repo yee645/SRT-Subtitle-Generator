@@ -239,6 +239,7 @@ class PlayerPanel(QWidget):
     cuesChanged = Signal()
     styleApplied = Signal()  # 開專案換了字幕樣式（樣式的小視窗開著就跟著換）
     cuesGenerated = Signal(str)  # 「生成字幕」套用完：一句話說生成了什麼（逐句校對寫在下面）
+    pictureChanged = Signal()  # 主片或疊加素材的畫面調整可能變了（剪輯器的屬性面板照著重填；E-8d）
     binRestored = Signal(list)  # 開專案還原了素材庫的清單（剪輯器版面的素材庫照著重排；E-8a）
 
     def __init__(self, parent=None, style=None, config=None):
@@ -799,6 +800,7 @@ class PlayerPanel(QWidget):
             self.track_label.setToolTip(self.track_label.text())
         self._update_track_buttons()
         self._refresh_info()  # 專案有沒有變更
+        self.pictureChanged.emit()  # 主片或疊加的調整可能變了（set_main_adjust 也走這裡；復原、分割、刪除…）
 
     def _track_summary(self):
         overlays, music = len(self.tracks["overlays"]), len(self.tracks["music"])
@@ -1910,10 +1912,10 @@ class PlayerPanel(QWidget):
     def _picture_dialog_open(self):
         return self.picture_dialog is not None and not self.picture_dialog.isHidden()
 
-    def set_overlay_adjust(self, index, adjust):
+    def set_overlay_adjust(self, index, adjust, merge=None):
         """
         改第 index 段疊加素材的畫面調整，播放器上的預覽跟著變。回傳之後實際的調整；沒這一段、
-        輸出中、或數字不合理就不改，回傳原本的。
+        輸出中、或數字不合理就不改，回傳原本的。merge：連續調整（拖滑桿）併成一筆復原的鍵（E-8d）。
         """
         if not 0 <= index < len(self.tracks["overlays"]):
             return {}
@@ -1931,7 +1933,11 @@ class PlayerPanel(QWidget):
             if not wanted:
                 del item["adjust"]
             self.tracks["overlays"][index] = item
-            self.refresh_tracks()
+            self._merge_key = merge
+            try:
+                self.refresh_tracks()
+            finally:
+                self._merge_key = None
         return wanted
 
     def set_main_adjust(self, adjust):

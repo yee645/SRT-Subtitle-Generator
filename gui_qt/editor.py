@@ -33,6 +33,7 @@ from gui_qt import icons, theme
 from gui_qt import timeline as timeline_mod
 from gui_qt.app import MainWindow, apply_theme
 from gui_qt.media_bin import MediaBin
+from gui_qt.picture_panel import PictureControls
 from gui_qt.places import EDITOR, LAYOUT_PROPERTY, relabel_tree
 from subtitle import editorguide
 from subtitle import playhead
@@ -140,7 +141,7 @@ FEATURE_MAP = (
     ("專注預覽：收起左右面板（E-6b）", "focus_tool", "preview"),
     ("下一格（E-6a）", "next_frame_tool", "preview"),
     ("影片與字幕狀態（改過幾處沒存）", "player_panel.info_label", "inspector"),
-    ("畫面調整", "player_panel.picture_btn", "inspector"),
+    ("畫面調整（E-8d 攤在屬性面板，不另開小視窗）", "main_picture", "inspector"),
     ("編輯用代理檔", "player_panel.proxy_box", "inspector"),
     ("剪點種類", "player_panel.cut_combo", "inspector"),
     ("預覽剪後", "player_panel.preview_cut_box", "inspector"),
@@ -148,7 +149,8 @@ FEATURE_MAP = (
     ("轉場長度", "player_panel.seam_spin", "inspector"),
     ("還原剪點", "player_panel.cut_reset_btn", "inspector"),
     ("素材屬性：音量、循環、講話時壓低、配樂設定", "player_panel.volume_spin", "inspector"),
-    ("素材屬性：位置、帶聲音、調畫面", "player_panel.position_combo", "inspector"),
+    ("素材屬性：位置、帶聲音", "player_panel.position_combo", "inspector"),
+    ("疊加素材的畫面調整（E-8d 攤在屬性面板）", "overlay_picture", "inspector"),
     ("預覽畫面素材", "player_panel.preview_box", "inspector"),
     ("字幕的文字（逐句校對的編輯框，E-3a 搬到屬性面板）", "cue_panel.editor", "inspector"),
     ("字幕的開始／結束時間（E-3a；原本只能在時間軸上拖）", "cue_start_spin", "inspector"),
@@ -593,7 +595,13 @@ class EditorWindow(MainWindow):
         col, _head = self._inspector_page("project", "專案")
         col.addWidget(_secondary(p.info_label))
         col.addWidget(_title("主片段", "sectionTitle"))
+        # E-8d：畫面調整直接攤在這裡（四頁籤照舊開小視窗）。原本那顆按鈕留在這一頁、藏起來（能不能調照它）
         col.addWidget(self._iconify(p.picture_btn, "picture", role="list"))
+        p.picture_btn.setVisible(False)
+        self.main_picture = PictureControls(p.set_main_adjust, compact=True)
+        self.main_picture.setObjectName("mainPicture")
+        self._main_picture_mirror = _EnabledMirror(p.picture_btn, self.main_picture)
+        col.addWidget(self.main_picture)
         col.addWidget(p.proxy_box)
         col.addWidget(_title("剪點", "sectionTitle"))
         col.addWidget(p.cut_combo)
@@ -653,7 +661,25 @@ class EditorWindow(MainWindow):
         for widgets in p._prop_widgets.values():
             for w in widgets:
                 col.addWidget(w)
+        # E-8d：疊加素材的〔調畫面…〕換成直接攤開的控件（選疊加時才顯示，跟其他屬性一起切換）
+        self.overlay_picture = PictureControls(self._apply_overlay_picture, compact=True)
+        self.overlay_picture.setObjectName("overlayPicture")
+        col.addWidget(self.overlay_picture)
+        p._prop_widgets["overlays"] = tuple(w for w in p._prop_widgets["overlays"]
+                                           if w is not p.overlay_picture_btn) + (self.overlay_picture,)
+        p.overlay_picture_btn.setVisible(False)
         col.addStretch(1)
+        # 一串連續調整只記一筆復原（E-8b 的做法）：放開滑桿、裁切數字框按 Enter 或離開才算一筆；
+        # 旋轉、翻轉一次就是一筆
+        for controls in (self.main_picture, self.overlay_picture):
+            controls.sliderReleased.connect(p.history.end_merge)
+            for spin in controls.crop_spins.values():
+                spin.editingFinished.connect(p.history.end_merge)
+            controls.rotate_combo.currentIndexChanged.connect(lambda _i: p.history.end_merge())
+            controls.flip_h_box.toggled.connect(lambda _on: p.history.end_merge())
+            controls.flip_v_box.toggled.connect(lambda _on: p.history.end_merge())
+            controls.reset_btn.clicked.connect(lambda _c=False: p.history.end_merge())
+        p.pictureChanged.connect(self._fill_pictures)
 
         p.timeline.cueSelected.connect(lambda _i: self.sync_inspector())
         p.timeline.trackItemSelected.connect(lambda _k, _i: self.sync_inspector())
@@ -664,6 +690,25 @@ class EditorWindow(MainWindow):
         self.cue_panel.editorChanged.connect(self.sync_inspector)
         self.sync_inspector()
         return panel
+
+    def _apply_overlay_picture(self, adjust):
+        """屬性面板的疊加畫面調整：改選取的那段疊加；拖滑桿的一連串併成一筆復原。回傳收下的調整。"""
+        p = self.player_panel
+        sel = p.timeline.track_selected
+        if not sel or sel[0] != "overlays" or not 0 <= sel[1] < len(p.tracks["overlays"]):
+            return {}
+        return p.set_overlay_adjust(sel[1], adjust, merge=("adjust", "overlays", sel[1]))
+
+    def _fill_pictures(self):
+        """屬性面板的兩組畫面調整照現在的值填（復原、開專案、四頁籤的小視窗改了都會跟著變）。"""
+        p = self.player_panel
+        if self.main_picture.current() != p.main_adjust:
+            self.main_picture.fill(p.main_adjust)
+        sel = p.timeline.track_selected
+        if sel and sel[0] == "overlays" and 0 <= sel[1] < len(p.tracks["overlays"]):
+            adjust = p.tracks["overlays"][sel[1]].get("adjust") or {}
+            if self.overlay_picture.target != sel or self.overlay_picture.current() != adjust:
+                self.overlay_picture.set_target(sel, self._apply_overlay_picture, adjust)
 
     def _time_spin(self, tip):
         spin = QDoubleSpinBox()
@@ -693,6 +738,7 @@ class EditorWindow(MainWindow):
         p = self.player_panel
         mode = self.inspector_mode()
         self.inspector_stack.setCurrentWidget(self.inspector_pages[mode])
+        self._fill_pictures()
         if mode == "track":
             kind = p.timeline.track_selected[0]
             self.track_page_title.setText(TRACK_TITLES.get(kind, "素材"))
