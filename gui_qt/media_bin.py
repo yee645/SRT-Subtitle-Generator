@@ -4,7 +4,8 @@
 
 規則（收哪些檔、去重、拖到哪一列放哪一軌）在 `subtitle/mediabin.py`；縮圖與長度在背景抽（ffmpeg／ffprobe，
 晚到的結果照路徑對回去，素材已經拿掉的丟掉）。放上時間軸照舊走 `PlayerPanel.add_track`（讀不出來就講、不放）。
-素材庫只是這次開啟的清單，不存進專案。
+清單跟著專案存（E-8a）：增減時寫進 `PlayerPanel.bin_paths`，存專案時一起記；開專案時照專案的清單重排
+（`PlayerPanel.binRestored`），找不到的檔案不放進來（開專案的訊息會列出來）。
 """
 import os
 import subprocess
@@ -128,6 +129,7 @@ class MediaBin(QWidget):
         self.remove_btn.clicked.connect(lambda _c=False: self.remove_selected())
         self.list.itemSelectionChanged.connect(self._update_buttons)
         self.list.itemDoubleClicked.connect(lambda _item: self.add_selected())
+        player.binRestored.connect(self.restore)
         self._refresh()
 
     # ----- 匯入 -----
@@ -148,9 +150,27 @@ class MediaBin(QWidget):
             more = f"等 {len(skipped)} 個" if len(skipped) > 3 else ""
             self.empty_label.setText(f"加了 {len(added)} 個；略過 {names}{more}。")
             self.empty_label.show()
+        if added:
+            self._sync_player()
         if added or skipped:
             self.changed.emit()
         return added, skipped
+
+    def restore(self, paths):
+        """開專案：素材庫換成專案記的清單（找不到的略過，不講——開專案的訊息已經列了）。回傳放進來的。"""
+        self.entries, added, _skipped = mediabin.add_paths([], paths)
+        self.info = {}
+        for entry in added:
+            self.info[entry["path"]] = {"thumb": "", "seconds": None}
+            self._probe.start(entry)
+        self.empty_label.setText(EMPTY_TEXT)
+        self._refresh()
+        self.changed.emit()
+        return added
+
+    def _sync_player(self):
+        """清單寫回播放器，存專案時一起記。"""
+        self.player.bin_paths = [entry["path"] for entry in self.entries]
 
     def _on_probed(self, path, thumb, seconds):
         if path not in self.info:
@@ -185,6 +205,7 @@ class MediaBin(QWidget):
             self.info.pop(path, None)
         self._refresh()
         if paths:
+            self._sync_player()
             self.changed.emit()
         return len(paths)
 
