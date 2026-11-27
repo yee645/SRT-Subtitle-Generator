@@ -265,6 +265,7 @@ class PlayerPanel(QWidget):
         # 素材庫的清單（剪輯器版面的素材庫寫進來，存專案時一起記；E-8a）。四頁籤沒有素材庫，開專案讀到的
         # 照樣留著，再存一次不會把它弄丟。
         self.bin_paths = []
+        self._merge_key = None  # 數字框連續調整素材屬性時，這一筆復原併進上一筆的鍵（E-8b）
         self._project_note = ""
         self.last_project_missing = []  # 上一次開專案時找不到的檔案 [(哪一個, 路徑)]
 
@@ -533,7 +534,9 @@ class PlayerPanel(QWidget):
         self.preview_box.toggled.connect(lambda _on: self.refresh_tracks())
         self.overlay_preview.updated.connect(self.refresh_overlays)
         self.volume_spin.valueChanged.connect(
-            lambda v: self.set_track_props(volume=round(v / 100.0, 2)))
+            lambda v: self._set_track_props_merged("volume", volume=round(v / 100.0, 2)))
+        # 按住上下鍵、滾輪、一個字一個字打：一連串只記一筆復原，按 Enter 或離開才算一筆結束（E-8b）
+        self.volume_spin.editingFinished.connect(self.history.end_merge)
         self.loop_box.toggled.connect(lambda on: self.set_track_props(loop=bool(on)))
         self.duck_box.toggled.connect(lambda on: self.set_track_props(duck=bool(on)))
         self.position_combo.currentIndexChanged.connect(
@@ -787,7 +790,7 @@ class PlayerPanel(QWidget):
     def refresh_tracks(self, note=None):
         """把素材軌畫到時間軸上，順便更新那一行的說明與按鈕；素材軌跟上次不一樣就記一筆復原（E-3b）。"""
         if self.tracks != self._tracks_shadow:
-            self.history.record_tracks(self._tracks_shadow, self.tracks)
+            self.history.record_tracks(self._tracks_shadow, self.tracks, merge=self._merge_key)
             self._tracks_shadow = copy.deepcopy(self.tracks)
         self.timeline.set_tracks(self.tracks["overlays"], self.tracks["music"])
         self.refresh_overlays()
@@ -910,6 +913,15 @@ class PlayerPanel(QWidget):
         self.tracks[kind][index] = item
         self.refresh_tracks()
         return True
+
+    def _set_track_props_merged(self, field, **changes):
+        """數字框改素材屬性：同一段素材、同一個欄位的連續調整併成一筆復原（E-8b）。"""
+        selected = self.timeline.track_selected
+        self._merge_key = (field,) + tuple(selected) if selected else None
+        try:
+            return self.set_track_props(**changes)
+        finally:
+            self._merge_key = None
 
     def _on_track_changed(self, kind, index, item):
         """時間軸上修了頭尾：照新的 dict 改（輸出中不改，放回原樣）。"""
@@ -1546,10 +1558,11 @@ class PlayerPanel(QWidget):
         self.save_project_btn.setEnabled(bool(self.media_path))
         self.generate_btn.setEnabled(bool(self.media_path))
 
-    def set_cue_times(self, index, start=None, end=None):
+    def set_cue_times(self, index, start=None, end=None, merge=None):
         """
         改第 index 句的開始／結束（秒；剪輯器版面的屬性面板）：照時間軸拖邊的規則夾在鄰句與片長之間
-        （先改開始、再改結束），可以復原。回傳改完的 (開始, 結束)；沒變就不記。
+        （先改開始、再改結束），可以復原。回傳改完的 (開始, 結束)；沒變就不記。merge：連續調整併成一筆的鍵
+        （`EditHistory.record`；E-8b）。
         """
         if not 0 <= index < len(self.cues):
             raise IndexError(index)
@@ -1561,7 +1574,7 @@ class PlayerPanel(QWidget):
                 times = cueedit.drag_edge(cues, index, edge, float(value), duration=duration)
                 cues = cueedit.with_times(cues, index, *times)
         if times != before:
-            self.history.record(index, before, times)
+            self.history.record(index, before, times, merge=merge)
             self.cues = cues
             self.timeline.set_cues(self.cues, keep_selection=True)
             self._after_edit()

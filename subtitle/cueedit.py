@@ -419,18 +419,27 @@ class EditHistory:
         self.limit = limit
         self._done = []
         self._undone = []
+        self._merge = None  # 最上面那一筆是哪一串連續調整（E-8b）；None＝不跟下一筆合併
 
     def clear(self):
         self._done.clear()
         self._undone.clear()
+        self._merge = None
 
-    def record(self, index, before, after):
-        """記一筆：第 index 句從 before=(開始, 結束) 改成 after。"""
+    def end_merge(self):
+        """一串連續調整結束（例如數字框按 Enter 或離開）：下一筆另記，不再併進最上面那一筆。"""
+        self._merge = None
+
+    def record(self, index, before, after, merge=None):
+        """
+        記一筆：第 index 句從 before=(開始, 結束) 改成 after。merge 給一個鍵（例如 ("start", 3)）時，
+        跟最上面那一筆同一個鍵就併成一筆（從最早的 before 改到這次的 after；改回原樣就整筆拿掉）。
+        """
         before = (float(before[0]), float(before[1]))
         after = (float(after[0]), float(after[1]))
         if before == after:
             return
-        self._push(("times", index, before, after))
+        self._push(("times", index, before, after), merge)
 
     def record_text(self, index, before, after):
         """記一筆：第 index 句的文字從 before 改成 after。"""
@@ -456,15 +465,15 @@ class EditHistory:
             return
         self._push(("cues", tuple(indices), tuple(dict(c) for c in before), tuple(dict(c) for c in after)))
 
-    def record_tracks(self, before, after):
+    def record_tracks(self, before, after, merge=None):
         """
         記一筆素材軌（疊加、音樂）的修改：before／after 是整份素材軌（{"overlays": [...], "music": [...]}）。
-        跟字幕的修改排在同一條復原順序裡（Ctrl+Z 退最後做的那一件）；字幕清單不受影響。
+        跟字幕的修改排在同一條復原順序裡（Ctrl+Z 退最後做的那一件）；字幕清單不受影響。merge 同 record()。
         """
         before, after = _copy_tracks(before), _copy_tracks(after)
         if before == after:
             return
-        self._push(("tracks", None, before, after))
+        self._push(("tracks", None, before, after), merge)
 
     def next_kind(self, redo=False):
         """下一步復原（redo=True：重做）的是哪一種（"times"／"text"／"cue"／"split"／"cues"／"tracks"）；沒有是 None。"""
@@ -475,6 +484,7 @@ class EditHistory:
         """復原（或重做）一筆素材軌的修改，回傳那時候的整份素材軌（複本）；下一步不是素材軌拋 ValueError。"""
         if self.next_kind(redo) != "tracks":
             raise ValueError("下一步不是素材軌的修改")
+        self._merge = None
         source, target = (self._undone, self._done) if redo else (self._done, self._undone)
         entry = source.pop()
         target.append(entry)
@@ -484,12 +494,24 @@ class EditHistory:
         """拿掉某一種的全部紀錄（換片子時素材軌清空，舊的素材軌紀錄不能再套回來）。字幕的紀錄各自獨立，不受影響。"""
         self._done[:] = [e for e in self._done if e[0] != kind]
         self._undone[:] = [e for e in self._undone if e[0] != kind]
+        self._merge = None
 
-    def _push(self, entry):
+    def _push(self, entry, merge=None):
+        top = self._done[-1] if self._done else None
+        if merge is not None and merge == self._merge and top is not None and top[:2] == entry[:2]:
+            # 同一串連續調整：最上面那一筆改成「最早的 before → 這次的 after」
+            self._undone.clear()
+            if top[2] == entry[3]:  # 調回原樣：這一串等於沒改，整筆拿掉（下一筆另記）
+                self._done.pop()
+                self._merge = None
+            else:
+                self._done[-1] = (entry[0], entry[1], top[2], entry[3])
+            return
         self._done.append(entry)
         if len(self._done) > self.limit:
             del self._done[0]
         self._undone.clear()
+        self._merge = merge
 
     def can_undo(self):
         return bool(self._done)
@@ -503,6 +525,7 @@ class EditHistory:
             return None
         if self._done[-1][0] == "tracks":
             raise ValueError("下一步是素材軌的修改：用 step_tracks()")
+        self._merge = None
         entry = self._done.pop()
         self._undone.append(entry)
         kind, index, before, _after = entry
@@ -514,6 +537,7 @@ class EditHistory:
             return None
         if self._undone[-1][0] == "tracks":
             raise ValueError("下一步是素材軌的修改：用 step_tracks(redo=True)")
+        self._merge = None
         entry = self._undone.pop()
         self._done.append(entry)
         kind, index, _before, after = entry
