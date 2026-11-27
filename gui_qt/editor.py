@@ -631,6 +631,9 @@ class EditorWindow(MainWindow):
         col.addLayout(grid)
         self.cue_start_spin.valueChanged.connect(lambda v: self._set_cue_time(start=v))
         self.cue_end_spin.valueChanged.connect(lambda v: self._set_cue_time(end=v))
+        # 按住上下鍵、滾輪連續改：一連串只記一筆復原，按 Enter 或離開才算一筆結束（E-8b）
+        self.cue_start_spin.editingFinished.connect(p.history.end_merge)
+        self.cue_end_spin.editingFinished.connect(p.history.end_merge)
         col.addWidget(_title("文字", "sectionTitle"))
         col.addWidget(self.cue_panel.editor)  # 逐句校對的編輯框搬過來（同一個，套用、Esc、新增都照舊）
         self.cue_panel.hint = CUE_EDIT_HINT
@@ -718,7 +721,7 @@ class EditorWindow(MainWindow):
         if self.cue_panel._adding is not None or not 0 <= index < len(p.cues):
             return
         before = (float(p.cues[index]["start"]), float(p.cues[index]["end"]))
-        after = p.set_cue_times(index, start=start, end=end)
+        after = p.set_cue_times(index, start=start, end=end, merge=("start" if start is not None else "end", index))
         wanted = start if start is not None else end
         got = after[0] if start is not None else after[1]
         if after == before:
