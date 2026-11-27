@@ -900,6 +900,7 @@ class EditorWindow(MainWindow):
         self.zoom_slider.setValue(timeline_mod.zoom_to_slider(p.timeline.px_per_sec))
         self.zoom_slider.valueChanged.connect(self._zoom_from_slider)
         p.timeline.zoomChanged.connect(self._sync_zoom_slider)
+        self.timeline_zoom_controls = (p.zoom_out_btn, self.zoom_slider, p.zoom_in_btn, p.fit_btn)
         for btn, icon_name in ((p.zoom_out_btn, "zoom_out"), (self.zoom_slider, None), (p.zoom_in_btn, "zoom_in"),
                                (p.fit_btn, "fit")):
             bar.addWidget(btn if icon_name is None else self._iconify(btn, icon_name, "", role="ghost"))
@@ -994,6 +995,9 @@ class EditorWindow(MainWindow):
         """時間軸沒有片子時顯示空狀態，有片長就換回軌道。回傳現在是不是空狀態。"""
         empty = self.player_panel.timeline.duration <= 0
         self.timeline_stack.setCurrentIndex(0 if empty else 1)
+        # 沒有片子就沒有東西可以縮放：拉近、拉遠、整支、縮放滑桿跟著停用（E-9g）
+        for w in self.timeline_zoom_controls:
+            w.setEnabled(not empty)
         return empty
 
     def _separator(self):
