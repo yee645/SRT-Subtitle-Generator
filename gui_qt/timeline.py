@@ -716,6 +716,15 @@ class TimelineView(QGraphicsView):
         if notify and had:
             self.dropPreviewChanged.emit("")
 
+    def selection_active(self, what):
+        """
+        字幕（"cue"）或素材（"track"）的選取是不是「作用中」的那個（E-9c）：兩種都選著時只有最後點的那個算
+        （〔刪除〕、屬性面板跟著它），畫成實心粗框；另一個畫虛線細框。只選一種時那一種就是作用中的。
+        """
+        if what == "cue":
+            return self.selected >= 0 and (self.last_pick != "track" or self.track_selected is None)
+        return self.track_selected is not None and (self.last_pick != "cue" or self.selected < 0)
+
     def select_track_item(self, kind, index, seek=True):
         """選取某一段素材（index -1＝取消）；seek 時跳到它開始的地方。"""
         new = (kind, index) if index >= 0 and 0 <= index < len(self.tracks.get(kind, ())) else None
@@ -724,6 +733,8 @@ class TimelineView(QGraphicsView):
         if new:
             self.last_pick = "track"
         self._build_tracks()
+        if self.selected >= 0:
+            self._build_cues()  # 字幕那邊的選取框跟著變實心或虛線（E-9c）
         if changed:
             self.trackItemSelected.emit(kind if new else "", index if new else -1)
         if seek and new:
@@ -775,6 +786,8 @@ class TimelineView(QGraphicsView):
         if index >= 0:
             self.last_pick = "cue"
         self._build_cues()
+        if self.track_selected is not None:
+            self._build_tracks()  # 素材那邊的選取框跟著變實心或虛線（E-9c）
         if changed:
             self.cueSelected.emit(index)
         if seek and index >= 0:
@@ -1359,9 +1372,12 @@ class TimelineView(QGraphicsView):
         item = QGraphicsRectItem(rect)
         color = self.colors[kind]
         item.setBrush(QBrush(color))
-        if self.track_selected == (kind, index):
+        if self.track_selected == (kind, index) and self.selection_active("track"):
             item.setPen(QPen(self.colors["track_sel_pen"], 2))
             item.setZValue(2)
+        elif self.track_selected == (kind, index):  # 還選著、但字幕是後來點的：虛線細框
+            item.setPen(QPen(self.colors["track_sel_pen"], 1, Qt.DashLine))
+            item.setZValue(1.5)
         else:
             item.setPen(QPen(color.darker(140), 1))
             item.setZValue(1 + index * 0.001)  # 後加的疊在上面（跟 track_hit 一致）
@@ -1411,10 +1427,14 @@ class TimelineView(QGraphicsView):
         start, end = self.cue_times(index)
         rect = QRectF(start * pps, self.row_y["cues"] + 3, max((end - start) * pps, 1.0), self.row_h["cues"] - 6)
         item = QGraphicsRectItem(rect)
-        if index == self.selected:
+        if index == self.selected and self.selection_active("cue"):
             item.setBrush(QBrush(self.colors["cue_sel"]))
             item.setPen(QPen(self.colors["cue_sel_pen"], 2))
             item.setZValue(2)  # 選取的那句疊在鄰句上面，邊框看得全
+        elif index == self.selected:  # 還選著、但素材是後來點的：底色照常、虛線細框（E-9c）
+            item.setBrush(QBrush(self.colors["cue"]))
+            item.setPen(QPen(self.colors["cue_sel_pen"], 1, Qt.DashLine))
+            item.setZValue(1.5)
         else:
             item.setBrush(QBrush(self.colors["cue"]))
             item.setPen(QPen(self.colors["cue"].darker(140), 1))
