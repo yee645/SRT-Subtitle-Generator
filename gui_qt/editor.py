@@ -1089,7 +1089,8 @@ class EditorWindow(MainWindow):
             sc.activated.connect(slot)
             self.shortcuts.append(sc)
         self.key_shortcuts = {name: [self.shortcuts[i] for i in idx] for name, idx in self.key_shortcuts.items()}
-        QApplication.instance().focusChanged.connect(lambda _old, _new: self._update_arrow_keys())
+        # 接綁定的方法（不是 lambda）：視窗刪掉時 Qt 會自動斷開，不會再去動已經刪掉的快捷鍵（E-9a 修）
+        QApplication.instance().focusChanged.connect(self._on_focus_changed)
         p.timeline.cueSelected.connect(lambda _i: self._update_arrow_keys())
         self._update_arrow_keys()
         for btn, name, text in ((p.zoom_in_btn, "zoom_in", "拉近"), (p.zoom_out_btn, "zoom_out", "拉遠"),
@@ -1097,6 +1098,9 @@ class EditorWindow(MainWindow):
                                 (p.save_project_btn, "save_project", "存專案")):
             tip = btn.toolTip() or text
             btn.setToolTip(f"{tip}（{KEYS[name][0]}）")
+
+    def _on_focus_changed(self, _old, _new):
+        self._update_arrow_keys()
 
     def _update_arrow_keys(self):
         """←／→ 逐格只在焦點不在「自己要用方向鍵」的元件上時有效；時間軸選了字幕時留給它微調那句。"""
