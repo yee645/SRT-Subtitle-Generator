@@ -109,7 +109,11 @@ EXPORT_NOTES = {
 # 屬性面板（E-3a）
 INSPECTOR_HINT = "點時間軸上的字幕或素材，這裡會換成它的屬性。"
 TRACK_TITLES = {"overlays": "疊加的畫面", "music": "音樂"}
-CUE_EDIT_HINT = "文字與時間在右邊的屬性裡改：改完按 Ctrl+Enter、點別句或離開編輯框就套用，Esc 放回原本的。"
+# 逐句清單下面那行只講位置（E-9b）；怎麼套用寫在屬性面板編輯框的提示裡，不整段攤在畫面上
+CUE_EDIT_HINT = "文字與時間在右邊的屬性裡改。"
+CUE_APPLY_TIP = "改完按 Ctrl+Enter、點別句或離開編輯框就套用，Esc 放回原本的。"
+# 媒體頁〔加入畫面…〕〔加入音樂…〕的提示多一句放上去之後怎麼調（原本是按鈕下面一整段說明；E-9b）
+TRACK_ADD_TIP = "；放上去之後在時間軸上拖動、在右邊的屬性裡調整"
 
 # 現有功能在新版面的哪裡（PR 的對照表與測試都照這一份）：(功能, 元件的路徑, 區塊)
 # 路徑從視窗算起，例如 "player_panel.open_btn"。區塊：top／left:<鍵>／preview／inspector／timeline／export。
@@ -454,8 +458,8 @@ class EditorWindow(MainWindow):
         for btn, icon_name in ((p.open_btn, "film"), (p.subs_btn, "subtitles"),
                                (p.add_overlay_btn, "image"), (p.add_music_btn, "music")):
             m.addWidget(self._iconify(btn, icon_name, role="list"))
-        m.addWidget(_secondary(QLabel("加入的畫面與音樂放在播放頭的位置，放上去之後在時間軸上拖動、"
-                                      "在右邊的屬性裡調整。")))
+        for btn in (p.add_overlay_btn, p.add_music_btn):
+            btn.setToolTip(btn.toolTip() + TRACK_ADD_TIP)
         m.addWidget(_title("素材準備", "sectionTitle"))
         for btn, icon_name in ((self.audiovis_btn, "wave"), (self.batch_btn, "batch")):
             m.addWidget(self._iconify(btn, icon_name, role="list"))
@@ -645,6 +649,7 @@ class EditorWindow(MainWindow):
         col.addWidget(_title("文字", "sectionTitle"))
         col.addWidget(self.cue_panel.editor)  # 逐句校對的編輯框搬過來（同一個，套用、Esc、新增都照舊）
         self.cue_panel.hint = CUE_EDIT_HINT
+        self.cue_panel.editor.setToolTip(CUE_APPLY_TIP)
         self.cue_panel._load_editor(self.cue_panel.selected_index())
         col.addWidget(_title("全部字幕", "sectionTitle"))
         self.cue_style_btn = QPushButton("字幕樣式…")
