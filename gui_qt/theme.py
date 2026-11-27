@@ -168,6 +168,11 @@ QSlider::sub-page:horizontal {{ background: {t['accent']}; border-radius: 2px; }
 QSlider::handle:horizontal {{ background: {t['text.primary']}; width: 12px; height: 12px; margin: -4px 0;
                               border-radius: 6px; }}
 QSlider::handle:horizontal:disabled {{ background: {t['text.muted']}; }}
+QSlider::sub-page:horizontal:disabled {{ background: {t['text.muted']}; }}
+/* 停用的樣子（E-9a）：字變淡、輸入框退到面板底色，一看就知道現在不能調 */
+QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled {{ color: {t['text.muted']}; }}
+QLineEdit:disabled, QPlainTextEdit:disabled, QTextEdit:disabled, QComboBox:disabled, QSpinBox:disabled,
+QDoubleSpinBox:disabled {{ color: {t['text.muted']}; background: {t['bg.panel']}; }}
 
 QTabWidget::pane {{ border: none; }}
 QTabBar::tab {{ background: transparent; color: {t['text.secondary']}; padding: 6px 12px;
