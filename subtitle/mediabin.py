@@ -79,6 +79,39 @@ def track_for(row, kind):
     return DEFAULT_TRACK[kind]
 
 
+ROW_NAMES = {"overlays": "疊加列", "music": "音樂列"}
+TRACK_NAMES = {"overlays": "疊加", "music": "音樂"}
+ROW_RULE = "疊加列放影片或圖片、音樂列放聲音或影片"
+
+
+def drop_plan(paths, row):
+    """
+    拖到第 row 列會怎麼放（剪輯器版面 E-8c 的落點預覽，跟真的放 `PlayerPanel.drop_files` 同一套規則）：
+    {"overlays": [路徑], "music": [路徑], "refused": [路徑]}，順序照拖進來的。
+    """
+    plan = {"overlays": [], "music": [], "refused": []}
+    for path in paths:
+        track = track_for(row, kind_of(path))
+        plan[track if track else "refused"].append(path)
+    return plan
+
+
+def refused_note(row, paths):
+    """這一列不收哪些檔：「疊加列放不了：a.mp3、b.wav（疊加列放影片或圖片、音樂列放聲音或影片）」。"""
+    where = ROW_NAMES.get(row, "這一列")
+    names = "、".join(os.path.basename(p) for p in paths)
+    return f"{where}放不了：{names}（{ROW_RULE}）"
+
+
+def drop_hint(plan, row):
+    """預覽框旁邊的一句話：放到哪幾軌各幾個；有放不了的接在後面。都放不了就只講放不了。"""
+    parts = [f"{TRACK_NAMES[t]} {len(plan[t])} 個" for t in ("overlays", "music") if plan.get(t)]
+    text = "放到" + "、".join(parts) if parts else ""
+    if plan.get("refused"):
+        text = (text + "；" if text else "") + refused_note(row, plan["refused"])
+    return text
+
+
 def duration_label(seconds):
     """5.2 → "0:05"、3725 → "1:02:05"；量不到（None、負的）是空字串。"""
     if seconds is None or seconds < 0:

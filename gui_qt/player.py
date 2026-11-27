@@ -982,14 +982,13 @@ class PlayerPanel(QWidget):
         for path in paths:
             track = mediabin.track_for(row, mediabin.kind_of(path))
             if track is None:
-                refused.append(os.path.basename(path))
+                refused.append(path)
                 continue
             if self.add_track(track, path, at=cursor.get(track, float(seconds))):
                 placed += 1
                 cursor[track] = self.timeline.track_span(track, len(self.tracks[track]) - 1)[1]
         if refused:
-            where = {"overlays": "疊加列", "music": "音樂列"}.get(row, "這一列")
-            self.refresh_tracks(f"{where}放不了：{'、'.join(refused)}（疊加列放影片或圖片、音樂列放聲音或影片）")
+            self.refresh_tracks(mediabin.refused_note(row, refused))
         return placed
 
     def remove_track(self, kind, index):

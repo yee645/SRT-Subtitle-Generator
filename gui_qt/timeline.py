@@ -68,8 +68,8 @@ import shutil
 import threading
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPalette, QPen, QPixmap
-from PySide6.QtWidgets import (QGraphicsItem, QGraphicsLineItem, QGraphicsRectItem,
+from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPalette, QPen, QPixmap
+from PySide6.QtWidgets import (QGraphicsItem, QGraphicsLineItem, QGraphicsPathItem, QGraphicsRectItem,
                                QGraphicsScene, QGraphicsSimpleTextItem, QGraphicsView, QToolTip, QWidget)
 
 from subtitle import assemble as assemble_mod
@@ -77,6 +77,7 @@ from subtitle import cueedit
 from subtitle import cutmarks as cutmarks_mod
 from subtitle import designtokens
 from subtitle import filmstrip as filmstrip_mod
+from subtitle import mediabin
 from subtitle import waveform as waveform_mod
 
 # 列高（像素）
@@ -377,6 +378,7 @@ class TimelineView(QGraphicsView):
     durationChanged = Signal(float)               # 換片子（片長 0＝沒有影片）
     zoomChanged = Signal(float)                   # 換了縮放（每秒幾像素）
     filesDropped = Signal(object, str, float)     # 拖進來的檔案路徑、落在哪一列（列名；列外是 ""）、第幾秒
+    dropPreviewChanged = Signal(str)              # 拖曳中的落點預覽換了：一句話說會怎麼放（拖走或放下是 ""）
 
     def __init__(self, parent=None, heights=None, inline_notes=True):
         super().__init__(parent)
@@ -385,6 +387,9 @@ class TimelineView(QGraphicsView):
         self.row_y, self.row_h, self.total_h = row_layout(heights)
         self.inline_notes = inline_notes
         self.last_pick = ""        # 最後選的是字幕（"cue"）還是素材（"track"）：兩種可以同時選著，〔刪除〕刪最後選的
+        # 拖檔案進來時的落點預覽（E-8c）：畫著的項目、這一次的落點與計畫、一句話的說明
+        self.drop_items, self._drop_key, self._drop_plan, self.drop_hint = [], None, None, ""
+        self._drop_chip_right = 0.0
         self.snap_enabled = True   # 拖曳時貼到播放頭、鄰句的邊（剪輯器工具列的〔吸附〕可以關）
         self.duration = 0.0
         self.px_per_sec = DEFAULT_PX_PER_SEC
@@ -602,18 +607,28 @@ class TimelineView(QGraphicsView):
         return [u.toLocalFile() for u in data.urls() if u.isLocalFile()]
 
     def dragEnterEvent(self, event):  # noqa: N802
-        if self.duration > 0 and self._local_files(event):
+        paths = self._local_files(event)
+        if self.duration > 0 and paths:
             event.acceptProposedAction()
+            self.show_drop_preview(paths, event.position().toPoint())
         else:
             event.ignore()
 
     def dragMoveEvent(self, event):  # noqa: N802
-        if self.duration > 0 and self._local_files(event):
+        paths = self._local_files(event)
+        if self.duration > 0 and paths:
             event.acceptProposedAction()
+            self.show_drop_preview(paths, event.position().toPoint())
         else:
+            self.clear_drop_preview()
             event.ignore()
 
+    def dragLeaveEvent(self, event):  # noqa: N802
+        self.clear_drop_preview()
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event):  # noqa: N802
+        self.clear_drop_preview()
         paths = self._local_files(event)
         if self.duration <= 0 or not paths:
             event.ignore()
@@ -621,6 +636,85 @@ class TimelineView(QGraphicsView):
         row, seconds = self.drop_target(event.position().toPoint())
         event.acceptProposedAction()
         self.filesDropped.emit(paths, row, seconds)
+
+    # ----- 拖曳的落點預覽（E-8c） -----
+    def show_drop_preview(self, paths, view_pos):
+        """
+        拖曳中：在會落下的那一秒畫一條直線，會放上去的軌道各畫一個標籤（幾個、從第幾秒）；這一列不收的
+        在滑鼠那一列畫紅色標籤。規則跟真的放（`PlayerPanel.drop_files`）是同一套（`mediabin.drop_plan`）。
+        回傳 (列, 秒, 計畫)；同一個落點不重畫。
+        """
+        row, seconds = self.drop_target(view_pos)
+        key = (tuple(paths), row, seconds, self.px_per_sec)
+        if key == self._drop_key:
+            return row, seconds, self._drop_plan
+        self.clear_drop_preview(notify=False)
+        plan = mediabin.drop_plan(paths, row)
+        self._drop_key, self._drop_plan = key, plan
+        t = {k: QColor(v) for k, v in designtokens.TOKENS[palette_theme(self)].items()}
+        x = seconds * self.px_per_sec
+        line = QGraphicsLineItem(x, self.row_y["thumbs"], x, self.total_h)
+        line.setPen(QPen(t["accent"], 2))
+        line.setZValue(8)
+        self.scene_.addItem(line)
+        self.drop_items.append(line)
+        when = tick_label(seconds, 0.1)
+        for track in ("overlays", "music"):
+            if plan[track]:
+                self._drop_chip(track, x, f"＋{len(plan[track])} 個（從 {when}）", t["accent"], t["accent.text"],
+                                "accept")
+        if plan["refused"] and row in self.row_y and row != "ruler":
+            offset = self._drop_chip_right if plan.get(row) else x
+            self._drop_chip(row, offset, mediabin.refused_note(row, plan["refused"]), t["track.cut"],
+                            t["track.text"], "refuse")
+        self.drop_hint = mediabin.drop_hint(plan, row)
+        self.dropPreviewChanged.emit(self.drop_hint)
+        return row, seconds, plan
+
+    def _drop_chip(self, row, x, text, bg, fg, kind):
+        font = QFont(self.font())
+        font.setPixelSize(designtokens.FONT_PX["small"])
+        top, height = self.row_y[row], self.row_h[row]
+        h = min(height - 4, QFontMetrics(font).height() + 6)
+        label = elide(text, font, 320)
+        w = QFontMetrics(font).horizontalAdvance(label) + 12
+        left = max(0.0, min(x + 4, self.scene_.sceneRect().width() - w))
+        rect = QRectF(left, top + (height - h) / 2, w, h)
+        path = QPainterPath()
+        path.addRoundedRect(rect, designtokens.RADIUS["clip"], designtokens.RADIUS["clip"])
+        chip = QGraphicsPathItem(path)
+        chip.setBrush(QBrush(bg))
+        chip.setPen(QPen(Qt.NoPen))
+        chip.setZValue(9)
+        chip.setData(0, kind)
+        chip.setToolTip(text)
+        caption = QGraphicsSimpleTextItem(label, chip)
+        caption.setFont(font)
+        caption.setBrush(QBrush(fg))
+        caption.setPos(rect.left() + 6, rect.top() + (h - QFontMetrics(font).height()) / 2)
+        self.scene_.addItem(chip)
+        self.drop_items.append(chip)
+        self._drop_chip_right = rect.right() + 4
+        return chip
+
+    def drop_chips(self):
+        """畫著的預覽標籤：[(哪一列, "accept"／"refuse", 字)]（給測試用）。"""
+        out = []
+        for item in self.drop_items:
+            if isinstance(item, QGraphicsPathItem):
+                row = next((name for name, top in self.row_y.items()
+                            if top <= item.boundingRect().center().y() < top + self.row_h.get(name, 0)), "")
+                text = item.childItems()[0].text() if item.childItems() else ""
+                out.append((row, item.data(0), text))
+        return out
+
+    def clear_drop_preview(self, notify=True):
+        for item in self.drop_items:
+            self.scene_.removeItem(item)
+        had = bool(self.drop_items) or bool(self.drop_hint)
+        self.drop_items, self._drop_key, self._drop_plan, self.drop_hint = [], None, None, ""
+        if notify and had:
+            self.dropPreviewChanged.emit("")
 
     def select_track_item(self, kind, index, seek=True):
         """選取某一段素材（index -1＝取消）；seek 時跳到它開始的地方。"""
