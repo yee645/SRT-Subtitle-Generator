@@ -34,6 +34,7 @@ from gui_qt import timeline as timeline_mod
 from gui_qt.app import MainWindow, apply_theme
 from gui_qt.media_bin import MediaBin
 from gui_qt.picture_panel import PictureControls
+from gui_qt.flow_layout import flow_grid, flow_tree
 from gui_qt.places import EDITOR, LAYOUT_PROPERTY, relabel_tree
 from subtitle import editorguide
 from subtitle import playhead
@@ -522,7 +523,11 @@ class EditorWindow(MainWindow):
         self._add_page("subtitles", subs)
 
         # 智慧剪輯、健檢：原本整頁寬，放進可以捲的區塊
-        self._add_page("smart", self._titled("智慧剪輯", _scroll(self.review_panel)))
+        # 智慧剪輯：原本整頁寬（偵測設定一列五組數字框、輸出分頁一列四到六顆按鈕，最小 1113px），左側面板放不下——
+        # 橫排改成放不下就換行（E-9e；四頁籤照舊）
+        rp = self.review_panel
+        self.smart_flows = [flow_grid(next(iter(rp.spins.values())).parentWidget())] + flow_tree(rp)
+        self._add_page("smart", self._titled("智慧剪輯", _scroll(rp)))
         health_area = _scroll(self.health_panel)
         self._add_page("health", self._titled("健檢", health_area))
         # 健檢的勾選項：原本固定三欄（最小 787px），左側面板放不下——依寬度排欄（E-9d）
