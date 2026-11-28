@@ -111,6 +111,10 @@ QToolButton[role="rail"]:checked {{ color: {t['accent']}; background: {t['accent
 QToolButton[role="play"] {{ background: {t['accent']}; border-radius: 18px; }}
 QToolButton[role="play"]:hover {{ background: {t['accent.hover']}; }}
 QToolButton[role="play"]:disabled {{ background: {t['bg.raised']}; }}
+/* 鍵盤焦點看得到（E-9k）：按 Tab 到按鈕上時框線換成強調色；強調色實心的按鈕（主要按鈕、播放鍵）改用主字色的框 */
+QPushButton:focus, QToolButton:focus {{ border: 1px solid {t['accent']}; }}
+QPushButton[role="primary"]:focus {{ border: 2px solid {t['text.primary']}; padding: 4px 16px; }}
+QToolButton[role="play"]:focus {{ border: 2px solid {t['text.primary']}; }}
 
 QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
     background: {t['bg.raised']}; border: 1px solid {t['border']}; border-radius: {r}px; padding: 3px 6px;
