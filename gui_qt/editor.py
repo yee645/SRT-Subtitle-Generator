@@ -437,6 +437,9 @@ class EditorWindow(MainWindow):
         self.refresh_project_name()
         self.statusBar().showMessage(STATUS_INTRO)
         self.icon_names = _IconNames(self, skip=(self.legacy_central,))  # 只有圖示的按鈕給螢幕閱讀器一個名字（E-9l）
+        # 開窗時焦點放在時間軸區（照主流剪輯軟體）：剛開窗還沒有片子，是空狀態的〔開啟影片…〕；開了片子它藏起來，
+        # Qt 照焦點順序交給時間軸。不設的話 Qt 會落在第一顆能拿焦點的元件——狀態列角落的〔改用四頁籤版面…〕（E-9m）
+        self.timeline_open_btn.setFocus(Qt.OtherFocusReason)
 
     # ----- 各區 -----
     def _tool(self, icon_name, tip, slot, checkable=False, text=""):
