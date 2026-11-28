@@ -674,6 +674,8 @@ class EditorWindow(MainWindow):
 
         # 專案（沒選東西）
         col, _head = self._inspector_page("project", "專案")
+        p.info_sep = "\n"  # 窄的面板裡一項一行（E-9i）；四頁籤照舊一整行
+        p._refresh_info()
         col.addWidget(_secondary(p.info_label))
         col.addWidget(_title("主片段", "sectionTitle"))
         # E-8d：畫面調整直接攤在這裡（四頁籤照舊開小視窗）。原本那顆按鈕留在這一頁、藏起來（能不能調照它）
