@@ -326,6 +326,7 @@ class ReviewPanel(QWidget):
         note = QLabel(here(self, PAGE_NOTE))
         note.setWordWrap(True)
         layout.addWidget(note)
+        self.page_note = note  # 剪輯器收進標題旁〔說明〕的提示（E-9n）
 
         box = QGroupBox("偵測設定（按「開始分析」套用）")
         grid = QGridLayout(box)
