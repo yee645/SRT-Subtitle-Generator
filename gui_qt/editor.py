@@ -20,13 +20,14 @@ E-1 只換外殼：**功能一個不少、也不另寫一份**。`EditorWindow` 
 import os
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6 import QtGui
+from PySide6.QtGui import QKeySequence, QShortcut, QTextDocumentFragment
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import (
     QAbstractItemView, QAbstractSlider, QAbstractSpinBox, QApplication, QBoxLayout, QButtonGroup, QComboBox, QDialog,
     QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPlainTextEdit, QTextEdit,
     QAbstractButton, QListWidgetItem, QPushButton,
-    QScrollArea, QSizePolicy, QSlider, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QSlider, QSplitter, QStackedWidget, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )
 
 from gui_qt import icons, theme
@@ -298,9 +299,15 @@ class ReflowGrid(QObject):
             self.grid.addWidget(w, i // columns, i % columns)
 
 
+def plain_tip(tip):
+    """提示的純文字：長的提示用 <p> 包起來才會換行（E-9n），念給螢幕閱讀器時去掉標記。"""
+    tip = tip or ""
+    return QTextDocumentFragment.fromHtml(tip).toPlainText() if QtGui.Qt.mightBeRichText(tip) else tip
+
+
 def accessible_label(tip):
     """提示文字的第一段當按鈕的名字（給螢幕閱讀器）：「復原：復原上一次…（Ctrl+Z）」→「復原」（E-9l）。"""
-    head = (tip or "").split("：")[0].split("（")[0].split("\n")[0]
+    head = plain_tip(tip).split("：")[0].split("（")[0].split("\n")[0]
     return head.strip()
 
 
@@ -324,7 +331,7 @@ class _IconNames(QObject):
     def name(btn):
         tip = btn.toolTip()
         btn.setAccessibleName(accessible_label(tip))
-        btn.setAccessibleDescription(tip)
+        btn.setAccessibleDescription(plain_tip(tip))
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.ToolTipChange:
@@ -367,6 +374,7 @@ class EditorWindow(MainWindow):
         self.resize(*EDITOR_SIZE)
         self.setMinimumSize(*EDITOR_MIN)
         self._icon_buttons = []   # [(按鈕, 圖示名稱)]：換主題時重畫
+        self.page_info = {}       # 頁首說明收進提示的〔說明〕鈕：{標題: 按鈕}（E-9n）
         p = self.player_panel
 
         # 四頁籤的外殼收起來（面板搬走之後是空的）；不刪，舊程式碼與自檢讀得到 tabs
@@ -587,9 +595,9 @@ class EditorWindow(MainWindow):
         self.smart_flows = [flow_grid(next(iter(rp.spins.values())).parentWidget())] + flow_tree(rp)
         # 封面候選：設定與縮圖列原本左右並排（兩邊的最窄寬度加起來 519px），左側面板放不下——改成上下排（E-9j）
         rp.thumb_cols.setDirection(QBoxLayout.TopToBottom)
-        self._add_page("smart", self._titled("智慧剪輯", _scroll(rp)))
+        self._add_page("smart", self._titled("智慧剪輯", _scroll(rp), rp.page_note))
         health_area = _scroll(self.health_panel)
-        self._add_page("health", self._titled("健檢", health_area))
+        self._add_page("health", self._titled("健檢", health_area, self.health_panel.page_note))
         # 健檢的勾選項：原本固定三欄（最小 787px），左側面板放不下——依寬度排欄（E-9d）
         hp = self.health_panel
         # 收合區塊的字縮短，括號裡的說明放提示（最小視窗時這兩行原本撐出橫捲軸）
@@ -603,14 +611,31 @@ class EditorWindow(MainWindow):
                                         list(hp.check_boxes.values()) + [hp.filename_box], health_area.viewport())
         return panel
 
-    def _titled(self, text, widget):
+    def _titled(self, text, widget, note=None):
         page = QWidget()
         col = QVBoxLayout(page)
         col.setContentsMargins(12, 12, 4, 4)
         col.setSpacing(6)
-        col.addWidget(_title(text))
+        if note is None:
+            col.addWidget(_title(text))
+        else:
+            # 頁首那段五、六行的說明收進標題旁〔說明〕的提示（點了也會跳出來）；四頁籤照舊攤開（E-9n）
+            note.hide()
+            info = self._tool("help", f"<p>{text}說明：{note.text()}</p>", lambda: self.show_page_info(text))
+            self.page_info[text] = info
+            head = QHBoxLayout()
+            head.setSpacing(4)
+            head.addWidget(_title(text))
+            head.addWidget(info)
+            head.addStretch(1)
+            col.addLayout(head)
         col.addWidget(widget, 1)
         return page
+
+    def show_page_info(self, title):
+        """點〔說明〕：在按鈕下面跳出那段說明（同滑過去的提示）。"""
+        btn = self.page_info[title]
+        QToolTip.showText(btn.mapToGlobal(btn.rect().bottomLeft()), btn.toolTip(), btn)
 
     def _add_page(self, key, widget):
         self.left_pages[key] = widget

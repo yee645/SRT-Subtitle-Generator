@@ -157,6 +157,7 @@ class HealthPanel(QWidget):
         note = QLabel(here(self, PAGE_NOTE))
         note.setWordWrap(True)
         layout.addWidget(note)
+        self.page_note = note  # 剪輯器收進標題旁〔說明〕的提示（E-9n）
         self.target_label = QLabel()
         self.target_label.setWordWrap(True)
         layout.addWidget(self.target_label)
