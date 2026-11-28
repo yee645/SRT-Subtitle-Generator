@@ -562,6 +562,7 @@ class ReviewPanel(QWidget):
         self.thumb_strip.setToolTip(here(self, "擷取的封面候選（照清晰度排名）；點一張，②的播放器跳到那一格"))
         cols.addWidget(self.thumb_strip, 2)
         page.addLayout(cols)
+        self.thumb_cols = cols  # 剪輯器的左側面板窄，改成上下排（E-9j）；四頁籤照舊左右排
         page = self.out_pages["shorts"].layout()
         shorts_cfg = shorts.resolve_shorts_settings(self.config)
         row = QHBoxLayout()

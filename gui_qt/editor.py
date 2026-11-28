@@ -23,7 +23,7 @@ from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import (
-    QAbstractItemView, QAbstractSlider, QAbstractSpinBox, QApplication, QButtonGroup, QComboBox, QDialog,
+    QAbstractItemView, QAbstractSlider, QAbstractSpinBox, QApplication, QBoxLayout, QButtonGroup, QComboBox, QDialog,
     QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPlainTextEdit, QTextEdit,
     QListWidgetItem, QPushButton,
     QScrollArea, QSizePolicy, QSlider, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
@@ -544,6 +544,8 @@ class EditorWindow(MainWindow):
         # 橫排改成放不下就換行（E-9e；四頁籤照舊）
         rp = self.review_panel
         self.smart_flows = [flow_grid(next(iter(rp.spins.values())).parentWidget())] + flow_tree(rp)
+        # 封面候選：設定與縮圖列原本左右並排（兩邊的最窄寬度加起來 519px），左側面板放不下——改成上下排（E-9j）
+        rp.thumb_cols.setDirection(QBoxLayout.TopToBottom)
         self._add_page("smart", self._titled("智慧剪輯", _scroll(rp)))
         health_area = _scroll(self.health_panel)
         self._add_page("health", self._titled("健檢", health_area))
