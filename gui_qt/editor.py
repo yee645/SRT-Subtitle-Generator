@@ -230,7 +230,10 @@ class _FpsProbe(QObject):
                 fps = probe_fps(path)
             except Exception:  # noqa: BLE001 — 量不到就用預設的 30
                 fps = playhead.DEFAULT_FPS
-            self.done.emit(path, float(fps))
+            try:
+                self.done.emit(path, float(fps))
+            except RuntimeError:
+                pass  # 量好之前視窗已關掉（物件已刪），結果沒人要了
 
         threading.Thread(target=run, daemon=True).start()
 

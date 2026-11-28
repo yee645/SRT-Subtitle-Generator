@@ -502,6 +502,9 @@ E 系列（ROADMAP 第五節的每一列）到這裡全部做完。
 - 檢查 Tab 順序：頂列 → 左邊圖示列 → 左側面板 → 預覽 → 屬性面板 → 時間軸 → 狀態列，再繞回頂列，順序合理，沒有改。
 - 測試 `tests/test_qt_icon_names.py`：`accessible_label` 的切法；每一顆只有圖示的按鈕都有名字與說明；切換深淺色、
   播放變暫停時名字跟著換；有字的按鈕不動。
+- 順手修：Qt 全套偶爾印出一個 Traceback——背景量影格率（`_FpsProbe`）量好時視窗已關（物件已刪），emit 丟
+  `RuntimeError: Signal source has been deleted`。看時機，main 也會發生。改成物件已刪就安靜丟掉結果；
+  測試 `tests/test_qt_fps_probe_closed.py`（拿掉修正會抓到那個 RuntimeError）。
 
 ## 六、每一階段都要做的事
 
