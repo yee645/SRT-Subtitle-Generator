@@ -25,7 +25,7 @@ from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import (
     QAbstractItemView, QAbstractSlider, QAbstractSpinBox, QApplication, QBoxLayout, QButtonGroup, QComboBox, QDialog,
     QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPlainTextEdit, QTextEdit,
-    QListWidgetItem, QPushButton,
+    QAbstractButton, QListWidgetItem, QPushButton,
     QScrollArea, QSizePolicy, QSlider, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -230,7 +230,10 @@ class _FpsProbe(QObject):
                 fps = probe_fps(path)
             except Exception:  # noqa: BLE001 — 量不到就用預設的 30
                 fps = playhead.DEFAULT_FPS
-            self.done.emit(path, float(fps))
+            try:
+                self.done.emit(path, float(fps))
+            except RuntimeError:
+                pass  # 量好之前視窗已關掉（物件已刪），結果沒人要了
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -293,6 +296,40 @@ class ReflowGrid(QObject):
             self.grid.removeWidget(w)
         for i, w in enumerate(self.widgets):
             self.grid.addWidget(w, i // columns, i % columns)
+
+
+def accessible_label(tip):
+    """提示文字的第一段當按鈕的名字（給螢幕閱讀器）：「復原：復原上一次…（Ctrl+Z）」→「復原」（E-9l）。"""
+    head = (tip or "").split("：")[0].split("（")[0].split("\n")[0]
+    return head.strip()
+
+
+class _IconNames(QObject):
+    """
+    只有圖示、沒有字的按鈕：用提示文字的第一段當名字、整段當說明（給螢幕閱讀器），提示換了就跟著換
+    （播放／暫停、切換深淺色會換提示）（E-9l）。之後才變成只有圖示的按鈕不管，那時它本來就有字。
+    """
+
+    def __init__(self, root, skip=()):
+        super().__init__(root)
+        self.buttons = []
+        for btn in root.findChildren(QAbstractButton):
+            if btn.text().strip() or any(s.isAncestorOf(btn) for s in skip):
+                continue
+            self.buttons.append(btn)
+            btn.installEventFilter(self)
+            self.name(btn)
+
+    @staticmethod
+    def name(btn):
+        tip = btn.toolTip()
+        btn.setAccessibleName(accessible_label(tip))
+        btn.setAccessibleDescription(tip)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.ToolTipChange:
+            self.name(obj)
+        return False
 
 
 class _OnResize(QObject):
@@ -399,6 +436,7 @@ class EditorWindow(MainWindow):
         self.apply_editor_theme(self.config_data.get("theme", "light"))
         self.refresh_project_name()
         self.statusBar().showMessage(STATUS_INTRO)
+        self.icon_names = _IconNames(self, skip=(self.legacy_central,))  # 只有圖示的按鈕給螢幕閱讀器一個名字（E-9l）
 
     # ----- 各區 -----
     def _tool(self, icon_name, tip, slot, checkable=False, text=""):
